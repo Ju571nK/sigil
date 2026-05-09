@@ -1,0 +1,32 @@
+version: 1
+host_id_strategy: machine_id
+
+targets:
+  - id: claude-desktop-config-windows
+    description: Claude Desktop config and MCP server definitions
+    tier: critical
+    platform: windows
+    paths:
+      - "%APPDATA%\\Claude\\claude_desktop_config.json"
+      - "%USERPROFILE%\\.claude.json"
+    recursive: false
+    follow_symlinks: false
+
+  - id: cursor-mcp-windows
+    description: Cursor IDE MCP and global storage
+    tier: critical
+    platform: windows
+    paths:
+      - "%APPDATA%\\Cursor\\User\\globalStorage\\*.json"
+    recursive: false
+    follow_symlinks: false
+
+  - id: shadow-ai-binaries-windows
+    description: Detect new LLM client installs
+    tier: standard
+    platform: windows
+    paths:
+      - "%PROGRAMFILES%\\*\\uninstall.exe"
+      - "%LOCALAPPDATA%\\Programs\\*\\*.exe"
+    recursive: false
+    follow_symlinks: false

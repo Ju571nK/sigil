@@ -1,0 +1,31 @@
+version: 1
+host_id_strategy: machine_id
+
+targets:
+  - id: claude-desktop-config-macos
+    description: Claude Desktop config and MCP server definitions
+    tier: critical
+    platform: macos
+    paths:
+      - "~/Library/Application Support/Claude/claude_desktop_config.json"
+      - "~/.claude.json"
+    recursive: false
+    follow_symlinks: false
+
+  - id: cursor-mcp-macos
+    description: Cursor IDE MCP and global storage
+    tier: critical
+    platform: macos
+    paths:
+      - "~/Library/Application Support/Cursor/User/globalStorage/*.json"
+    recursive: false
+    follow_symlinks: false
+
+  - id: shadow-ai-binaries-macos
+    description: Detect new LLM client app installs
+    tier: standard
+    platform: macos
+    paths:
+      - "/Applications/*.app/Contents/Info.plist"
+    recursive: false
+    follow_symlinks: false
