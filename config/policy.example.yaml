@@ -1,0 +1,20 @@
+# Example user-override policy. Drop into /etc/andeda/policy.yaml or
+# %ProgramData%\Andeda\policy.yaml.
+version: 1
+host_id_strategy: machine_id
+
+# Optional: disable a built-in default or change its tier.
+overrides:
+  - id: shadow-ai-binaries-macos
+    tier: standard
+
+# Optional: add corporate watchlist entries.
+targets:
+  - id: corp-mcp-allowlist
+    description: Corporate MCP allowlist file managed by IT
+    tier: critical
+    platform: any
+    paths:
+      - "~/.config/our-corp/mcp-allowlist.json"
+    recursive: false
+    follow_symlinks: false
