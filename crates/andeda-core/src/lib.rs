@@ -11,3 +11,4 @@ pub mod hashing;
 pub mod policy;
 pub mod ratelimit;
 pub mod state;
+pub mod stats;
