@@ -2,6 +2,7 @@
 
 use hdrhistogram::Histogram;
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -67,7 +68,7 @@ impl Stats {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct StatsSnapshot {
     pub events_emitted_total: u64,
     pub channel_stall_events_total: u64,
