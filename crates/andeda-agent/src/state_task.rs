@@ -50,7 +50,7 @@ pub async fn run(
             event_id: Uuid::now_v7(),
             ts: OffsetDateTime::now_utc(),
             host_id: host_id.clone(),
-            agent_version: AGENT_VERSION,
+            agent_version: AGENT_VERSION.to_string(),
             severity: Severity::Warn,
             source: SourceKind::FileSystem,
             subject: Subject::Path { value: path.clone() },

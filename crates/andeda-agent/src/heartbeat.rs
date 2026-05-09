@@ -69,7 +69,7 @@ async fn emit(
         event_id: Uuid::now_v7(),
         ts: OffsetDateTime::now_utc(),
         host_id: host_id.to_string(),
-        agent_version: AGENT_VERSION,
+        agent_version: AGENT_VERSION.to_string(),
         severity: Severity::Info,
         source: SourceKind::Agent,
         subject: Subject::Self_,
