@@ -36,8 +36,10 @@ dependencies = [
  "andeda-core",
  "anyhow",
  "clap",
+ "dunce",
  "insta",
  "notify",
+ "parking_lot",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -47,6 +49,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
