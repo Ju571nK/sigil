@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lib]
+name = "andeda_agent"
+path = "src/lib.rs"
+
 [[bin]]
 name = "andeda"
 path = "src/main.rs"
@@ -27,7 +31,9 @@ notify = { workspace = true }
 clap = { workspace = true }
 parking_lot = { workspace = true }
 dunce = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 insta = { workspace = true }
+uuid = { workspace = true }

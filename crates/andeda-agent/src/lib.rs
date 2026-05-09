@@ -1,0 +1,17 @@
+//! Internal library shared with integration tests.
+
+pub mod cli;
+pub mod control;
+pub mod debouncer;
+pub mod doctor;
+pub mod hasher;
+pub mod heartbeat;
+pub mod normalizer;
+pub mod platform;
+pub mod runtime;
+pub mod show;
+pub mod sink_task;
+pub mod state_task;
+pub mod supervisor;
+pub mod test_support;
+pub mod watcher;

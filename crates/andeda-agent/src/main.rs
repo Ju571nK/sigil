@@ -1,20 +1,6 @@
 //! ANDEDA agent — tokio runtime + system integration.
 
-mod cli;
-mod control;
-mod debouncer;
-mod doctor;
-mod hasher;
-mod heartbeat;
-mod normalizer;
-mod platform;
-mod runtime;
-mod show;
-mod sink_task;
-mod state_task;
-mod supervisor;
-mod watcher;
-
+use andeda_agent::{cli, doctor, runtime, show};
 use clap::Parser;
 
 fn main() -> anyhow::Result<()> {
