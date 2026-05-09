@@ -8,3 +8,4 @@ Cargo.lock.bak
 .env
 /.run/
 .claude/
+AGENTS.md
