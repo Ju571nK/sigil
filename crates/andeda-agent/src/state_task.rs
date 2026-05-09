@@ -53,7 +53,9 @@ pub async fn run(
             agent_version: AGENT_VERSION.to_string(),
             severity: Severity::Warn,
             source: SourceKind::FileSystem,
-            subject: Subject::Path { value: path.clone() },
+            subject: Subject::Path {
+                value: path.clone(),
+            },
             evidence,
             target_id: Some(hashed.norm.target_id.clone()),
         };

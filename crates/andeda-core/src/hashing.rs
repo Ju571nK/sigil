@@ -95,7 +95,8 @@ mod tests {
         let td = TempDir::new().unwrap();
         let p = td.path().join("big");
         let mut f = File::create(&p).unwrap();
-        f.write_all(&vec![0u8; (MAX_HASH_BYTES + 1) as usize]).unwrap();
+        f.write_all(&vec![0u8; (MAX_HASH_BYTES + 1) as usize])
+            .unwrap();
         let out = hash_path(&p).unwrap();
         assert!(matches!(out, HashOutcome::TooLarge { .. }));
     }

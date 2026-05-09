@@ -26,7 +26,9 @@ pub enum SourceKind {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Subject {
-    Path { value: PathBuf },
+    Path {
+        value: PathBuf,
+    },
     #[serde(rename = "self")]
     Self_,
 }
@@ -188,7 +190,9 @@ mod tests {
 
     #[test]
     fn subject_path_round_trips() {
-        let s = Subject::Path { value: PathBuf::from("/tmp/x.json") };
+        let s = Subject::Path {
+            value: PathBuf::from("/tmp/x.json"),
+        };
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(j, r#"{"kind":"path","value":"/tmp/x.json"}"#);
         let back: Subject = serde_json::from_str(&j).unwrap();
@@ -299,7 +303,9 @@ mod tests {
             agent_version: AGENT_VERSION.to_string(),
             severity: Severity::Warn,
             source: SourceKind::FileSystem,
-            subject: Subject::Path { value: PathBuf::from("/Users/alice/.claude.json") },
+            subject: Subject::Path {
+                value: PathBuf::from("/Users/alice/.claude.json"),
+            },
             evidence: Evidence::FileChange {
                 change_kind: FileChangeKind::Modified,
                 before_hash: Some("a1b2c3".into()),

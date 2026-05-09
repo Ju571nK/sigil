@@ -61,17 +61,15 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     for t in &effective.targets {
         let mut paths = Vec::new();
         for tmpl in &t.paths {
-            for r in expand_per_user(tmpl, &users, &env) {
-                if let Ok(p) = r {
-                    paths.push(p.clone());
-                    let parent = if t.recursive {
-                        p.clone()
-                    } else {
-                        p.parent().map(PathBuf::from).unwrap_or(p.clone())
-                    };
-                    if parent.exists() {
-                        watch_roots.push((parent, t.recursive));
-                    }
+            for p in expand_per_user(tmpl, &users, &env).into_iter().flatten() {
+                paths.push(p.clone());
+                let parent = if t.recursive {
+                    p.clone()
+                } else {
+                    p.parent().map(PathBuf::from).unwrap_or(p.clone())
+                };
+                if parent.exists() {
+                    watch_roots.push((parent, t.recursive));
                 }
             }
         }
@@ -99,8 +97,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Watcher (notify → raw events → tx_norm via normalizer wrapper).
     let runtime_handle = tokio::runtime::Handle::current();
-    let watcher_handle =
-        watcher::spawn_watcher(watch_roots.clone(), runtime_handle.clone(), 1024)?;
+    let watcher_handle = watcher::spawn_watcher(watch_roots.clone(), runtime_handle.clone(), 1024)?;
     let backend_name = watcher_handle.backend_name;
     let raw_rx = watcher_handle.rx;
 
@@ -171,8 +168,16 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         sup.track(
             "heartbeat",
             tokio::spawn(async move {
-                heartbeat::run(stats_h, host_id_h, backend_name, dbp, tx_h, cancel_h, started)
-                    .await
+                heartbeat::run(
+                    stats_h,
+                    host_id_h,
+                    backend_name,
+                    dbp,
+                    tx_h,
+                    cancel_h,
+                    started,
+                )
+                .await
             }),
         );
     }
@@ -270,8 +275,8 @@ async fn emit_permission_missing(
             subject: Subject::Self_,
             evidence: Evidence::PermissionMissing {
                 resource: "FullDiskAccess".into(),
-                platform_hint:
-                    "Open System Settings → Privacy & Security → Full Disk Access".into(),
+                platform_hint: "Open System Settings → Privacy & Security → Full Disk Access"
+                    .into(),
             },
             target_id: Some(t.id.clone()),
         };

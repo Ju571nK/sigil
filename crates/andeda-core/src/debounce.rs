@@ -162,7 +162,9 @@ mod tests {
     #[test]
     fn modified_held_for_100ms() {
         let mut d = Debouncer::new();
-        assert!(d.push(p("/x"), FileChangeKind::Modified, false, 0).is_none());
+        assert!(d
+            .push(p("/x"), FileChangeKind::Modified, false, 0)
+            .is_none());
         assert!(d.drain_due(50).is_empty());
         let due = d.drain_due(100);
         assert_eq!(due.len(), 1);

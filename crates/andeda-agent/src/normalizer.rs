@@ -55,7 +55,10 @@ pub fn compile_targets(
     out
 }
 
-fn match_target<'a>(path: &PathBuf, targets: &'a [CompiledTarget]) -> Option<&'a CompiledTarget> {
+fn match_target<'a>(
+    path: &std::path::Path,
+    targets: &'a [CompiledTarget],
+) -> Option<&'a CompiledTarget> {
     targets
         .iter()
         .find(|t| t.globs.iter().any(|g| g.is_match(path)))

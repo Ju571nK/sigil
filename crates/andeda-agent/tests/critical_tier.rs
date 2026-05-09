@@ -18,10 +18,7 @@ async fn it_critical_tier_emits_recheck() {
 
     let event = agent
         .wait_for_event(
-            |v| {
-                v["evidence"]["kind"] == "file_change"
-                    && v["evidence"]["recheck_hash"].is_string()
-            },
+            |v| v["evidence"]["kind"] == "file_change" && v["evidence"]["recheck_hash"].is_string(),
             Duration::from_secs(5),
         )
         .await

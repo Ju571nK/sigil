@@ -83,7 +83,9 @@ impl HashCache {
     }
 
     pub fn all_paths(&self) -> Result<Vec<PathBuf>, StateError> {
-        let mut stmt = self.conn.prepare("SELECT path FROM baseline ORDER BY path")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM baseline ORDER BY path")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for r in rows {
@@ -167,7 +169,8 @@ mod tests {
         let td = TempDir::new().unwrap();
         let (c, _) = open_in(&td);
         for i in 0..50_000u32 {
-            c.put(Path::new(&format!("/p/{i}")), "h", 0, "t", 0).unwrap();
+            c.put(Path::new(&format!("/p/{i}")), "h", 0, "t", 0)
+                .unwrap();
         }
         let mut samples = Vec::with_capacity(1000);
         for i in 0..1000u32 {
@@ -179,6 +182,6 @@ mod tests {
         }
         samples.sort_unstable();
         let p99 = samples[(samples.len() as f64 * 0.99) as usize];
-        assert!(p99 < 1000, "p99 lookup latency {}us > 1ms", p99);
+        assert!(p99 < 1000, "p99 lookup latency {p99}us > 1ms");
     }
 }

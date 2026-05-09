@@ -48,8 +48,7 @@ pub async fn run(
             _ => (None, None, EvidenceQuality::Incomplete),
         };
 
-        if started.elapsed() > Duration::from_millis(1000)
-            && quality == EvidenceQuality::Definitive
+        if started.elapsed() > Duration::from_millis(1000) && quality == EvidenceQuality::Definitive
         {
             quality = EvidenceQuality::Delayed;
         }
@@ -83,6 +82,9 @@ pub async fn run(
 /// In practice, the debouncer state map carries this; for the wiring task we
 /// provide a trait that returns the matched target.
 pub trait TargetLookup {
-    fn find_for_path(&self, path: &std::path::Path, kind: FileChangeKind)
-        -> Option<NormalizedEvent>;
+    fn find_for_path(
+        &self,
+        path: &std::path::Path,
+        kind: FileChangeKind,
+    ) -> Option<NormalizedEvent>;
 }

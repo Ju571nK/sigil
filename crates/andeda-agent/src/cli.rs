@@ -4,7 +4,11 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "andeda", version, about = "AI-Native Detection Engine for Device Assurance")]
+#[command(
+    name = "andeda",
+    version,
+    about = "AI-Native Detection Engine for Device Assurance"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

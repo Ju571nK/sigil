@@ -45,12 +45,8 @@ pub fn arb_overrides_for(targets: &[WatchTarget]) -> impl Strategy<Value = Vec<O
     }
     let ids: Vec<String> = targets.iter().map(|t| t.id.clone()).collect();
     vec(
-        (
-            proptest::sample::select(ids),
-            any::<bool>(),
-            any::<bool>(),
-        )
-            .prop_map(|(id, dis, tier_changed)| Override {
+        (proptest::sample::select(ids), any::<bool>(), any::<bool>()).prop_map(
+            |(id, dis, tier_changed)| Override {
                 id,
                 disabled: if dis { Some(true) } else { None },
                 tier: if tier_changed {
@@ -58,7 +54,8 @@ pub fn arb_overrides_for(targets: &[WatchTarget]) -> impl Strategy<Value = Vec<O
                 } else {
                     None
                 },
-            }),
+            },
+        ),
         0..5,
     )
     .boxed()

@@ -9,6 +9,12 @@ use uuid::Uuid;
 
 pub struct MacosPlatform;
 
+impl Default for MacosPlatform {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MacosPlatform {
     pub fn new() -> Self {
         Self

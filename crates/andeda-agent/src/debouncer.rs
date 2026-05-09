@@ -6,10 +6,7 @@ use andeda_core::policy::Tier;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-pub async fn run(
-    mut rx: mpsc::Receiver<NormalizedEvent>,
-    tx: mpsc::Sender<PendingEvent>,
-) {
+pub async fn run(mut rx: mpsc::Receiver<NormalizedEvent>, tx: mpsc::Sender<PendingEvent>) {
     let mut debouncer = Debouncer::new();
     let mut tick = tokio::time::interval(Duration::from_millis(25));
     tick.tick().await;

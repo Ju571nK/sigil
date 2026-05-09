@@ -84,11 +84,10 @@ proptest! {
             if matches!(kind, FileChangeKind::Removed) {
                 input_removed += 1;
             }
-            if d.push(PathBuf::from("/x"), kind, false, t).is_some() {
-                if matches!(kind, FileChangeKind::Removed) {
+            if d.push(PathBuf::from("/x"), kind, false, t).is_some()
+                && matches!(kind, FileChangeKind::Removed) {
                     emitted_immediately += 1;
                 }
-            }
             t += 5;
         }
         prop_assert_eq!(input_removed, emitted_immediately);

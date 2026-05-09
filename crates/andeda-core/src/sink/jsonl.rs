@@ -77,9 +77,9 @@ fn open_for_date(
     let date_fmt = format_description!("[year]-[month]-[day]");
     let date_str = now.format(date_fmt).expect("date format infallible");
     let name = if seq == 0 {
-        format!("events-{}.jsonl", date_str)
+        format!("events-{date_str}.jsonl")
     } else {
-        format!("events-{}-{:03}.jsonl", date_str, seq)
+        format!("events-{date_str}-{seq:03}.jsonl")
     };
     let path = dir.join(name);
     let file = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -153,8 +153,7 @@ mod tests {
     #[test]
     fn rotates_at_utc_date_change() {
         let td = TempDir::new().unwrap();
-        let mut sink =
-            JsonlSink::open(td.path(), datetime!(2026-05-08 23:59:59 UTC)).unwrap();
+        let mut sink = JsonlSink::open(td.path(), datetime!(2026-05-08 23:59:59 UTC)).unwrap();
         sink.write(&sample_event(datetime!(2026-05-08 23:59:59 UTC)))
             .unwrap();
         let day1_path = sink.current_file().to_path_buf();
@@ -192,10 +191,7 @@ mod tests {
             .unwrap();
         sink.write(&sample_event(datetime!(2026-05-10 09:00:00 UTC)))
             .unwrap();
-        assert!(sink
-            .current_file()
-            .to_string_lossy()
-            .contains("2026-05-10"));
+        assert!(sink.current_file().to_string_lossy().contains("2026-05-10"));
     }
 
     #[test]

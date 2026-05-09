@@ -19,6 +19,12 @@ pub struct TestAgentBuilder {
     policy_yaml: String,
 }
 
+impl Default for TestAgentBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestAgentBuilder {
     pub fn new() -> Self {
         Self {

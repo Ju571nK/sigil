@@ -3,7 +3,7 @@
 //! This crate is OS-, tokio-, and notify-independent.
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs, rust_2018_idioms)]
+#![warn(rust_2018_idioms)]
 
 pub mod debounce;
 pub mod event;

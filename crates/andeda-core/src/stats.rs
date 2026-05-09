@@ -58,9 +58,7 @@ impl Stats {
         let h = self.hash_hist.lock();
         StatsSnapshot {
             events_emitted_total: self.events_emitted_total.load(Ordering::Relaxed),
-            channel_stall_events_total: self
-                .channel_stall_events_total
-                .load(Ordering::Relaxed),
+            channel_stall_events_total: self.channel_stall_events_total.load(Ordering::Relaxed),
             events_by_kind: map,
             hash_p50_ms: (h.value_at_quantile(0.5) / 1_000) as u32,
             hash_p99_ms: (h.value_at_quantile(0.99) / 1_000) as u32,

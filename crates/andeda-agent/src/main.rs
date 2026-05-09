@@ -9,18 +9,14 @@ fn main() -> anyhow::Result<()> {
         cli::Command::Run => {
             let cfg = runtime::RuntimeConfig {
                 policy_path: cli.policy.clone(),
-                state_db_path: cli
-                    .state_db
-                    .clone()
-                    .unwrap_or_else(default_state_db_path),
-                events_dir: cli
-                    .events_dir
-                    .clone()
-                    .unwrap_or_else(default_events_dir),
+                state_db_path: cli.state_db.clone().unwrap_or_else(default_state_db_path),
+                events_dir: cli.events_dir.clone().unwrap_or_else(default_events_dir),
                 control_socket: default_control_socket(),
                 control_pipe_name: default_control_pipe_name(),
             };
-            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
             let code = rt.block_on(runtime::run(cfg))?;
             std::process::exit(code);
         }

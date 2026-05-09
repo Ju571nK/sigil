@@ -388,7 +388,11 @@ targets:
             version: 1,
             host_id_strategy: HostIdStrategy::MachineId,
             overrides: vec![],
-            targets: vec![def_target("only-windows", Tier::Critical, Platform::Windows)],
+            targets: vec![def_target(
+                "only-windows",
+                Tier::Critical,
+                Platform::Windows,
+            )],
         };
         let err = merge(defaults, None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::EmptyTargets));

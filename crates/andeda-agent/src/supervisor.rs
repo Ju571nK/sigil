@@ -3,8 +3,7 @@
 
 use crate::state_task::CommittableEvent;
 use andeda_core::event::{
-    AgentDyingReason, Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION,
-    SCHEMA_VERSION,
+    AgentDyingReason, Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
 use time::OffsetDateTime;
 use tokio::sync::mpsc;
@@ -15,6 +14,12 @@ use uuid::Uuid;
 pub struct Supervisor {
     handles: Vec<(String, JoinHandle<()>)>,
     pub shutdown: CancellationToken,
+}
+
+impl Default for Supervisor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Supervisor {
