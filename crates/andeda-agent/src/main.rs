@@ -5,11 +5,13 @@ mod control;
 mod debouncer;
 mod doctor;
 mod hasher;
+mod heartbeat;
 mod normalizer;
 mod platform;
 mod show;
 mod sink_task;
 mod state_task;
+mod supervisor;
 mod watcher;
 
 use clap::Parser;
