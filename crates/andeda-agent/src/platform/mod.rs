@@ -29,4 +29,6 @@ pub mod windows;
 pub use windows::WindowsPlatform as ActivePlatform;
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-compile_error!("ANDEDA Phase 1 supports only macOS and Windows targets at runtime.");
+pub mod stub;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub use stub::StubPlatform as ActivePlatform;
