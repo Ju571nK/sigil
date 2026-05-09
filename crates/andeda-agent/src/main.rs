@@ -1,6 +1,7 @@
 //! ANDEDA agent — tokio runtime + system integration.
 
 mod cli;
+mod watcher;
 
 use clap::Parser;
 
