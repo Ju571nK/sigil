@@ -4,6 +4,7 @@ mod cli;
 mod debouncer;
 mod hasher;
 mod normalizer;
+mod platform;
 mod sink_task;
 mod state_task;
 mod watcher;
