@@ -2,9 +2,11 @@
 
 mod cli;
 mod debouncer;
+mod doctor;
 mod hasher;
 mod normalizer;
 mod platform;
+mod show;
 mod sink_task;
 mod state_task;
 mod watcher;
@@ -18,10 +20,12 @@ fn main() -> anyhow::Result<()> {
             println!("(stub) andeda run");
         }
         cli::Command::Doctor => {
-            println!("(stub) andeda doctor");
+            let code = doctor::run(cli.policy);
+            std::process::exit(code);
         }
         cli::Command::Show { what } => {
-            println!("(stub) andeda show {:?}", what);
+            let code = show::run(what, cli.policy)?;
+            std::process::exit(code);
         }
         cli::Command::Version => {
             println!("andeda {}", env!("CARGO_PKG_VERSION"));
