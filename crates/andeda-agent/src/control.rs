@@ -5,6 +5,7 @@
 
 use andeda_core::stats::{Stats, StatsSnapshot};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use std::path::Path;
 use std::sync::Arc;
 

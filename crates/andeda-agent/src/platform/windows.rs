@@ -9,6 +9,12 @@ use uuid::Uuid;
 
 pub struct WindowsPlatform;
 
+impl Default for WindowsPlatform {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WindowsPlatform {
     pub fn new() -> Self {
         Self
