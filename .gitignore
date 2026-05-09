@@ -6,3 +6,5 @@ Cargo.lock.bak
 .vscode/
 *.iml
 .env
+/.run/
+.claude/
