@@ -8,7 +8,9 @@
 pub mod debounce;
 pub mod event;
 pub mod hashing;
+pub mod host_id;
 pub mod policy;
 pub mod ratelimit;
+pub mod sink;
 pub mod state;
 pub mod stats;
