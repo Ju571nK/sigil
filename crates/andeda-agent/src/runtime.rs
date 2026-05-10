@@ -104,6 +104,54 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     let stats = Stats::shared();
 
+    // Phase 2: hardware fingerprint reconciliation. Drift produces a
+    // HostIdFingerprintDrift event (Severity::Warn) for operator triage.
+    {
+        let outcome = {
+            let c = cache.lock();
+            crate::host_meta_task::ensure_fingerprint(&c, &plat)
+                .map_err(|e| anyhow::anyhow!("hw_fingerprint init failed: {e}"))?
+        };
+        match outcome {
+            crate::host_meta_task::FingerprintOutcome::FreshlyPersisted => {
+                tracing::info!("hw_fingerprint freshly persisted (first run)");
+            }
+            crate::host_meta_task::FingerprintOutcome::Unchanged => {
+                tracing::debug!("hw_fingerprint unchanged");
+            }
+            crate::host_meta_task::FingerprintOutcome::Drift { prev, new } => {
+                use andeda_core::event::{
+                    Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
+                };
+                let event = Event {
+                    schema_version: SCHEMA_VERSION,
+                    event_id: uuid::Uuid::now_v7(),
+                    ts: OffsetDateTime::now_utc(),
+                    host_id: host_id.clone(),
+                    agent_version: AGENT_VERSION.to_string(),
+                    severity: Severity::Warn,
+                    source: SourceKind::Agent,
+                    subject: Subject::Self_,
+                    evidence: Evidence::HostIdFingerprintDrift {
+                        prev_fingerprint: prev,
+                        new_fingerprint: new,
+                    },
+                    target_id: None,
+                };
+                let committable = CommittableEvent {
+                    event,
+                    new_hash: None,
+                    path_for_db: std::path::PathBuf::new(),
+                    target_id: String::new(),
+                };
+                if tx_sink.try_send(committable).is_err() {
+                    tracing::warn!("event channel full; HostIdFingerprintDrift dropped");
+                }
+                tracing::warn!("hw_fingerprint drift detected; event emitted");
+            }
+        }
+    }
+
     // Watcher (notify → raw events → tx_norm via normalizer wrapper).
     let runtime_handle = tokio::runtime::Handle::current();
     let watcher_handle = watcher::spawn_watcher(watch_roots.clone(), runtime_handle.clone(), 1024)?;
