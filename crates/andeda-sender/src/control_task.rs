@@ -65,3 +65,46 @@ pub async fn poll_policy(
         Err(e) => PollOutcome::ProtocolViolation(format!("policy json: {e}")),
     }
 }
+
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+pub struct ControlLoopCtx {
+    pub client: Client,
+    pub server_base_url: String,
+    pub host_id: String,
+    pub poll_interval: Duration,
+    pub shutdown: CancellationToken,
+    pub outcomes: mpsc::Sender<PollOutcome>,
+}
+
+/// Runs `poll_policy` in a loop with the configured interval. Cached
+/// ETag is held in-process (not persisted here — caller persists on
+/// agent ACK).
+pub async fn run(ctx: ControlLoopCtx) {
+    let mut cached_etag: Option<String> = None;
+    let mut interval = tokio::time::interval(ctx.poll_interval);
+    interval.tick().await; // skip immediate fire
+    loop {
+        tokio::select! {
+            biased;
+            _ = ctx.shutdown.cancelled() => break,
+            _ = interval.tick() => {
+                let outcome = poll_policy(
+                    &ctx.client,
+                    &ctx.server_base_url,
+                    &ctx.host_id,
+                    cached_etag.as_deref(),
+                ).await;
+                if let PollOutcome::NewPolicy { etag, .. } = &outcome {
+                    cached_etag = Some(etag.clone());
+                }
+                if ctx.outcomes.send(outcome).await.is_err() {
+                    // Receiver dropped — exit loop.
+                    break;
+                }
+            }
+        }
+    }
+}
