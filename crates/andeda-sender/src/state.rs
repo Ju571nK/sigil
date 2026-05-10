@@ -51,6 +51,13 @@ pub fn store(path: &Path, state: &SenderState) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Boot recovery: loads state from disk, falling back to `empty()` if
+/// the file is absent (first-run). Surfaces parse errors so the operator
+/// sees corruption immediately rather than silently resetting offsets.
+pub fn load_or_empty(path: &Path) -> Result<SenderState, StateError> {
+    Ok(load(path)?.unwrap_or_else(SenderState::empty))
+}
+
 /// Load `sender-offset.json`; returns `Ok(None)` if the file is absent
 /// (first run); returns `Err` for read or parse failures.
 pub fn load(path: &Path) -> Result<Option<SenderState>, StateError> {
@@ -167,5 +174,26 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftover.is_empty());
+    }
+
+    #[test]
+    fn load_or_empty_returns_empty_when_file_absent() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender-offset.json");
+        let s = load_or_empty(&p).unwrap();
+        assert_eq!(s, SenderState::empty());
+    }
+
+    #[test]
+    fn load_or_empty_returns_loaded_when_file_present() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender-offset.json");
+        let stored = SenderState {
+            current_file: "events-99.jsonl".into(),
+            byte_offset: 999,
+            last_acked_sequence: 9,
+        };
+        store(&p, &stored).unwrap();
+        assert_eq!(load_or_empty(&p).unwrap(), stored);
     }
 }
