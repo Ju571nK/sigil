@@ -65,47 +65,71 @@ emit a JSONL line every time something changes:
 
 ## Architecture
 
-Quill is a Rust workspace with three crates. The crate names below carry the
-project's prior codename (`andeda`); they are scheduled for a renaming pass
-in a later release. The architecture itself is unchanged.
+Quill is a Rust workspace with five crates, organized as two long-running
+processes plus three shared libraries. The crate names below carry the
+project's prior codename (`andeda`); they are scheduled for a renaming
+pass in a later release.
 
-- `andeda-core` — pure domain library (event, policy, state, hashing, …). No OS,
-  `tokio`, or filesystem-watcher dependencies, so it stays reusable across
-  processes and unit tests.
-- `andeda-agent` — the daemon binary. Hosts the `tokio` runtime, the
-  `notify`-based filesystem watcher, the event pipeline, CLI commands, and
-  platform glue. Depends on `andeda-core`.
-- `andeda-spool` — Phase 2 JSONL=IPC primitive (`Producer` / `Consumer` /
-  `Checkpoint` / `Retention`) used at every cross-process hop. Domain-neutral
-  and independent of the other two crates.
+**Processes**
+
+- `andeda-agent` — the host daemon (`andeda` binary). Owns the `tokio`
+  runtime, the `notify`-based filesystem watcher, the event pipeline, CLI
+  commands, and platform glue. Writes JSONL posture events to the local
+  spool.
+- `andeda-sender` — the uploader (`andeda-sender` binary). Reads JSONL
+  batches from the spool, ships them to a SIEM endpoint over HTTPS
+  (rustls), and hands signed policy responses back to the agent over IPC.
+
+**Libraries**
+
+- `andeda-core` — pure domain library (event, policy, state, hashing, …).
+  No OS, `tokio`, or filesystem-watcher dependencies. Consumed by both
+  processes.
+- `andeda-spool` — JSONL=IPC primitive (`Producer` / `Consumer` /
+  `Checkpoint` / `Retention`) used at the agent → sender hop. Durable,
+  crash-recoverable, domain-neutral.
+- `andeda-rules-basic` — compile-time-embedded baseline rulesets (macOS
+  and Windows defaults). The OSS fallback when no operator policy is
+  supplied; extended rule packs ship separately.
 
 ```mermaid
 flowchart LR
     FS[("Filesystem<br/>policy targets")]
-    JSONL[("JSONL events<br/>SIEM ingest")]
+    SIEM[("Your SIEM<br/>endpoint")]
 
-    subgraph agent["andeda-agent (bin)"]
+    subgraph agent["andeda-agent (bin: andeda)"]
         direction TB
-        watcher["watcher · debouncer"]
-        pipeline["normalizer · hasher"]
-        sinks["sink_task · state_task<br/>heartbeat · jsonl_gc"]
-        ctrl["cli · doctor · show<br/>supervisor · policy_apply"]
-        watcher --> pipeline --> sinks
+        a_pipe["watcher · debouncer<br/>normalizer · hasher<br/>sink_task · state_task"]
+        a_ctrl["supervisor · policy_apply<br/>cli · doctor · show"]
+    end
+
+    subgraph sender["andeda-sender (bin: andeda-sender)"]
+        direction TB
+        s_pipe["batch_reader · manifest<br/>transport (HTTPS + rustls)"]
+        s_ctrl["control_task · agent_ipc<br/>dead_letter · heartbeat"]
+    end
+
+    subgraph spool["andeda-spool (JSONL=IPC)"]
+        spoolmods["Producer · Consumer<br/>Checkpoint · Retention"]
     end
 
     subgraph core["andeda-core (pure domain)"]
         coremods["event · policy · state<br/>host_id · host_meta · hashing<br/>debounce · ratelimit · sink · stats"]
     end
 
-    subgraph spool["andeda-spool (Phase 2 IPC)"]
-        spoolmods["Producer · Consumer<br/>Checkpoint · Retention"]
+    subgraph rules["andeda-rules-basic"]
+        rulesmods["compile-time YAML<br/>(macOS / Windows defaults)"]
     end
 
-    FS --> watcher
-    sinks --> JSONL
+    FS --> a_pipe
+    a_pipe -- "writes JSONL" --> spool
+    spool -- "reads JSONL" --> s_pipe
+    s_pipe -- "HTTPS" --> SIEM
+    s_ctrl -. "apply_policy IPC" .-> a_ctrl
 
     agent -. uses .-> core
-    spool -. "future: split-process hops" .-> agent
+    sender -. uses .-> core
+    agent -. embeds .-> rules
 ```
 
 ## Status
