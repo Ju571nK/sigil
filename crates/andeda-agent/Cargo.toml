@@ -42,3 +42,4 @@ uuid = { workspace = true }
 data-encoding = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
+serde_json = { workspace = true }
