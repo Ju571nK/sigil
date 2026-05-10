@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use thiserror::Error;
 
+pub mod atomic_writer;
 pub mod canonical;
 pub mod expand;
 pub mod glob;
@@ -12,6 +13,7 @@ pub mod pubkeys;
 pub mod signed_envelope;
 pub mod verify;
 
+pub use atomic_writer::{atomic_write, AtomicWriteError};
 pub use canonical::{to_canonical_bytes, CanonicalError};
 pub use pubkeys::{Keystore, KeystoreEntry, KeystoreError};
 pub use signed_envelope::{SignedEnvelope, SignedPolicyResponse};
