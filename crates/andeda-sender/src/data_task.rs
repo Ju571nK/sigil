@@ -34,6 +34,41 @@ pub fn apply_ack(
     })
 }
 
+use std::time::Duration;
+
+/// Exponential backoff for retryable failures.
+/// Spec §3.8.2 — ServerBusy (5xx): start 5s, cap 5min.
+///                PermanentReject (426): start 5min, cap 1h.
+#[derive(Clone, Copy, Debug)]
+pub struct BackoffPolicy {
+    pub initial: Duration,
+    pub cap: Duration,
+}
+
+impl BackoffPolicy {
+    pub fn server_busy() -> Self {
+        BackoffPolicy {
+            initial: Duration::from_secs(5),
+            cap: Duration::from_secs(300),
+        }
+    }
+    pub fn upgrade_required() -> Self {
+        BackoffPolicy {
+            initial: Duration::from_secs(300),
+            cap: Duration::from_secs(3600),
+        }
+    }
+    /// Returns the next sleep duration given the consecutive-failure count.
+    /// `attempts == 0` returns `initial`. Doubles per attempt, clamped to `cap`.
+    pub fn next_delay(&self, attempts: u32) -> Duration {
+        let base = self.initial.as_secs();
+        let cap = self.cap.as_secs();
+        let mult = 1u64.checked_shl(attempts).unwrap_or(u64::MAX);
+        let secs = base.saturating_mul(mult).min(cap);
+        Duration::from_secs(secs)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,5 +118,26 @@ mod tests {
         let m = BatchManifest::new();
         let err = apply_ack(&m, Uuid::from_u128(1)).unwrap_err();
         assert!(matches!(err, AckError::EmptyManifest));
+    }
+
+    #[test]
+    fn server_busy_starts_at_5s() {
+        let b = BackoffPolicy::server_busy();
+        assert_eq!(b.next_delay(0).as_secs(), 5);
+    }
+
+    #[test]
+    fn server_busy_doubles_then_caps_at_5min() {
+        let b = BackoffPolicy::server_busy();
+        assert_eq!(b.next_delay(1).as_secs(), 10);
+        assert_eq!(b.next_delay(2).as_secs(), 20);
+        assert_eq!(b.next_delay(20).as_secs(), 300); // capped
+    }
+
+    #[test]
+    fn upgrade_required_starts_at_5min_caps_at_1h() {
+        let b = BackoffPolicy::upgrade_required();
+        assert_eq!(b.next_delay(0).as_secs(), 300);
+        assert_eq!(b.next_delay(20).as_secs(), 3600);
     }
 }
