@@ -8,6 +8,64 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// Atomically persist `state` to `path` via tmp+fsync+rename + parent dir
+/// fsync (POSIX). Safe across crash: caller never observes a partial write.
+pub fn store(path: &Path, state: &SenderState) -> Result<(), StateError> {
+    use std::io::Write;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|source| StateError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    let tmp = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("sender-offset.json"),
+        std::process::id()
+    ));
+    let bytes = serde_json::to_vec(state).expect("serialize SenderState");
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp)
+            .map_err(|source| StateError::Io { path: tmp.clone(), source })?;
+        f.write_all(&bytes).map_err(|source| StateError::Io { path: tmp.clone(), source })?;
+        f.sync_all().map_err(|source| StateError::Io { path: tmp.clone(), source })?;
+    }
+    std::fs::rename(&tmp, path).map_err(|source| StateError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    #[cfg(unix)]
+    {
+        let dir = std::fs::OpenOptions::new()
+            .read(true)
+            .open(parent)
+            .map_err(|source| StateError::Io { path: parent.to_path_buf(), source })?;
+        dir.sync_all().map_err(|source| StateError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+/// Load `sender-offset.json`; returns `Ok(None)` if the file is absent
+/// (first run); returns `Err` for read or parse failures.
+pub fn load(path: &Path) -> Result<Option<SenderState>, StateError> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(StateError::Io { path: path.to_path_buf(), source }),
+    };
+    let s = serde_json::from_slice(&bytes).map_err(|source| StateError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(Some(s))
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SenderState {
     /// Filename of the JSONL segment the sender is currently shipping.
@@ -39,6 +97,7 @@ pub enum StateError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn round_trips_through_json() {
@@ -58,5 +117,55 @@ mod tests {
         assert_eq!(s.byte_offset, 0);
         assert_eq!(s.last_acked_sequence, 0);
         assert!(s.current_file.is_empty());
+    }
+
+    #[test]
+    fn store_then_load_roundtrips() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender-offset.json");
+        let s = SenderState {
+            current_file: "events-1.jsonl".into(),
+            byte_offset: 4096,
+            last_acked_sequence: 10,
+        };
+        store(&p, &s).unwrap();
+        let loaded = load(&p).unwrap().unwrap();
+        assert_eq!(loaded, s);
+    }
+
+    #[test]
+    fn load_returns_none_when_file_absent() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender-offset.json");
+        assert!(load(&p).unwrap().is_none());
+    }
+
+    #[test]
+    fn store_overwrites_atomically() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender-offset.json");
+        store(&p, &SenderState {
+            current_file: "a".into(), byte_offset: 1, last_acked_sequence: 1,
+        }).unwrap();
+        store(&p, &SenderState {
+            current_file: "b".into(), byte_offset: 2, last_acked_sequence: 2,
+        }).unwrap();
+        let loaded = load(&p).unwrap().unwrap();
+        assert_eq!(loaded.current_file, "b");
+        assert_eq!(loaded.byte_offset, 2);
+        assert_eq!(loaded.last_acked_sequence, 2);
+    }
+
+    #[test]
+    fn store_leaves_no_tmp_files() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender-offset.json");
+        store(&p, &SenderState::empty()).unwrap();
+        let leftover: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftover.is_empty());
     }
 }
