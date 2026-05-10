@@ -11,6 +11,7 @@ pub mod data_task;
 pub mod dead_letter;
 pub mod heartbeat;
 pub mod manifest;
+pub mod runtime;
 pub mod state;
 pub mod transport;
 pub mod wire;
