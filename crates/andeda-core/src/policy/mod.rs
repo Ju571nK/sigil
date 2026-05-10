@@ -189,25 +189,22 @@ pub fn merge(
     })
 }
 
-const DEFAULTS_MACOS: &str = include_str!("defaults_macos.yaml");
-const DEFAULTS_WINDOWS: &str = include_str!("defaults_windows.yaml");
-
 /// Built-in defaults for the current OS, parsed from a compile-time-embedded YAML.
+///
+/// Source data lives in the `andeda-rules-basic` crate so the OSS baseline
+/// ruleset can evolve (and be re-licensed/swapped for commercial packs)
+/// without touching `andeda-core`.
 pub fn defaults() -> Result<PolicyDocument, PolicyError> {
-    let yaml = if cfg!(target_os = "macos") {
-        DEFAULTS_MACOS
-    } else if cfg!(target_os = "windows") {
-        DEFAULTS_WINDOWS
-    } else {
-        // Linux build-only: defaults are empty so callers can supply user policy.
-        return Ok(PolicyDocument {
+    match andeda_rules_basic::defaults_for_current_os() {
+        Some(yaml) => parse(yaml),
+        None => Ok(PolicyDocument {
+            // Linux build-only: defaults are empty so callers can supply user policy.
             version: 1,
             host_id_strategy: HostIdStrategy::MachineId,
             overrides: vec![],
             targets: vec![],
-        });
-    };
-    parse(yaml)
+        }),
+    }
 }
 
 // Silence unused-import warning when `PathBuf` is only used via submodules.

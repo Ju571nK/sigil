@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/andeda-core", "crates/andeda-agent", "crates/andeda-spool"]
+members = ["crates/andeda-core", "crates/andeda-agent", "crates/andeda-spool", "crates/andeda-rules-basic"]
 resolver = "2"
 
 [workspace.package]
