@@ -1,0 +1,6 @@
+# Use the system `git` CLI for fetching crate sources from git URLs.
+# Required because libgit2's built-in SSH support does not honor
+# ssh-agent identities the way OpenSSH does, which breaks fetching
+# private dependencies (e.g. andeda-rules-pro) over SSH on macOS.
+[net]
+git-fetch-with-cli = true

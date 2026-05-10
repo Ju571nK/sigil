@@ -8,14 +8,16 @@ authors.workspace = true
 
 [features]
 default = []
-# Enable the commercial rule pack. Requires andeda-rules-pro to be checked
-# out as a sibling of this repo (../../anti_i-rules-pro). Builds without
-# this feature do not link the pro crate at all.
+# Enable the commercial rule pack. Pulled from a private GitHub repo;
+# requires SSH access to Ju571nK/anti_i-rules-pro. For local development
+# (avoid the network round-trip), see the [patch] section in the
+# workspace Cargo.toml. Builds without this feature do not link the
+# pro crate at all.
 pro = ["dep:andeda-rules-pro"]
 
 [dependencies]
 andeda-rules-basic = { path = "../andeda-rules-basic" }
-andeda-rules-pro = { path = "../../../anti_i-rules-pro/crates/andeda-rules-pro", optional = true }
+andeda-rules-pro = { git = "ssh://git@github.com/Ju571nK/anti_i-rules-pro.git", branch = "main", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

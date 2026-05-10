@@ -112,26 +112,30 @@ This is the recommended distribution form for closed rule packs.
 
 The OSS daemon links the commercial rule pack only when the `pro` Cargo
 feature is enabled. Without the feature, `andeda-rules-pro` is not a
-dependency at all — the OSS build does not require the private crate to
-be present.
+dependency at all — the OSS build does not require any access to the
+private repo.
 
-**Local development**: check out the private repo as a sibling of this
-one, then build with `--features pro`:
+**Building with pro** (requires SSH access to
+[Ju571nK/anti_i-rules-pro](https://github.com/Ju571nK/anti_i-rules-pro)):
 
-```
-parent/
-├── anti_i/                  # this repo (Apache 2.0)
-└── anti_i-rules-pro/        # private repo (commercial)
-
-cd anti_i
+```sh
 cargo build --workspace --features pro
 cargo test  --workspace --features pro
 ```
 
-The path resolution is `../../../anti_i-rules-pro/crates/andeda-rules-pro`
-from `crates/andeda-core/Cargo.toml`. Once the private repo is published,
-this path dependency can be swapped for a `git = "ssh://..."` URL with no
-other changes.
+Cargo fetches `andeda-rules-pro` from the private repo over SSH (pinned
+to `branch = "main"`). The repo includes [.cargo/config.toml](.cargo/config.toml)
+with `net.git-fetch-with-cli = true` so cargo uses the system `git` CLI
+(which honors `ssh-agent`) instead of libgit2's broken built-in SSH.
+
+**Local development against an unpushed pro branch**: add a `[patch]`
+section to your local (uncommitted) `Cargo.toml` to redirect the git
+URL to a sibling checkout:
+
+```toml
+[patch."ssh://git@github.com/Ju571nK/anti_i-rules-pro.git"]
+andeda-rules-pro = { path = "../anti_i-rules-pro/crates/andeda-rules-pro" }
+```
 
 **Merge semantics**: `andeda-core::policy::defaults()` first parses the
 baseline ruleset, then (when `pro` is enabled) merges the extended pack

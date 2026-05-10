@@ -92,6 +92,7 @@ version = "0.1.0"
 [[package]]
 name = "andeda-rules-pro"
 version = "0.1.0"
+source = "git+ssh://git@github.com/Ju571nK/anti_i-rules-pro.git?branch=main#c37c563a7e911061dc14cb195fa0e9b48af4ebe2"
 
 [[package]]
 name = "andeda-spool"
