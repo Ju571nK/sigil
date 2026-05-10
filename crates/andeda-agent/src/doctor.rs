@@ -92,6 +92,33 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
     }
     println!("[OK]   total expanded paths: {total_paths}");
 
+    // Phase 2: show persisted host_id from state.db.
+    let state_db_path = default_state_db_path();
+    match andeda_core::state::HashCache::open(&state_db_path) {
+        Ok(cache) => match cache.host_meta_get() {
+            Ok(meta) => {
+                let host_id_display = meta
+                    .host_id
+                    .clone()
+                    .unwrap_or_else(|| "<not yet generated>".into());
+                println!(
+                    "[OK]   host_id: {host_id_display} (UUIDv4, persisted in state.db)"
+                );
+            }
+            Err(e) => {
+                println!("[WARN] host_meta_get failed: {e}");
+                warn_count += 1;
+            }
+        },
+        Err(e) => {
+            println!(
+                "[WARN] state.db unavailable for host_id read: {e} (path: {})",
+                state_db_path.display()
+            );
+            warn_count += 1;
+        }
+    }
+
     if plat.name() == "macos" {
         match plat.fda_state() {
             FdaState::Granted => println!("[OK]   Full Disk Access: granted"),
@@ -117,5 +144,27 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
     } else {
         println!("All checks passed.");
         0
+    }
+}
+
+/// Default state.db path matching the daemon's runtime default. Mirrors
+/// the convention used by the CLI when `--state-db` is not provided.
+fn default_state_db_path() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from("/var/lib/andeda/state.db")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        PathBuf::from("/var/lib/andeda/state.db")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
+            .join("Andeda/state.db")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        PathBuf::from("/tmp/andeda-state.db")
     }
 }

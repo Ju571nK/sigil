@@ -11,7 +11,6 @@ use crate::{
     supervisor::Supervisor,
     watcher,
 };
-use andeda_core::host_id::resolve as resolve_host_id;
 use andeda_core::policy::expand::{expand_per_user, EnvLookup, UserEnumerator};
 use andeda_core::policy::{current_platform, defaults, merge, Tier};
 use andeda_core::sink::jsonl::JsonlSink;
@@ -45,13 +44,27 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     let plat = ActivePlatform::new();
     let started = Instant::now();
 
+    // Open state.db FIRST — host_id resolution depends on it.
+    if let Some(dir) = cfg.state_db_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let cache = Arc::new(Mutex::new(HashCache::open(&cfg.state_db_path)?));
+
+    // Resolve persisted host_id (UUIDv4, generated on first run).
+    let host_id = {
+        let c = cache.lock();
+        crate::host_meta_task::ensure_host_id(&c)
+            .map_err(|e| anyhow::anyhow!("failed to initialize host_id: {e}"))?
+    };
+    tracing::info!(host_id = %host_id, "agent host_id resolved");
+
     // 1. Load + merge policy.
     let user_doc = match cfg.policy_path.as_ref() {
         Some(p) if p.exists() => Some(andeda_core::policy::parse(&std::fs::read_to_string(p)?)?),
         _ => None,
     };
     let effective = merge(defaults()?, user_doc, current_platform())?;
-    let host_id = resolve_host_id(&effective.host_id_strategy, &plat);
+    // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
 
     // 2. Expand paths per user.
     let users = UserEnumerator::list(&plat);
@@ -76,11 +89,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         expanded_paths.insert(t.id.clone(), paths);
     }
 
-    // 3. Open state.db, perform critical-tier warmup.
-    if let Some(dir) = cfg.state_db_path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let cache = Arc::new(Mutex::new(HashCache::open(&cfg.state_db_path)?));
+    // 3. Perform critical-tier warmup (state.db already opened above).
     perform_warmup(&effective, &expanded_paths, &cache)?;
 
     // 4. Open sink.
