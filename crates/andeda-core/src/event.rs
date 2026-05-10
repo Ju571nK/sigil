@@ -66,6 +66,25 @@ pub enum AgentDyingReason {
     Signal,
 }
 
+/// Spec §3.8.2 rejection reasons. Stable wire strings — operators filter by
+/// these in the SIEM, so renames are breaking changes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicySignatureInvalidReason {
+    /// `signing_pubkey_id` not present in the keystore at all.
+    PubkeyUnknown,
+    /// Keystore entry exists but `now` is outside its validity window.
+    PubkeyInactive,
+    /// Pubkey resolved but ed25519 verification failed against the canonical bytes.
+    SignatureInvalid,
+    /// `now >= signed_envelope.valid_until`.
+    Expired,
+    /// `policy_version <= host_meta.last_applied_policy_version` (replay or rollback).
+    VersionRegression,
+    /// Base64 decode succeeded but the YAML did not parse to a `Policy`.
+    ParseFailed,
+}
+
 /// The observation payload of an event.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -91,6 +110,12 @@ pub enum Evidence {
         state_db_size_bytes: u64,
         #[serde(with = "time::serde::rfc3339::option")]
         last_log_rotation_ts: Option<OffsetDateTime>,
+        /// Phase 2: agent's currently-applied policy version (0 if none yet).
+        last_applied_policy_version: i64,
+        /// Phase 2: `true` iff the active envelope's valid_until is in the past.
+        policy_expired_active: bool,
+        /// Phase 2: `true` iff `events/` is currently above the GC soft floor.
+        jsonl_above_soft_floor: bool,
     },
     PermissionMissing {
         resource: String,
@@ -117,6 +142,69 @@ pub enum Evidence {
         target_id: String,
         count_dropped_in_window: u64,
         common_path_prefix: PathBuf,
+    },
+    /// Spec §3.10: hw_fingerprint changed while host_id stayed the same.
+    /// Emitted by the agent when the freshly-computed fingerprint differs
+    /// from the persisted one in `state.db`.
+    HostIdFingerprintDrift {
+        /// Previously-persisted fingerprint hex (blake3 → 64 chars).
+        prev_fingerprint: String,
+        /// Freshly-computed fingerprint hex.
+        new_fingerprint: String,
+    },
+    /// Spec §3.9: emitted exactly once per GC cycle that crossed the
+    /// hard ceiling (size or age). Operators dashboard on this — non-zero
+    /// rate means the host is permanently behind on shipping.
+    AgentJsonlForceGc {
+        /// Total bytes in `events/` at the time of the cycle.
+        total_bytes: u64,
+        /// Age in seconds of the oldest segment at the time of the cycle.
+        oldest_segment_age_s: u64,
+        /// How many segments were deleted in the cycle.
+        segments_deleted: u32,
+        /// Of those, how many were past the sender offset.
+        segments_skipped_past_sender: u32,
+    },
+    /// Spec §3.9: emitted whenever the GC deleted at least one segment
+    /// that the sender had NOT yet shipped. One event per cycle (NOT per file).
+    SenderSkippedSegment {
+        /// Number of segments dropped past the sender in this cycle.
+        count: u32,
+        /// Filename of the OLDEST segment dropped past the sender (operators
+        /// can grep their SIEM around this segment's expected event-id range).
+        oldest_dropped_filename: String,
+    },
+    /// Spec §3.8.2: a `SignedPolicyResponse` was rejected by the verification
+    /// chain. Emitted by the agent when an inbound envelope fails any check;
+    /// the policy is NOT applied and `last_applied_policy_version` is NOT
+    /// advanced.
+    PolicySignatureInvalid {
+        /// Which check failed.
+        reason: PolicySignatureInvalidReason,
+        /// `signing_pubkey_id` from the rejected response (operator triage).
+        signing_pubkey_id: String,
+        /// `policy_version` claimed by the rejected envelope.
+        policy_version_in_envelope: i64,
+        /// The agent's current `last_applied_policy_version` at rejection time.
+        last_applied_policy_version: i64,
+    },
+    /// Spec §3.10: emitted exactly once when a freshly-verified policy is
+    /// committed to disk + state.db. Operators use this to confirm rollouts.
+    PolicyReloaded {
+        /// The new `last_applied_policy_version`.
+        policy_version: i64,
+    },
+    /// Spec §3.10: emitted exactly once per "transition into expired".
+    /// The agent continues to enforce the expired policy until a replacement
+    /// arrives — `valid_until` is informational, not blocking. (Spec §1.4
+    /// "Active policy passing valid_until" — agent keeps applying the last
+    /// good policy on the local file system; SIEM operators triage.)
+    PolicyExpiredActive {
+        /// The version of the policy whose `valid_until` was crossed.
+        policy_version: i64,
+        /// RFC 3339 — when `valid_until` was crossed.
+        #[serde(with = "time::serde::rfc3339")]
+        valid_until: time::OffsetDateTime,
     },
 }
 
@@ -264,6 +352,9 @@ mod tests {
             watcher_backend: "fsevents".into(),
             state_db_size_bytes: 0,
             last_log_rotation_ts: None,
+            last_applied_policy_version: 0,
+            policy_expired_active: false,
+            jsonl_above_soft_floor: false,
         };
         let j = serde_json::to_string(&ev).unwrap();
         assert!(j.starts_with(r#"{"kind":"heartbeat""#));
@@ -291,6 +382,49 @@ mod tests {
         };
         let j = serde_json::to_string(&ev).unwrap();
         assert!(j.contains("2026-05-08T14:23:45Z"));
+    }
+
+    #[test]
+    fn policy_signature_invalid_serializes_with_reason_field() {
+        let ev = Evidence::PolicySignatureInvalid {
+            reason: PolicySignatureInvalidReason::PubkeyUnknown,
+            signing_pubkey_id: "andeda-policy-2026-05".into(),
+            policy_version_in_envelope: 42,
+            last_applied_policy_version: 41,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"kind\":\"policy_signature_invalid\""), "got: {s}");
+        assert!(s.contains("\"reason\":\"pubkey_unknown\""));
+        assert!(s.contains("\"signing_pubkey_id\":\"andeda-policy-2026-05\""));
+        assert!(s.contains("\"policy_version_in_envelope\":42"));
+        assert!(s.contains("\"last_applied_policy_version\":41"));
+    }
+
+    #[test]
+    fn each_reason_renders_as_snake_case() {
+        for (variant, expected) in [
+            (PolicySignatureInvalidReason::PubkeyUnknown, "pubkey_unknown"),
+            (PolicySignatureInvalidReason::PubkeyInactive, "pubkey_inactive"),
+            (PolicySignatureInvalidReason::SignatureInvalid, "signature_invalid"),
+            (PolicySignatureInvalidReason::Expired, "expired"),
+            (PolicySignatureInvalidReason::VersionRegression, "version_regression"),
+            (PolicySignatureInvalidReason::ParseFailed, "parse_failed"),
+        ] {
+            let s = serde_json::to_string(&variant).unwrap();
+            assert_eq!(s, format!("\"{expected}\""));
+        }
+    }
+
+    #[test]
+    fn host_id_fingerprint_drift_serializes_with_snake_case_kind() {
+        let ev = Evidence::HostIdFingerprintDrift {
+            prev_fingerprint: "deadbeef".into(),
+            new_fingerprint: "cafef00d".into(),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"kind\":\"host_id_fingerprint_drift\""), "got: {s}");
+        assert!(s.contains("\"prev_fingerprint\":\"deadbeef\""));
+        assert!(s.contains("\"new_fingerprint\":\"cafef00d\""));
     }
 
     #[test]

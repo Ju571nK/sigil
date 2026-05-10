@@ -20,9 +20,12 @@ dunce = { workspace = true }
 rusqlite = { workspace = true }
 hdrhistogram = { workspace = true }
 parking_lot = { workspace = true }
+data-encoding = { workspace = true }
+ed25519-dalek = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+rand_core = { version = "0.6", features = ["std"] }
 insta = { workspace = true }
 proptest = { workspace = true }
 uuid = { workspace = true }

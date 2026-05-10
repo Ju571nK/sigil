@@ -11,7 +11,7 @@ pub enum StateError {
 }
 
 pub struct HashCache {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl HashCache {
@@ -30,6 +30,21 @@ impl HashCache {
                 target_id TEXT NOT NULL,
                 updated_at_ms INTEGER NOT NULL
             )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS host_meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                host_id TEXT,
+                hw_fingerprint TEXT,
+                last_applied_policy_version INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )?;
+        // Ensure singleton row 1 exists. Idempotent.
+        conn.execute(
+            "INSERT OR IGNORE INTO host_meta (id, host_id, hw_fingerprint, last_applied_policy_version)
+             VALUES (1, NULL, NULL, 0)",
             [],
         )?;
         Ok(Self { conn })
@@ -183,5 +198,52 @@ mod tests {
         samples.sort_unstable();
         let p99 = samples[(samples.len() as f64 * 0.99) as usize];
         assert!(p99 < 1000, "p99 lookup latency {p99}us > 1ms");
+    }
+}
+
+#[cfg(test)]
+mod host_meta_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn host_meta_table_created_on_open() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        let cache = HashCache::open(&db).unwrap();
+
+        // Direct SQL to confirm the table exists with expected columns.
+        let cols: Vec<String> = cache
+            .conn
+            .prepare("PRAGMA table_info(host_meta)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(cols.contains(&"id".to_string()));
+        assert!(cols.contains(&"host_id".to_string()));
+        assert!(cols.contains(&"hw_fingerprint".to_string()));
+        assert!(cols.contains(&"last_applied_policy_version".to_string()));
+    }
+
+    #[test]
+    fn host_meta_singleton_row_initialized_to_empty() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        let cache = HashCache::open(&db).unwrap();
+        let row: (i64, Option<String>, Option<String>, i64) = cache
+            .conn
+            .query_row(
+                "SELECT id, host_id, hw_fingerprint, last_applied_policy_version
+                 FROM host_meta WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, 1);
+        assert_eq!(row.1, None);
+        assert_eq!(row.2, None);
+        assert_eq!(row.3, 0);
     }
 }

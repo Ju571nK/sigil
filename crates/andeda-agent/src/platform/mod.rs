@@ -18,6 +18,8 @@ pub enum FdaState {
     Unknown,
 }
 
+pub mod hw_fingerprint;
+
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "macos")]

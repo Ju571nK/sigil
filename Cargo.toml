@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/andeda-core", "crates/andeda-agent"]
+members = ["crates/andeda-core", "crates/andeda-agent", "crates/andeda-spool"]
 resolver = "2"
 
 [workspace.package]
@@ -33,6 +33,8 @@ clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 insta = { version = "1", features = ["yaml", "json"] }
 proptest = "1"
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+data-encoding = "2"
 
 [profile.release]
 panic = "unwind"

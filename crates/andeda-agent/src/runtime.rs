@@ -11,19 +11,19 @@ use crate::{
     supervisor::Supervisor,
     watcher,
 };
-use andeda_core::host_id::resolve as resolve_host_id;
 use andeda_core::policy::expand::{expand_per_user, EnvLookup, UserEnumerator};
+use andeda_core::policy::pubkeys::Keystore;
 use andeda_core::policy::{current_platform, defaults, merge, Tier};
 use andeda_core::sink::jsonl::JsonlSink;
 use andeda_core::state::HashCache;
 use andeda_core::stats::Stats;
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use time::OffsetDateTime;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 pub struct RuntimeConfig {
     pub policy_path: Option<PathBuf>,
@@ -45,13 +45,77 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     let plat = ActivePlatform::new();
     let started = Instant::now();
 
+    // Open state.db FIRST — host_id resolution depends on it.
+    if let Some(dir) = cfg.state_db_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let cache = Arc::new(Mutex::new(HashCache::open(&cfg.state_db_path)?));
+
+    // Resolve persisted host_id (UUIDv4, generated on first run).
+    let host_id = {
+        let c = cache.lock();
+        crate::host_meta_task::ensure_host_id(&c)
+            .map_err(|e| anyhow::anyhow!("failed to initialize host_id: {e}"))?
+    };
+    tracing::info!(host_id = %host_id, "agent host_id resolved");
+
+    // Phase 2: load the policy-signing keystore. Optional — if missing, the
+    // agent runs in Phase 1 mode (no inbound apply_policy can succeed).
+    // Note: live watcher reload not implemented in Plan A — apply_policy
+    // writes policy.yaml + state.db, but the running watcher subgraph does
+    // NOT re-pick up the new file; restart the agent to refresh watch targets.
+    let keystore = match Keystore::load_from_file(keystore_path()) {
+        Ok(k) => Arc::new(k),
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                "policy-signing keystore unavailable; apply_policy will reject all envelopes"
+            );
+            Arc::new(Keystore { pubkeys: vec![] })
+        }
+    };
+
+    // Phase 2: shared state for IPC + expiry monitor + heartbeat.
+    let policy_expired_active = Arc::new(parking_lot::RwLock::new(false));
+    let jsonl_above_soft_floor = Arc::new(parking_lot::RwLock::new(false));
+    let current_segment_filename = Arc::new(parking_lot::RwLock::new(String::new()));
+    let active_valid_until: Arc<parking_lot::RwLock<Option<OffsetDateTime>>> =
+        Arc::new(parking_lot::RwLock::new(None));
+    let (policy_version_tx, _policy_version_rx_init) = watch::channel::<i64>(0);
+
+    // Phase 2: boot reconciliation — disk may be ahead of state.db after a
+    // crash between atomic-rename and state.db version-bump. If so, advance
+    // state.db and remember the version so we can emit a synthetic
+    // PolicyReloaded event once `tx_sink` is bound below.
+    let policy_path_for_apply = cfg
+        .policy_path
+        .clone()
+        .unwrap_or_else(default_policy_yaml_path);
+    let pending_reconcile: Option<i64> = {
+        let c = cache.lock();
+        match reconcile_policy_on_boot(&c, &policy_path_for_apply) {
+            Ok(Some(v)) => {
+                tracing::info!(
+                    version = v,
+                    "policy reconciliation: state.db advanced to match disk"
+                );
+                Some(v)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(error = ?e, "policy reconciliation failed; skipping");
+                None
+            }
+        }
+    };
+
     // 1. Load + merge policy.
     let user_doc = match cfg.policy_path.as_ref() {
         Some(p) if p.exists() => Some(andeda_core::policy::parse(&std::fs::read_to_string(p)?)?),
         _ => None,
     };
     let effective = merge(defaults()?, user_doc, current_platform())?;
-    let host_id = resolve_host_id(&effective.host_id_strategy, &plat);
+    // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
 
     // 2. Expand paths per user.
     let users = UserEnumerator::list(&plat);
@@ -76,11 +140,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         expanded_paths.insert(t.id.clone(), paths);
     }
 
-    // 3. Open state.db, perform critical-tier warmup.
-    if let Some(dir) = cfg.state_db_path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let cache = Arc::new(Mutex::new(HashCache::open(&cfg.state_db_path)?));
+    // 3. Perform critical-tier warmup (state.db already opened above).
     perform_warmup(&effective, &expanded_paths, &cache)?;
 
     // 4. Open sink.
@@ -94,6 +154,103 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     let (tx_dropped, mut rx_dropped) = mpsc::channel::<andeda_core::ratelimit::DropReport>(64);
 
     let stats = Stats::shared();
+
+    // Phase 2: hardware fingerprint reconciliation. Drift produces a
+    // HostIdFingerprintDrift event (Severity::Warn) for operator triage.
+    {
+        let outcome = {
+            let c = cache.lock();
+            crate::host_meta_task::ensure_fingerprint(&c, &plat)
+                .map_err(|e| anyhow::anyhow!("hw_fingerprint init failed: {e}"))?
+        };
+        match outcome {
+            crate::host_meta_task::FingerprintOutcome::FreshlyPersisted => {
+                tracing::info!("hw_fingerprint freshly persisted (first run)");
+            }
+            crate::host_meta_task::FingerprintOutcome::Unchanged => {
+                tracing::debug!("hw_fingerprint unchanged");
+            }
+            crate::host_meta_task::FingerprintOutcome::Drift { prev, new } => {
+                use andeda_core::event::{
+                    Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
+                };
+                let event = Event {
+                    schema_version: SCHEMA_VERSION,
+                    event_id: uuid::Uuid::now_v7(),
+                    ts: OffsetDateTime::now_utc(),
+                    host_id: host_id.clone(),
+                    agent_version: AGENT_VERSION.to_string(),
+                    severity: Severity::Warn,
+                    source: SourceKind::Agent,
+                    subject: Subject::Self_,
+                    evidence: Evidence::HostIdFingerprintDrift {
+                        prev_fingerprint: prev,
+                        new_fingerprint: new,
+                    },
+                    target_id: None,
+                };
+                let committable = CommittableEvent {
+                    event,
+                    new_hash: None,
+                    path_for_db: std::path::PathBuf::new(),
+                    target_id: String::new(),
+                };
+                if tx_sink.try_send(committable).is_err() {
+                    tracing::warn!("event channel full; HostIdFingerprintDrift dropped");
+                }
+                tracing::warn!("hw_fingerprint drift detected; event emitted");
+            }
+        }
+    }
+
+    // Phase 2: emit the deferred PolicyReloaded event from boot reconciliation
+    // (held above until tx_sink existed). Best-effort: if the channel is full,
+    // the heartbeat's `last_applied_policy_version` will still surface it.
+    if let Some(version) = pending_reconcile {
+        use andeda_core::event::{
+            Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
+        };
+        let event = Event {
+            schema_version: SCHEMA_VERSION,
+            event_id: uuid::Uuid::now_v7(),
+            ts: OffsetDateTime::now_utc(),
+            host_id: host_id.clone(),
+            agent_version: AGENT_VERSION.to_string(),
+            severity: Severity::Info,
+            source: SourceKind::Agent,
+            subject: Subject::Self_,
+            evidence: Evidence::PolicyReloaded {
+                policy_version: version,
+            },
+            target_id: None,
+        };
+        let committable = CommittableEvent {
+            event,
+            new_hash: None,
+            path_for_db: PathBuf::new(),
+            target_id: String::new(),
+        };
+        if tx_sink.try_send(committable).is_err() {
+            tracing::warn!("event channel full; deferred PolicyReloaded dropped");
+        }
+    }
+
+    // Phase 2: build ApplyContext (used by control IPC's apply_policy handler)
+    // and ControlContext (used by control IPC dispatch).
+    let apply_ctx = Arc::new(crate::policy_apply::ApplyContext {
+        keystore: keystore.clone(),
+        cache: cache.clone(),
+        policy_yaml_path: policy_path_for_apply.clone(),
+        host_id: host_id.clone(),
+        event_tx: tx_sink.clone(),
+        policy_version_tx: policy_version_tx.clone(),
+        active_valid_until: active_valid_until.clone(),
+    });
+    let control_ctx = Arc::new(crate::control::ControlContext {
+        stats: stats.clone(),
+        apply_ctx: apply_ctx.clone(),
+        active_valid_until: active_valid_until.clone(),
+    });
 
     // Watcher (notify → raw events → tx_norm via normalizer wrapper).
     let runtime_handle = tokio::runtime::Handle::current();
@@ -158,9 +315,27 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         }),
     );
 
+    // Best-effort startup snapshot: pick the lexicographically largest segment
+    // as the "current" one. Full rotation-time wiring is a Plan A2 follow-up.
+    {
+        if let Ok(entries) = std::fs::read_dir(&cfg.events_dir) {
+            let latest = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("events-") && n.ends_with(".jsonl"))
+                .max();
+            if let Some(n) = latest {
+                *current_segment_filename.write() = n;
+            }
+        }
+    }
+
     // Heartbeat
     {
         let stats_h = stats.clone();
+        let cache_h = cache.clone();
+        let expired_h = policy_expired_active.clone();
+        let above_h = jsonl_above_soft_floor.clone();
         let host_id_h = host_id.clone();
         let cancel_h = cancel.clone();
         let tx_h = tx_sink.clone();
@@ -170,6 +345,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             tokio::spawn(async move {
                 heartbeat::run(
                     stats_h,
+                    cache_h,
+                    expired_h,
+                    above_h,
                     host_id_h,
                     backend_name,
                     dbp,
@@ -182,25 +360,78 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         );
     }
 
+    // JSONL GC task (Phase 2 Plan A).
+    {
+        let host_id_g = host_id.clone();
+        let dir_g = cfg.events_dir.clone();
+        let cur_g = current_segment_filename.clone();
+        let above_g = jsonl_above_soft_floor.clone();
+        let tx_g = tx_sink.clone();
+        let cancel_g = cancel.clone();
+        sup.track(
+            "jsonl_gc",
+            tokio::spawn(async move {
+                crate::jsonl_gc_task::run(crate::jsonl_gc_task::GcTaskCtx {
+                    host_id: host_id_g,
+                    events_dir: dir_g,
+                    current_segment_filename: cur_g,
+                    above_soft_floor: above_g,
+                    cfg: crate::gc_config::GcConfig::defaults(),
+                    event_tx: tx_g,
+                    shutdown: cancel_g,
+                    tick: std::time::Duration::from_secs(10 * 60),
+                })
+                .await;
+            }),
+        );
+    }
+
+    // Policy expiry monitor (Phase 2). Reads `active_valid_until` and
+    // `policy_version_tx`'s receiver, writes the shared `policy_expired_active`
+    // flag, and emits exactly one `PolicyExpiredActive` event per version.
+    {
+        let host_id_e = host_id.clone();
+        let tx_e = tx_sink.clone();
+        let cancel_e = cancel.clone();
+        let expired_e = policy_expired_active.clone();
+        let vu_e = active_valid_until.clone();
+        let v_rx = policy_version_tx.subscribe();
+        sup.track(
+            "policy_expiry",
+            tokio::spawn(async move {
+                crate::policy_expiry_task::run(crate::policy_expiry_task::ExpiryTaskCtx {
+                    host_id: host_id_e,
+                    policy_expired_active: expired_e,
+                    active_valid_until: vu_e,
+                    policy_version_rx: v_rx,
+                    event_tx: tx_e,
+                    shutdown: cancel_e,
+                    tick: std::time::Duration::from_secs(60),
+                })
+                .await;
+            }),
+        );
+    }
+
     // FDA permission check (macOS) — emit one PermissionMissing per target if denied.
     if matches!(plat.fda_state(), FdaState::Denied) {
         emit_permission_missing(&effective, &tx_sink, &host_id).await;
     }
 
-    // Control IPC
+    // Control IPC (Phase 2: dispatches Stats + ApplyPolicy + PolicyStatus).
     {
-        let stats_c = stats.clone();
         #[cfg(unix)]
         let socket = cfg.control_socket.clone();
         #[cfg(windows)]
         let pipe = cfg.control_pipe_name.clone();
+        let ctx_c = control_ctx.clone();
         sup.track(
             "control",
             tokio::spawn(async move {
                 #[cfg(unix)]
-                let _ = crate::control::serve(&socket, stats_c).await;
+                let _ = crate::control::serve(&socket, ctx_c).await;
                 #[cfg(windows)]
-                let _ = crate::control::serve(&pipe, stats_c).await;
+                let _ = crate::control::serve(&pipe, ctx_c).await;
             }),
         );
     }
@@ -330,5 +561,61 @@ impl TargetLookup for NoopLookup {
         _kind: andeda_core::event::FileChangeKind,
     ) -> Option<NormalizedEvent> {
         None
+    }
+}
+
+/// Per-OS path of the policy-signing keystore (spec §3.8.2).
+fn keystore_path() -> PathBuf {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        PathBuf::from("/etc/andeda/policy-signing-pubkeys.pem")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from(r"C:\ProgramData\Andeda\policy-signing-pubkeys.pem")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        PathBuf::from("/etc/andeda/policy-signing-pubkeys.pem")
+    }
+}
+
+/// Default `policy.yaml` location when not overridden via `RuntimeConfig.policy_path`.
+/// TODO: factor out a shared `defaults` module if/when other call sites need this.
+fn default_policy_yaml_path() -> PathBuf {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        PathBuf::from("/etc/andeda/policy.yaml")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from(r"C:\ProgramData\Andeda\policy.yaml")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        PathBuf::from("/etc/andeda/policy.yaml")
+    }
+}
+
+/// Boot reconciliation: if the YAML on disk has been advanced past
+/// `state.db.last_applied_policy_version` (crash between rename and version-bump),
+/// advance state.db and return the new version so the caller can emit
+/// `PolicyReloaded` once `tx_sink` is bound.
+fn reconcile_policy_on_boot(
+    cache: &HashCache,
+    policy_path: &Path,
+) -> anyhow::Result<Option<i64>> {
+    if !policy_path.exists() {
+        return Ok(None);
+    }
+    let yaml = std::fs::read_to_string(policy_path)?;
+    let doc: serde_yaml::Value = serde_yaml::from_str(&yaml)?;
+    let on_disk = doc.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
+    let in_db = cache.host_meta_get()?.last_applied_policy_version;
+    if on_disk > in_db {
+        cache.host_meta_set_policy_version(on_disk)?;
+        Ok(Some(on_disk))
+    } else {
+        Ok(None)
     }
 }

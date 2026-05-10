@@ -51,3 +51,33 @@ impl UserEnumerator for StubPlatform {
         Vec::new()
     }
 }
+
+use super::hw_fingerprint::HardwareFingerprint;
+
+impl HardwareFingerprint for StubPlatform {
+    fn platform_uuid(&self) -> String {
+        std::fs::read_to_string("/etc/machine-id")
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+    fn stable_mac(&self) -> String {
+        // Phase 2 Linux is build-only; runtime is Phase 2+. Empty.
+        String::new()
+    }
+    fn cpu_brand(&self) -> String {
+        std::fs::read_to_string("/proc/cpuinfo")
+            .ok()
+            .and_then(|s| {
+                for line in s.lines() {
+                    if let Some(rest) = line.strip_prefix("model name") {
+                        if let Some(idx) = rest.find(':') {
+                            return Some(rest[idx + 1..].trim().to_string());
+                        }
+                    }
+                }
+                None
+            })
+            .unwrap_or_default()
+    }
+}
