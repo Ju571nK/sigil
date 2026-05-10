@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod control;
+pub mod policy_apply;
 pub mod debouncer;
 pub mod doctor;
 pub mod hasher;

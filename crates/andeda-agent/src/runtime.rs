@@ -245,19 +245,24 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     }
 
     // Control IPC
+    // TODO(A6.5): wire Arc<ControlContext> here. The serve signature changed in A6.3
+    // to take Arc<ControlContext> instead of Arc<Stats>. Until A6.5 constructs the
+    // full ControlContext (keystore + apply_ctx + active_valid_until), the IPC server
+    // is temporarily disabled at runtime. Tests pass because policy_apply::tests
+    // and control::tests do not exercise this call site.
     {
-        let stats_c = stats.clone();
+        let _stats_c = stats.clone();
         #[cfg(unix)]
-        let socket = cfg.control_socket.clone();
+        let _socket = cfg.control_socket.clone();
         #[cfg(windows)]
-        let pipe = cfg.control_pipe_name.clone();
+        let _pipe = cfg.control_pipe_name.clone();
         sup.track(
             "control",
             tokio::spawn(async move {
-                #[cfg(unix)]
-                let _ = crate::control::serve(&socket, stats_c).await;
-                #[cfg(windows)]
-                let _ = crate::control::serve(&pipe, stats_c).await;
+                // A6.5 replaces this stub with:
+                //   crate::control::serve(&socket, Arc::new(ControlContext { ... })).await
+                tracing::warn!("control IPC disabled — awaiting A6.5 wiring");
+                std::future::pending::<()>().await
             }),
         );
     }

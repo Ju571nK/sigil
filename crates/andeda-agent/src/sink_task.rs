@@ -54,5 +54,6 @@ fn evidence_kind_str(e: &andeda_core::event::Evidence) -> &'static str {
         RateLimitExceeded { .. } => "rate_limit_exceeded",
         HostIdFingerprintDrift { .. } => "host_id_fingerprint_drift",
         PolicySignatureInvalid { .. } => "policy_signature_invalid",
+        PolicyReloaded { .. } => "policy_reloaded",
     }
 }

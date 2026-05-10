@@ -160,6 +160,12 @@ pub enum Evidence {
         /// The agent's current `last_applied_policy_version` at rejection time.
         last_applied_policy_version: i64,
     },
+    /// Spec §3.10: emitted exactly once when a freshly-verified policy is
+    /// committed to disk + state.db. Operators use this to confirm rollouts.
+    PolicyReloaded {
+        /// The new `last_applied_policy_version`.
+        policy_version: i64,
+    },
 }
 
 /// Schema version. Bumps follow the policy in spec section 3.3.

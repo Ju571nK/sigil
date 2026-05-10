@@ -6,10 +6,13 @@
 use andeda_core::policy::signed_envelope::SignedPolicyResponse;
 use andeda_core::stats::{Stats, StatsSnapshot};
 use andeda_core::PolicySignatureInvalidReason;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::path::Path;
 use std::sync::Arc;
+
+use crate::policy_apply::{apply, ApplyContext, ApplyOutcome};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -66,8 +69,84 @@ pub struct PolicyStatusPayload {
     pub policy_expired_active: bool,
 }
 
+/// Shared context bundle passed to both platform `serve` functions.
+pub struct ControlContext {
+    pub stats: Arc<Stats>,
+    pub apply_ctx: Arc<ApplyContext>,
+    /// Used by `PolicyStatus` to read the active envelope's `valid_until`.
+    /// Set by the `policy_expiry_task` (Task A6.4) on each successful apply.
+    pub active_valid_until: Arc<RwLock<Option<time::OffsetDateTime>>>,
+}
+
+/// Shared dispatch logic. Returns the `Response` for a given `Request`.
+/// Both platform `serve` functions call this to avoid duplicating logic.
+async fn handle(ctx: &ControlContext, req: Request) -> Response {
+    match req {
+        Request::Stats => Response {
+            ok: true,
+            stats: Some(ctx.stats.snapshot()),
+            apply_policy: None,
+            policy_status: None,
+            error: None,
+        },
+        Request::ApplyPolicy { response } => {
+            let outcome = apply(&ctx.apply_ctx, &response).await;
+            match outcome {
+                ApplyOutcome::Accepted { applied_policy_version } => Response {
+                    ok: true,
+                    stats: None,
+                    apply_policy: Some(ApplyPolicyResult::Accepted { applied_policy_version }),
+                    policy_status: None,
+                    error: None,
+                },
+                ApplyOutcome::Rejected { reason } => Response {
+                    ok: false,
+                    stats: None,
+                    apply_policy: Some(ApplyPolicyResult::Rejected { reason }),
+                    policy_status: None,
+                    error: None,
+                },
+                ApplyOutcome::Internal { detail } => Response {
+                    ok: false,
+                    stats: None,
+                    apply_policy: None,
+                    policy_status: None,
+                    error: Some(format!("internal: {detail}")),
+                },
+            }
+        }
+        Request::PolicyStatus => {
+            let last_applied = ctx
+                .apply_ctx
+                .cache
+                .lock()
+                .host_meta_get()
+                .map(|m| m.last_applied_policy_version)
+                .unwrap_or(0);
+            let valid_until_snapshot = *ctx.active_valid_until.read();
+            let valid_until_str = valid_until_snapshot.and_then(|t| {
+                t.format(&time::format_description::well_known::Rfc3339).ok()
+            });
+            let expired = valid_until_snapshot
+                .map(|t| time::OffsetDateTime::now_utc() >= t)
+                .unwrap_or(false);
+            Response {
+                ok: true,
+                stats: None,
+                apply_policy: None,
+                policy_status: Some(PolicyStatusPayload {
+                    last_applied_policy_version: last_applied,
+                    active_envelope_valid_until: valid_until_str,
+                    policy_expired_active: expired,
+                }),
+                error: None,
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
-pub async fn serve(socket_path: &Path, stats: Arc<Stats>) -> std::io::Result<()> {
+pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
 
@@ -87,7 +166,7 @@ pub async fn serve(socket_path: &Path, stats: Arc<Stats>) -> std::io::Result<()>
                 continue;
             }
         };
-        let stats = stats.clone();
+        let ctx = ctx.clone();
         tokio::spawn(async move {
             let (rd, mut wr) = stream.into_split();
             let mut reader = BufReader::new(rd);
@@ -96,23 +175,7 @@ pub async fn serve(socket_path: &Path, stats: Arc<Stats>) -> std::io::Result<()>
                 return;
             }
             let resp = match serde_json::from_str::<Request>(line.trim()) {
-                Ok(Request::Stats) => Response {
-                    ok: true,
-                    stats: Some(stats.snapshot()),
-                    apply_policy: None,
-                    policy_status: None,
-                    error: None,
-                },
-                // ApplyPolicy and PolicyStatus arms are added in Task A6.3.
-                // Until then, return a "not yet wired" error so the protocol
-                // is well-formed but the handler is explicitly stubbed.
-                Ok(Request::ApplyPolicy { .. }) | Ok(Request::PolicyStatus) => Response {
-                    ok: false,
-                    stats: None,
-                    apply_policy: None,
-                    policy_status: None,
-                    error: Some("handler not yet wired (Task A6.3)".into()),
-                },
+                Ok(req) => handle(&ctx, req).await,
                 Err(e) => Response {
                     ok: false,
                     stats: None,
@@ -130,7 +193,7 @@ pub async fn serve(socket_path: &Path, stats: Arc<Stats>) -> std::io::Result<()>
 }
 
 #[cfg(windows)]
-pub async fn serve(pipe_name: &str, stats: Arc<Stats>) -> std::io::Result<()> {
+pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::windows::named_pipe::ServerOptions;
 
@@ -141,7 +204,7 @@ pub async fn serve(pipe_name: &str, stats: Arc<Stats>) -> std::io::Result<()> {
             .access_outbound(true)
             .create(pipe_name)?;
         server.connect().await?;
-        let stats = stats.clone();
+        let ctx = ctx.clone();
         tokio::spawn(async move {
             let (rd, mut wr) = tokio::io::split(server);
             let mut reader = BufReader::new(rd);
@@ -150,23 +213,7 @@ pub async fn serve(pipe_name: &str, stats: Arc<Stats>) -> std::io::Result<()> {
                 return;
             }
             let resp = match serde_json::from_str::<Request>(line.trim()) {
-                Ok(Request::Stats) => Response {
-                    ok: true,
-                    stats: Some(stats.snapshot()),
-                    apply_policy: None,
-                    policy_status: None,
-                    error: None,
-                },
-                // ApplyPolicy and PolicyStatus arms are added in Task A6.3.
-                // Until then, return a "not yet wired" error so the protocol
-                // is well-formed but the handler is explicitly stubbed.
-                Ok(Request::ApplyPolicy { .. }) | Ok(Request::PolicyStatus) => Response {
-                    ok: false,
-                    stats: None,
-                    apply_policy: None,
-                    policy_status: None,
-                    error: Some("handler not yet wired (Task A6.3)".into()),
-                },
+                Ok(req) => handle(&ctx, req).await,
                 Err(e) => Response {
                     ok: false,
                     stats: None,
