@@ -1,16 +1,56 @@
+use andeda_sender::cli::{Cli, Command};
+use andeda_sender::config::SenderConfig;
+use andeda_sender::runtime::{run, RuntimeCtx};
+use anyhow::Result;
 use clap::Parser;
+use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
-fn main() {
-    let cli = andeda_sender::cli::Cli::parse();
+fn default_config_path() -> PathBuf {
+    #[cfg(unix)]
+    {
+        PathBuf::from("/etc/andeda/sender.yaml")
+    }
+    #[cfg(windows)]
+    {
+        PathBuf::from(r"C:\ProgramData\Andeda\sender.yaml")
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+    let cli = Cli::parse();
+    let config_path = cli.config.unwrap_or_else(default_config_path);
     match cli.command {
-        andeda_sender::cli::Command::Start => {
-            eprintln!("[INFO] sender start (not yet wired)");
+        Command::Start => {
+            let cfg = SenderConfig::load(&config_path)?;
+            let cancel = CancellationToken::new();
+            let cancel_c = cancel.clone();
+            tokio::spawn(async move {
+                tokio::signal::ctrl_c().await.ok();
+                cancel_c.cancel();
+            });
+            run(RuntimeCtx {
+                config: cfg,
+                host_id: std::env::var("ANDEDA_HOST_ID").unwrap_or_else(|_| "unknown".into()),
+                agent_version: env!("CARGO_PKG_VERSION").to_string(),
+                sender_version: env!("CARGO_PKG_VERSION").to_string(),
+                shutdown: cancel,
+            })
+            .await?;
         }
-        andeda_sender::cli::Command::Doctor => {
-            eprintln!("[INFO] sender doctor (not yet wired)");
+        Command::Doctor => {
+            let cfg = SenderConfig::load(&config_path)?;
+            println!("ANDEDA sender doctor");
+            println!("[OK] config loaded: {}", config_path.display());
+            println!("[OK] server_base_url: {}", cfg.server_base_url);
+            println!("[OK] events_dir: {}", cfg.events_dir.display());
+            println!("[OK] agent_control: {}", cfg.agent_control.display());
         }
-        andeda_sender::cli::Command::DryRun { url } => {
-            eprintln!("[INFO] sender dry-run url={url} (not yet wired)");
+        Command::DryRun { url } => {
+            println!("dry-run url={url} (not yet wired)");
         }
     }
+    Ok(())
 }
