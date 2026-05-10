@@ -1,5 +1,14 @@
-//! Top-level supervisor: spawns control_task + data_task with shared
-//! cancellation. Any task panic takes the process down (caller restarts).
+//! Top-level supervisor.
+//!
+//! Currently spawns: control_task (policy poller) + a reader task that
+//! hands `NewPolicy` outcomes to the agent via apply_policy IPC.
+//!
+//! NOT YET WIRED (Plan B follow-up):
+//! - data_task loop (read JSONL → send_one_batch → apply_ack → state::store)
+//! - dead_letter::append for EventsAccepted::rejected[]
+//! - state::store_etag on agent ACK
+//! - SharedStats updates for heartbeat backpressure fields
+//! - Local event emission for HostUnknown/TlsFailure/Network/ProtocolViolation
 
 use crate::config::SenderConfig;
 use crate::control_task::{ControlLoopCtx, PollOutcome};
@@ -50,7 +59,9 @@ pub async fn run(ctx: RuntimeCtx) -> Result<()> {
                 maybe = poll_rx.recv() => {
                     match maybe {
                         Some(PollOutcome::NewPolicy { response, .. }) => {
-                            let _ = crate::agent_ipc::apply_policy(&agent_socket, &response).await;
+                            if let Err(e) = crate::agent_ipc::apply_policy(&agent_socket, &response).await {
+                                tracing::warn!(error = ?e, "apply_policy IPC failed");
+                            }
                         }
                         Some(_) => {}
                         None => break,

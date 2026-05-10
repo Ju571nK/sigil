@@ -15,7 +15,6 @@ path = "src/main.rs"
 
 [dependencies]
 andeda-core = { path = "../andeda-core" }
-andeda-spool = { path = "../andeda-spool" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

@@ -93,7 +93,6 @@ name = "andeda-sender"
 version = "0.1.0"
 dependencies = [
  "andeda-core",
- "andeda-spool",
  "anyhow",
  "axum",
  "clap",

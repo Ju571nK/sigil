@@ -24,6 +24,9 @@ async fn main() -> Result<()> {
     let config_path = cli.config.unwrap_or_else(default_config_path);
     match cli.command {
         Command::Start => {
+            // NOTE: control plane only today (policy poll + apply_policy IPC).
+            // Data plane (read JSONL spool → POST /v1/events → ack) lands in
+            // Plan B follow-up tickets B11.x; see crates/andeda-sender/src/runtime.rs.
             let cfg = SenderConfig::load(&config_path)?;
             let cancel = CancellationToken::new();
             let cancel_c = cancel.clone();
