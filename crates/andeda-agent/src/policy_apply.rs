@@ -15,7 +15,7 @@ use andeda_core::policy::{
     AtomicWriteError, VerifyError,
 };
 use andeda_core::state::HashCache;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
@@ -60,6 +60,9 @@ pub struct ApplyContext {
     /// Broadcasts the new `last_applied_policy_version` whenever a
     /// successful apply commits. Receivers re-derive what they need.
     pub policy_version_tx: watch::Sender<i64>,
+    /// Shared cell — written by `apply` on every successful commit, read
+    /// by `policy_expiry_task` and the IPC `PolicyStatus` handler.
+    pub active_valid_until: Arc<RwLock<Option<OffsetDateTime>>>,
 }
 
 /// Apply a freshly-received `SignedPolicyResponse`.
@@ -74,6 +77,10 @@ pub async fn apply(ctx: &ApplyContext, response: &SignedPolicyResponse) -> Apply
             }
         }
     };
+
+    // Capture envelope's valid_until BEFORE the move into verify; we'll
+    // publish it to `active_valid_until` only after the atomic write succeeds.
+    let new_valid_until = response.signed_envelope.valid_until;
 
     let verified = match verify_envelope(&ctx.keystore, response, now, last_applied) {
         Ok(v) => v,
@@ -100,6 +107,9 @@ pub async fn apply(ctx: &ApplyContext, response: &SignedPolicyResponse) -> Apply
     };
     match write_result {
         Ok(()) => {
+            // Update the shared cell so the expiry monitor + IPC PolicyStatus
+            // can see the new envelope's valid_until.
+            *ctx.active_valid_until.write() = Some(new_valid_until);
             // Notify subscribers (heartbeat, expiry monitor) that the
             // active policy version advanced. Send is best-effort; if no
             // receiver is alive we still consider apply successful.
@@ -192,6 +202,7 @@ mod tests {
         sk: SigningKey,
         rx_event: mpsc::Receiver<CommittableEvent>,
         rx_version: watch::Receiver<i64>,
+        active_valid_until: Arc<RwLock<Option<OffsetDateTime>>>,
         _dir: tempfile::TempDir,
     }
 
@@ -216,6 +227,7 @@ mod tests {
 
         let (event_tx, rx_event) = mpsc::channel(16);
         let (policy_version_tx, rx_version) = watch::channel(last_applied);
+        let active_valid_until = Arc::new(RwLock::new(None));
 
         Harness {
             ctx: ApplyContext {
@@ -225,10 +237,12 @@ mod tests {
                 host_id: "test-host".into(),
                 event_tx,
                 policy_version_tx,
+                active_valid_until: active_valid_until.clone(),
             },
             sk,
             rx_event,
             rx_version,
+            active_valid_until,
             _dir: dir,
         }
     }
@@ -259,7 +273,9 @@ mod tests {
     async fn happy_path_writes_yaml_advances_version_emits_reloaded() {
         let now = datetime!(2026-05-15 0:00 UTC);
         let mut h = build_harness(now, 0);
-        let resp = sign(&h.sk, well_formed_envelope(1, now), now);
+        let envelope = well_formed_envelope(1, now);
+        let expected_valid_until = envelope.valid_until;
+        let resp = sign(&h.sk, envelope, now);
 
         let outcome = apply(&h.ctx, &resp).await;
         assert_eq!(outcome, ApplyOutcome::Accepted { applied_policy_version: 1 });
@@ -271,6 +287,9 @@ mod tests {
         // state.db advanced.
         let v = h.ctx.cache.lock().host_meta_get().unwrap().last_applied_policy_version;
         assert_eq!(v, 1);
+
+        // active_valid_until cell mutated to the envelope's valid_until.
+        assert_eq!(*h.active_valid_until.read(), Some(expected_valid_until));
 
         // PolicyReloaded event emitted.
         let ev = h.rx_event.recv().await.unwrap();

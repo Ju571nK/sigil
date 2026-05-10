@@ -12,17 +12,18 @@ use crate::{
     watcher,
 };
 use andeda_core::policy::expand::{expand_per_user, EnvLookup, UserEnumerator};
+use andeda_core::policy::pubkeys::Keystore;
 use andeda_core::policy::{current_platform, defaults, merge, Tier};
 use andeda_core::sink::jsonl::JsonlSink;
 use andeda_core::state::HashCache;
 use andeda_core::stats::Stats;
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use time::OffsetDateTime;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 pub struct RuntimeConfig {
     pub policy_path: Option<PathBuf>,
@@ -57,6 +58,51 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             .map_err(|e| anyhow::anyhow!("failed to initialize host_id: {e}"))?
     };
     tracing::info!(host_id = %host_id, "agent host_id resolved");
+
+    // Phase 2: load the policy-signing keystore. Optional — if missing, the
+    // agent runs in Phase 1 mode (no inbound apply_policy can succeed).
+    let keystore = match Keystore::load_from_file(keystore_path()) {
+        Ok(k) => Arc::new(k),
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                "policy-signing keystore unavailable; apply_policy will reject all envelopes"
+            );
+            Arc::new(Keystore { pubkeys: vec![] })
+        }
+    };
+
+    // Phase 2: shared state for IPC + expiry monitor + heartbeat.
+    let policy_expired_active = Arc::new(parking_lot::RwLock::new(false));
+    let active_valid_until: Arc<parking_lot::RwLock<Option<OffsetDateTime>>> =
+        Arc::new(parking_lot::RwLock::new(None));
+    let (policy_version_tx, _policy_version_rx_init) = watch::channel::<i64>(0);
+
+    // Phase 2: boot reconciliation — disk may be ahead of state.db after a
+    // crash between atomic-rename and state.db version-bump. If so, advance
+    // state.db and remember the version so we can emit a synthetic
+    // PolicyReloaded event once `tx_sink` is bound below.
+    let policy_path_for_apply = cfg
+        .policy_path
+        .clone()
+        .unwrap_or_else(default_policy_yaml_path);
+    let pending_reconcile: Option<i64> = {
+        let c = cache.lock();
+        match reconcile_policy_on_boot(&c, &policy_path_for_apply) {
+            Ok(Some(v)) => {
+                tracing::info!(
+                    version = v,
+                    "policy reconciliation: state.db advanced to match disk"
+                );
+                Some(v)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(error = ?e, "policy reconciliation failed; skipping");
+                None
+            }
+        }
+    };
 
     // 1. Load + merge policy.
     let user_doc = match cfg.policy_path.as_ref() {
@@ -152,6 +198,55 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         }
     }
 
+    // Phase 2: emit the deferred PolicyReloaded event from boot reconciliation
+    // (held above until tx_sink existed). Best-effort: if the channel is full,
+    // the heartbeat's `last_applied_policy_version` will still surface it.
+    if let Some(version) = pending_reconcile {
+        use andeda_core::event::{
+            Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
+        };
+        let event = Event {
+            schema_version: SCHEMA_VERSION,
+            event_id: uuid::Uuid::now_v7(),
+            ts: OffsetDateTime::now_utc(),
+            host_id: host_id.clone(),
+            agent_version: AGENT_VERSION.to_string(),
+            severity: Severity::Info,
+            source: SourceKind::Agent,
+            subject: Subject::Self_,
+            evidence: Evidence::PolicyReloaded {
+                policy_version: version,
+            },
+            target_id: None,
+        };
+        let committable = CommittableEvent {
+            event,
+            new_hash: None,
+            path_for_db: PathBuf::new(),
+            target_id: String::new(),
+        };
+        if tx_sink.try_send(committable).is_err() {
+            tracing::warn!("event channel full; deferred PolicyReloaded dropped");
+        }
+    }
+
+    // Phase 2: build ApplyContext (used by control IPC's apply_policy handler)
+    // and ControlContext (used by control IPC dispatch).
+    let apply_ctx = Arc::new(crate::policy_apply::ApplyContext {
+        keystore: keystore.clone(),
+        cache: cache.clone(),
+        policy_yaml_path: policy_path_for_apply.clone(),
+        host_id: host_id.clone(),
+        event_tx: tx_sink.clone(),
+        policy_version_tx: policy_version_tx.clone(),
+        active_valid_until: active_valid_until.clone(),
+    });
+    let control_ctx = Arc::new(crate::control::ControlContext {
+        stats: stats.clone(),
+        apply_ctx: apply_ctx.clone(),
+        active_valid_until: active_valid_until.clone(),
+    });
+
     // Watcher (notify → raw events → tx_norm via normalizer wrapper).
     let runtime_handle = tokio::runtime::Handle::current();
     let watcher_handle = watcher::spawn_watcher(watch_roots.clone(), runtime_handle.clone(), 1024)?;
@@ -219,10 +314,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     {
         let stats_h = stats.clone();
         let cache_h = cache.clone();
-        // TODO(A6.5): share this flag with ExpiryTaskCtx and ControlContext.
-        // For now a placeholder Arc<RwLock<bool>>(false) is used until A6.5
-        // wires the full ExpiryTaskCtx and passes the real shared flag here.
-        let expired_h = Arc::new(parking_lot::RwLock::new(false));
+        let expired_h = policy_expired_active.clone();
         let host_id_h = host_id.clone();
         let cancel_h = cancel.clone();
         let tx_h = tx_sink.clone();
@@ -246,30 +338,52 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         );
     }
 
+    // Policy expiry monitor (Phase 2). Reads `active_valid_until` and
+    // `policy_version_tx`'s receiver, writes the shared `policy_expired_active`
+    // flag, and emits exactly one `PolicyExpiredActive` event per version.
+    {
+        let host_id_e = host_id.clone();
+        let tx_e = tx_sink.clone();
+        let cancel_e = cancel.clone();
+        let expired_e = policy_expired_active.clone();
+        let vu_e = active_valid_until.clone();
+        let v_rx = policy_version_tx.subscribe();
+        sup.track(
+            "policy_expiry",
+            tokio::spawn(async move {
+                crate::policy_expiry_task::run(crate::policy_expiry_task::ExpiryTaskCtx {
+                    host_id: host_id_e,
+                    policy_expired_active: expired_e,
+                    active_valid_until: vu_e,
+                    policy_version_rx: v_rx,
+                    event_tx: tx_e,
+                    shutdown: cancel_e,
+                    tick: std::time::Duration::from_secs(60),
+                })
+                .await;
+            }),
+        );
+    }
+
     // FDA permission check (macOS) — emit one PermissionMissing per target if denied.
     if matches!(plat.fda_state(), FdaState::Denied) {
         emit_permission_missing(&effective, &tx_sink, &host_id).await;
     }
 
-    // Control IPC
-    // TODO(A6.5): wire Arc<ControlContext> here. The serve signature changed in A6.3
-    // to take Arc<ControlContext> instead of Arc<Stats>. Until A6.5 constructs the
-    // full ControlContext (keystore + apply_ctx + active_valid_until), the IPC server
-    // is temporarily disabled at runtime. Tests pass because policy_apply::tests
-    // and control::tests do not exercise this call site.
+    // Control IPC (Phase 2: dispatches Stats + ApplyPolicy + PolicyStatus).
     {
-        let _stats_c = stats.clone();
         #[cfg(unix)]
-        let _socket = cfg.control_socket.clone();
+        let socket = cfg.control_socket.clone();
         #[cfg(windows)]
-        let _pipe = cfg.control_pipe_name.clone();
+        let pipe = cfg.control_pipe_name.clone();
+        let ctx_c = control_ctx.clone();
         sup.track(
             "control",
             tokio::spawn(async move {
-                // A6.5 replaces this stub with:
-                //   crate::control::serve(&socket, Arc::new(ControlContext { ... })).await
-                tracing::warn!("control IPC disabled — awaiting A6.5 wiring");
-                std::future::pending::<()>().await
+                #[cfg(unix)]
+                let _ = crate::control::serve(&socket, ctx_c).await;
+                #[cfg(windows)]
+                let _ = crate::control::serve(&pipe, ctx_c).await;
             }),
         );
     }
@@ -399,5 +513,61 @@ impl TargetLookup for NoopLookup {
         _kind: andeda_core::event::FileChangeKind,
     ) -> Option<NormalizedEvent> {
         None
+    }
+}
+
+/// Per-OS path of the policy-signing keystore (spec §3.8.2).
+fn keystore_path() -> PathBuf {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        PathBuf::from("/etc/andeda/policy-signing-pubkeys.pem")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from(r"C:\ProgramData\Andeda\policy-signing-pubkeys.pem")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        PathBuf::from("/etc/andeda/policy-signing-pubkeys.pem")
+    }
+}
+
+/// Default `policy.yaml` location when not overridden via `RuntimeConfig.policy_path`.
+/// TODO: factor out a shared `defaults` module if/when other call sites need this.
+fn default_policy_yaml_path() -> PathBuf {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        PathBuf::from("/etc/andeda/policy.yaml")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from(r"C:\ProgramData\Andeda\policy.yaml")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        PathBuf::from("/etc/andeda/policy.yaml")
+    }
+}
+
+/// Boot reconciliation: if the YAML on disk has been advanced past
+/// `state.db.last_applied_policy_version` (crash between rename and version-bump),
+/// advance state.db and return the new version so the caller can emit
+/// `PolicyReloaded` once `tx_sink` is bound.
+fn reconcile_policy_on_boot(
+    cache: &HashCache,
+    policy_path: &Path,
+) -> anyhow::Result<Option<i64>> {
+    if !policy_path.exists() {
+        return Ok(None);
+    }
+    let yaml = std::fs::read_to_string(policy_path)?;
+    let doc: serde_yaml::Value = serde_yaml::from_str(&yaml)?;
+    let on_disk = doc.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
+    let in_db = cache.host_meta_get()?.last_applied_policy_version;
+    if on_disk > in_db {
+        cache.host_meta_set_policy_version(on_disk)?;
+        Ok(Some(on_disk))
+    } else {
+        Ok(None)
     }
 }

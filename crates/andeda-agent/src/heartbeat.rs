@@ -16,6 +16,7 @@ use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[allow(clippy::too_many_arguments)] // glue task; each arg is an independent dependency
 pub async fn run(
     stats: Arc<Stats>,
     cache: Arc<Mutex<HashCache>>,
@@ -43,6 +44,7 @@ pub async fn run(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // emit() mirrors run()'s dependency surface
 async fn emit(
     stats: &Arc<Stats>,
     cache: &Arc<Mutex<HashCache>>,

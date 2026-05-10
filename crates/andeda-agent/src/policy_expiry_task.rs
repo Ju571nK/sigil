@@ -91,6 +91,7 @@ async fn evaluate(ctx: &ExpiryTaskCtx, last_emitted_for_version: &mut Option<i64
 mod tests {
     use super::*;
 
+    #[allow(clippy::type_complexity)] // test fixture deliberately exposes all wiring
     fn fixture(
         valid_until: Option<OffsetDateTime>,
         version: i64,
