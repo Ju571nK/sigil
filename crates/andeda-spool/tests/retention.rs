@@ -124,3 +124,28 @@ fn force_gc_returns_segments_force_deleted_above_floor() {
     let forced = r.force_gc(&pcfg_clone, floor.as_ref()).unwrap();
     assert!(!forced.is_empty());
 }
+
+#[test]
+fn enforce_deletes_on_age_alone_when_size_under_cap() {
+    let dir = TempDir::new().unwrap();
+    // Two segments via 5-byte cap forcing roll on every line. Total 8 bytes,
+    // well under the 10_000-byte size cap below — only age can trigger here.
+    let mut p = Producer::open(pcfg(&dir, 0)).unwrap();
+    p.append_line(b"AAA").unwrap();
+    p.append_line(b"BBB").unwrap();
+    let pcfg_clone = pcfg(&dir, 0);
+
+    // 1-nanosecond max age → every closed segment is over-age the moment it
+    // is closed by the producer rolling.
+    let cfg = RetentionConfig {
+        max_total_bytes: 10_000,
+        max_age: Duration::nanoseconds(1),
+    };
+    let r = Retention::new(cfg).unwrap();
+    let removed = r.enforce(&pcfg_clone, None).unwrap();
+    // events-0.jsonl is over-age and below highest-N → deleted. events-1
+    // (highest, current) preserved.
+    assert!(removed.iter().any(|n| n == "events-0.jsonl"));
+    assert!(!dir.path().join("events-0.jsonl").exists());
+    assert!(dir.path().join("events-1.jsonl").exists());
+}

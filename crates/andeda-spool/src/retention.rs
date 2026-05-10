@@ -37,6 +37,13 @@ pub enum RetentionError {
 }
 
 /// Retention enforcer for one spool directory.
+///
+/// **Concurrency:** Safe to run concurrently with the owning `Producer`; spool
+/// segments are append-only and the highest-N (current) segment is never
+/// touched. There is one race window: the producer may roll mid-enumeration,
+/// in which case the formerly-highest segment becomes eligible on the next
+/// cycle (still safe — just delayed). No advisory lock is held; do NOT run
+/// two `Retention` enforcers against the same directory at the same time.
 pub struct Retention {
     cfg: RetentionConfig,
 }
@@ -76,7 +83,11 @@ impl Retention {
 
         let total: u64 = segs.iter().map(|s| s.size).sum();
         let now = SystemTime::now();
-        let max_age_secs = self.cfg.max_age.whole_seconds();
+        // Convert max_age to a std::time::Duration for full nanosecond precision.
+        let max_age_std = std::time::Duration::new(
+            self.cfg.max_age.whole_seconds().max(0) as u64,
+            self.cfg.max_age.subsec_nanoseconds().unsigned_abs(),
+        );
 
         let mut removed = Vec::new();
         let mut running_total = total;
@@ -86,17 +97,17 @@ impl Retention {
             }
             // Respect consumer floor: only segments strictly below floor_n are
             // eligible (so a consumer pinned at segment N never loses N or above).
-            if let Some(fn_) = floor_n {
-                if seg.n >= fn_ {
+            if let Some(floor) = floor_n {
+                if seg.n >= floor {
                     continue;
                 }
             }
-            let age_secs = match now.duration_since(seg.modified) {
-                Ok(d) => d.as_secs() as i64,
-                Err(_) => 0,
+            let age = match now.duration_since(seg.modified) {
+                Ok(d) => d,
+                Err(_) => std::time::Duration::ZERO,
             };
             let over_size = running_total > self.cfg.max_total_bytes;
-            let over_age = age_secs > max_age_secs;
+            let over_age = age > max_age_std;
             if over_size || over_age {
                 fs::remove_file(&seg.path)?;
                 removed.push(seg.basename.clone());
@@ -136,7 +147,7 @@ impl Retention {
             if running_total <= self.cfg.max_total_bytes {
                 break;
             }
-            let above_floor = floor_n.is_some_and(|fn_| seg.n >= fn_);
+            let above_floor = floor_n.is_some_and(|floor| seg.n >= floor);
             fs::remove_file(&seg.path)?;
             running_total = running_total.saturating_sub(seg.size);
             if above_floor {
