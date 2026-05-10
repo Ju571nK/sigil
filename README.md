@@ -1,20 +1,78 @@
-# ANDEDA
+# Quill
 
-ANDEDA is an AI-Native Detection Engine for Device Assurance.
+> Quill writes a line for every change on your machine.
 
-The current release focuses on a local filesystem monitoring agent that emits
-JSONL posture events for SIEM ingestion on macOS and Windows. It is intended as
-a practical foundation for detecting changes to sensitive files, policy targets,
-and device assurance signals.
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
+![macOS](https://img.shields.io/badge/macOS-supported-success)
+![Windows](https://img.shields.io/badge/Windows-supported-success)
+![Linux](https://img.shields.io/badge/Linux-not%20yet-lightgrey)
+![MSRV](https://img.shields.io/badge/MSRV-1.78-orange)
+![Status](https://img.shields.io/badge/status-alpha-yellow)
+
+A small Rust agent that watches sensitive files on macOS and Windows and emits
+structured, hash-anchored JSONL events for your SIEM. Built with the AI-coding-agent
+era in mind: the things that matter today are MCP configurations, launch agents,
+credential directories, and other quiet drops that traditional FIM tooling
+doesn't tier as critical.
+
+Each event is one JSON object on its own line:
+
+```json
+{
+  "schema_version": 1,
+  "event_id": "019e0cea-42f1-7ef3-9a6a-1721e98ee2ba",
+  "ts": "2026-05-10T07:14:32.512Z",
+  "host_id": "a2e1f4c9b8d7",
+  "agent_version": "0.1.0",
+  "severity": "warn",
+  "source": {"kind": "file_system"},
+  "subject": {"kind": "path", "value": "/Users/alice/.cursor/mcp.json"},
+  "evidence": {
+    "kind": "file_change",
+    "change_kind": "modified",
+    "before_hash": "blake3:a31f1c7e9d8b…",
+    "after_hash":  "blake3:0d72f8a4c6e8…",
+    "size_after": 2148,
+    "evidence_quality": "definitive"
+  },
+  "target_id": "team-mcp-allowlist"
+}
+```
+
+## Why Quill?
+
+- **Tiny, honest, host-only.** Pure user-space. No kernel module, no eBPF, no
+  phone-home. A single binary plus a YAML policy file.
+- **Hash-anchored events.** Every observation carries blake3 hashes (before /
+  after) and an `evidence_quality` marker, so a SIEM can tell a clean
+  observation apart from one that was coalesced or delayed.
+- **Versioned schema.** `schema_version` is part of the contract; rename = break.
+- **AI-aware defaults.** Built-in policies cover the paths AI coding agents
+  actually touch on macOS and Windows.
+
+### What it catches
+
+Concrete, AI-era examples — drop these into your policy and the agent will
+emit a JSONL line every time something changes:
+
+- An AI coding agent silently adding entries to `~/.cursor/mcp.json` or
+  `~/.config/claude/mcp.json`.
+- A new `.plist` appearing in `~/Library/LaunchAgents/` (a background daemon
+  installed by tooling).
+- Modifications to `~/.aws/credentials`, `~/.ssh/`, or your shell startup
+  files (`.zshrc`, `.bashrc`, `.profile`).
+- Drift on any path you list under `targets:` in your policy YAML.
 
 ## Architecture
 
-ANDEDA is a Rust workspace with three crates:
+Quill is a Rust workspace with three crates. The crate names below carry the
+project's prior codename (`andeda`); they are scheduled for a renaming pass
+in a later release. The architecture itself is unchanged.
 
 - `andeda-core` — pure domain library (event, policy, state, hashing, …). No OS,
   `tokio`, or filesystem-watcher dependencies, so it stays reusable across
   processes and unit tests.
-- `andeda-agent` — the `andeda` daemon binary. Hosts the `tokio` runtime, the
+- `andeda-agent` — the daemon binary. Hosts the `tokio` runtime, the
   `notify`-based filesystem watcher, the event pipeline, CLI commands, and
   platform glue. Depends on `andeda-core`.
 - `andeda-spool` — Phase 2 JSONL=IPC primitive (`Producer` / `Consumer` /
@@ -26,7 +84,7 @@ flowchart LR
     FS[("Filesystem<br/>policy targets")]
     JSONL[("JSONL events<br/>SIEM ingest")]
 
-    subgraph agent["andeda-agent (bin: andeda)"]
+    subgraph agent["andeda-agent (bin)"]
         direction TB
         watcher["watcher · debouncer"]
         pipeline["normalizer · hasher"]
@@ -50,15 +108,35 @@ flowchart LR
     spool -. "future: split-process hops" .-> agent
 ```
 
-## Features
+## Status
 
-- Filesystem watcher for configured policy targets.
-- JSONL event output suitable for SIEM or log pipeline ingestion.
-- Built-in policy defaults for macOS and Windows.
-- User override policy support through YAML configuration.
-- Event normalization, debouncing, rate limiting, and spool handling.
-- Host metadata, state tracking, and crash recovery support.
-- Diagnostic commands for configuration, paths, and runtime state.
+- **0.1.x — alpha.** The event schema and CLI surface can break between minor
+  releases until 0.2. `schema_version` in every event lets downstream
+  consumers detect this.
+- **Platforms.** macOS and Windows at runtime. Linux has CI scaffolding only;
+  it is on the Phase 3 roadmap.
+- **Schema.** Version `1`.
+
+## Roadmap
+
+- **Phase 1 — shipped.** Filesystem watcher, JSONL sink, host metadata, state
+  database, debounce / rate-limit, JSONL retention GC.
+- **Phase 2 — in progress.** Split-process IPC via the durable spool, signed
+  policy envelopes, and a sender that ships JSONL to a SIEM endpoint.
+  Transport spec was locked on 2026-05-10.
+- **Phase 3 — planned.** Linux runtime, additional posture signals,
+  reproducible-build attestation.
+
+## Design principles
+
+- **No kernel module, no eBPF.** OS-provided file-event APIs only.
+- **`forbid(unsafe_code)`** in the core domain crate.
+- **Reproducible release builds.** `lto = "thin"`, `codegen-units = 1`,
+  `strip = "symbols"`, `panic = "unwind"`.
+- **Host-only telemetry.** The agent never opens an outbound connection on
+  its own. Shipping events anywhere is a separate, explicit component.
+- **The event schema is a public contract.** Wire-string renames and field
+  removals are breaking changes and bump the major version.
 
 ## Installation
 
@@ -69,7 +147,7 @@ workspace:
 cargo build --release
 ```
 
-The `andeda` binary is produced at:
+The agent binary is produced at:
 
 ```sh
 target/release/andeda
@@ -80,6 +158,10 @@ For development builds, run:
 ```sh
 cargo build
 ```
+
+> The binary is currently named `andeda` — that was the project's working
+> codename before it was renamed to Quill. The binary and crate names will
+> be unified under `quill` in a future release.
 
 ## Usage
 
@@ -115,7 +197,7 @@ cargo run -p andeda-agent -- version
 
 ## Configuration
 
-ANDEDA uses built-in defaults plus an optional YAML policy file.
+Quill uses built-in defaults plus an optional YAML policy file.
 
 Example policy:
 
@@ -153,6 +235,15 @@ cargo run -p andeda-agent -- \
 Default production policy locations are platform-specific. The example policy
 can be adapted for `/etc/andeda/policy.yaml` on Unix-like systems or
 `%ProgramData%\Andeda\policy.yaml` on Windows.
+
+## Security
+
+For responsible disclosure of vulnerabilities, see [SECURITY.md](SECURITY.md).
+
+## Contributing
+
+Bug reports, policy suggestions, and patches are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
 
 ## License
 
