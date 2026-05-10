@@ -7,6 +7,49 @@ JSONL posture events for SIEM ingestion on macOS and Windows. It is intended as
 a practical foundation for detecting changes to sensitive files, policy targets,
 and device assurance signals.
 
+## Architecture
+
+ANDEDA is a Rust workspace with three crates:
+
+- `andeda-core` — pure domain library (event, policy, state, hashing, …). No OS,
+  `tokio`, or filesystem-watcher dependencies, so it stays reusable across
+  processes and unit tests.
+- `andeda-agent` — the `andeda` daemon binary. Hosts the `tokio` runtime, the
+  `notify`-based filesystem watcher, the event pipeline, CLI commands, and
+  platform glue. Depends on `andeda-core`.
+- `andeda-spool` — Phase 2 JSONL=IPC primitive (`Producer` / `Consumer` /
+  `Checkpoint` / `Retention`) used at every cross-process hop. Domain-neutral
+  and independent of the other two crates.
+
+```mermaid
+flowchart LR
+    FS[("Filesystem<br/>policy targets")]
+    JSONL[("JSONL events<br/>SIEM ingest")]
+
+    subgraph agent["andeda-agent (bin: andeda)"]
+        direction TB
+        watcher["watcher · debouncer"]
+        pipeline["normalizer · hasher"]
+        sinks["sink_task · state_task<br/>heartbeat · jsonl_gc"]
+        ctrl["cli · doctor · show<br/>supervisor · policy_apply"]
+        watcher --> pipeline --> sinks
+    end
+
+    subgraph core["andeda-core (pure domain)"]
+        coremods["event · policy · state<br/>host_id · host_meta · hashing<br/>debounce · ratelimit · sink · stats"]
+    end
+
+    subgraph spool["andeda-spool (Phase 2 IPC)"]
+        spoolmods["Producer · Consumer<br/>Checkpoint · Retention"]
+    end
+
+    FS --> watcher
+    sinks --> JSONL
+
+    agent -. uses .-> core
+    spool -. "future: split-process hops" .-> agent
+```
+
 ## Features
 
 - Filesystem watcher for configured policy targets.
