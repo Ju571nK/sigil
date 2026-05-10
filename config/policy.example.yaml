@@ -8,13 +8,13 @@ overrides:
   - id: shadow-ai-binaries-macos
     tier: standard
 
-# Optional: add corporate watchlist entries.
+# Optional: add custom watchlist entries.
 targets:
-  - id: corp-mcp-allowlist
-    description: Corporate MCP allowlist file managed by IT
+  - id: team-mcp-allowlist
+    description: Example MCP allowlist file
     tier: critical
     platform: any
     paths:
-      - "~/.config/our-corp/mcp-allowlist.json"
+      - "~/.config/example/mcp-allowlist.json"
     recursive: false
     follow_symlinks: false
