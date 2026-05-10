@@ -33,6 +33,25 @@ pub struct EventEntry {
     pub payload: JsonValue,
 }
 
+/// `200 OK` response from `POST /v1/events`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EventsAccepted {
+    pub accepted: Vec<Uuid>,
+    pub rejected: Vec<EventRejection>,
+    /// REQUIRED. Last event_id in submission order regardless of accept/reject.
+    pub high_water_event_id: Uuid,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EventRejection {
+    pub event_id: Uuid,
+    /// Spec §3.8.2: `malformed_payload`, `schema_mismatch`,
+    /// `host_id_payload_mismatch`.
+    pub reason: String,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +91,28 @@ mod tests {
         };
         let s = serde_json::to_string(&env).unwrap();
         assert!(s.contains("\"sent_at\":\"2026-05-15T08:30:00Z\""));
+    }
+
+    #[test]
+    fn events_accepted_round_trips() {
+        let r = EventsAccepted {
+            accepted: vec![Uuid::nil()],
+            rejected: vec![EventRejection {
+                event_id: Uuid::nil(),
+                reason: "malformed_payload".into(),
+                detail: Some("missing field".into()),
+            }],
+            high_water_event_id: Uuid::nil(),
+        };
+        let s = serde_json::to_string(&r).unwrap();
+        let back: EventsAccepted = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn rejection_detail_optional() {
+        let json = r#"{"event_id":"00000000-0000-0000-0000-000000000000","reason":"x"}"#;
+        let r: EventRejection = serde_json::from_str(json).unwrap();
+        assert!(r.detail.is_none());
     }
 }
