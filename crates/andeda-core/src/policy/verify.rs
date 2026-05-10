@@ -14,7 +14,7 @@
 
 use crate::event::PolicySignatureInvalidReason;
 use crate::policy::{
-    canonical::{CanonicalError},
+    canonical::{to_canonical_bytes, CanonicalError},
     pubkeys::{Keystore, KeystoreError},
     signed_envelope::SignedPolicyResponse,
     PolicyDocument,
@@ -99,24 +99,179 @@ impl From<CanonicalError> for VerifyError {
     }
 }
 
-/// Run the 5-check chain. The body is filled in by Tasks A5.3 + A5.4 — this
-/// task only commits the skeleton + the type surface so downstream tasks
-/// have something to import.
+/// Run the 5-check chain.
 pub fn verify_envelope(
     keystore: &Keystore,
     response: &SignedPolicyResponse,
     now: OffsetDateTime,
     last_applied_policy_version: i64,
 ) -> Result<VerifiedPolicy, VerifyError> {
-    // Body filled in by A5.3 + A5.4. Stub returns SignatureInvalid so the
-    // skeleton compiles without claiming success.
-    let _ = (keystore, response, now, last_applied_policy_version);
+    use ed25519_dalek::{Signature, Verifier};
+
+    // ─── Check 1: pubkey active ───────────────────────────────────────────
+    let id = &response.signing_pubkey_id;
+    let pk = match keystore.active_pubkey(id, now)? {
+        Some(pk) => pk,
+        None => {
+            // Distinguish "id not present at all" from "id present but inactive".
+            let id_known = keystore.pubkeys.iter().any(|e| &e.id == id);
+            return if id_known {
+                Err(VerifyError::PubkeyInactive(id.clone()))
+            } else {
+                Err(VerifyError::PubkeyUnknown(id.clone()))
+            };
+        }
+    };
+
+    // ─── Check 2: signature valid ────────────────────────────────────────
+    let sig_bytes = match data_encoding::BASE64.decode(response.signature.as_bytes()) {
+        Ok(b) => b,
+        Err(_) => return Err(VerifyError::SignatureInvalid),
+    };
+    if sig_bytes.len() != 64 {
+        return Err(VerifyError::SignatureInvalid);
+    }
+    let mut arr = [0u8; 64];
+    arr.copy_from_slice(&sig_bytes);
+    let sig = Signature::from_bytes(&arr);
+
+    let canonical = to_canonical_bytes(&response.signed_envelope)?;
+    if pk.verify(&canonical, &sig).is_err() {
+        return Err(VerifyError::SignatureInvalid);
+    }
+
+    // Checks 3, 4, 5 added in Task A5.4.
+    let _ = last_applied_policy_version;
     Err(VerifyError::SignatureInvalid)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::canonical::to_canonical_bytes;
+    use crate::policy::pubkeys::{Keystore, KeystoreEntry};
+    use crate::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
+    use ed25519_dalek::{Signer, SigningKey};
+    use rand_core::{OsRng, RngCore};
+    use time::macros::datetime;
+
+    /// Fixture: a keystore + matching SigningKey for "k1" with a wide window.
+    fn fixture(now: OffsetDateTime) -> (Keystore, SigningKey) {
+        let mut secret = [0u8; 32];
+        OsRng.fill_bytes(&mut secret);
+        let sk = SigningKey::from_bytes(&secret);
+        let pk_b64 = data_encoding::BASE64.encode(&sk.verifying_key().to_bytes());
+        let store = Keystore {
+            pubkeys: vec![KeystoreEntry {
+                id: "k1".into(),
+                ed25519_pubkey_b64: pk_b64,
+                valid_from: now - time::Duration::days(30),
+                valid_until: now + time::Duration::days(365),
+            }],
+        };
+        (store, sk)
+    }
+
+    fn sign_response(
+        sk: &SigningKey,
+        envelope: SignedEnvelope,
+        signing_pubkey_id: &str,
+        now: OffsetDateTime,
+    ) -> SignedPolicyResponse {
+        let bytes = to_canonical_bytes(&envelope).unwrap();
+        let sig = sk.sign(&bytes);
+        SignedPolicyResponse {
+            etag: blake3::hash(&bytes).to_hex().to_string(),
+            signed_envelope: envelope,
+            signature: data_encoding::BASE64.encode(&sig.to_bytes()),
+            signing_pubkey_id: signing_pubkey_id.into(),
+            applied_at: now,
+        }
+    }
+
+    fn well_formed_envelope(version: i64, now: OffsetDateTime) -> SignedEnvelope {
+        SignedEnvelope {
+            policy_version: version,
+            // base64("version: 1\nrules: []\n") — minimal valid policy YAML.
+            policy_bytes_b64: data_encoding::BASE64.encode(b"version: 1\nrules: []\n"),
+            valid_until: now + time::Duration::hours(24),
+            issued_at: now,
+        }
+    }
+
+    #[test]
+    fn check1_unknown_pubkey_id_returns_pubkey_unknown() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let env = well_formed_envelope(10, now);
+        let mut resp = sign_response(&sk, env, "k1", now);
+        resp.signing_pubkey_id = "k-does-not-exist".into();
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::PubkeyUnknown(_))));
+    }
+
+    #[test]
+    fn check1_inactive_pubkey_returns_pubkey_inactive() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (mut store, sk) = fixture(now);
+        store.pubkeys[0].valid_until = now - time::Duration::days(1);
+        let env = well_formed_envelope(10, now);
+        let resp = sign_response(&sk, env, "k1", now);
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::PubkeyInactive(_))));
+    }
+
+    #[test]
+    fn check2_tampered_signature_returns_signature_invalid() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let env = well_formed_envelope(10, now);
+        let mut resp = sign_response(&sk, env, "k1", now);
+        let mut sig_bytes = data_encoding::BASE64.decode(resp.signature.as_bytes()).unwrap();
+        sig_bytes[0] ^= 0xff;
+        resp.signature = data_encoding::BASE64.encode(&sig_bytes);
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::SignatureInvalid)));
+    }
+
+    #[test]
+    fn check2_tampered_envelope_returns_signature_invalid() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let env = well_formed_envelope(10, now);
+        let mut resp = sign_response(&sk, env, "k1", now);
+        resp.signed_envelope.policy_version = 999;
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::SignatureInvalid)));
+    }
+
+    #[test]
+    fn check2_signature_with_wrong_length_is_signature_invalid_not_internal() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let env = well_formed_envelope(10, now);
+        let mut resp = sign_response(&sk, env, "k1", now);
+        resp.signature = data_encoding::BASE64.encode(&[0u8; 32]);
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::SignatureInvalid)));
+    }
+
+    #[test]
+    fn check2_signature_not_base64_is_signature_invalid_not_internal() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let env = well_formed_envelope(10, now);
+        let mut resp = sign_response(&sk, env, "k1", now);
+        resp.signature = "not!base64!".into();
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::SignatureInvalid)));
+    }
 
     #[test]
     fn each_error_variant_has_a_reason_except_internal() {
