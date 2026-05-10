@@ -55,6 +55,23 @@ pub fn build_client(
         .map_err(TransportError::Build)
 }
 
+/// Returns `Some(latest_mtime)` if any of the cert / key / CA files have
+/// changed since `since`; otherwise `None`. Used by the supervisor to
+/// rebuild the client on cert rotation.
+pub fn newest_pem_mtime(
+    paths: &[&Path],
+) -> std::io::Result<Option<std::time::SystemTime>> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    for p in paths {
+        let m = std::fs::metadata(p)?.modified()?;
+        newest = Some(match newest {
+            Some(prev) if prev >= m => prev,
+            _ => m,
+        });
+    }
+    Ok(newest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,5 +100,18 @@ mod tests {
         std::fs::write(&ca, b"definitely not pem").unwrap();
         let err = build_client(&cert, &key, &ca).unwrap_err();
         assert!(matches!(err, TransportError::Identity(_)));
+    }
+
+    #[test]
+    fn newest_mtime_picks_max() {
+        let dir = tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::write(&a, b"1").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&b, b"2").unwrap();
+        let m = newest_pem_mtime(&[&a, &b]).unwrap().unwrap();
+        let m_b = std::fs::metadata(&b).unwrap().modified().unwrap();
+        assert_eq!(m, m_b);
     }
 }
