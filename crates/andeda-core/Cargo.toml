@@ -20,6 +20,7 @@ dunce = { workspace = true }
 rusqlite = { workspace = true }
 hdrhistogram = { workspace = true }
 parking_lot = { workspace = true }
+data-encoding = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

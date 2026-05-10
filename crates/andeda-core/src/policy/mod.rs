@@ -7,6 +7,9 @@ use thiserror::Error;
 
 pub mod expand;
 pub mod glob;
+pub mod signed_envelope;
+
+pub use signed_envelope::{SignedEnvelope, SignedPolicyResponse};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
