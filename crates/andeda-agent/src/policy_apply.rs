@@ -18,7 +18,6 @@ use andeda_core::state::HashCache;
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
-use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
@@ -35,19 +34,6 @@ pub enum ApplyOutcome {
     /// Internal failure (keystore I/O, disk write failure, etc.). Sender SHOULD
     /// retry. NO `PolicySignatureInvalid` event was emitted.
     Internal { detail: String },
-}
-
-/// Errors that can fail the apply path internally — these are NOT
-/// PolicySignatureInvalid reasons; they're agent-side problems.
-#[derive(Debug, Error)]
-pub enum ApplyError {
-    /// Disk write failed before state.db update — both pieces still old.
-    #[error("disk write failed: {0}")]
-    DiskWrite(std::io::Error),
-    /// Disk write succeeded but state.db update failed — boot reconciliation
-    /// will reconcile on next start.
-    #[error("state.db update failed AFTER disk write: {0}")]
-    StateAfterDisk(String),
 }
 
 /// Long-lived handle the runtime hands to the IPC handler.
