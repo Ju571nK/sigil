@@ -21,6 +21,7 @@ pub async fn run(
     stats: Arc<Stats>,
     cache: Arc<Mutex<HashCache>>,
     policy_expired_active: Arc<RwLock<bool>>,
+    jsonl_above_soft_floor: Arc<RwLock<bool>>,
     host_id: String,
     watcher_backend: &'static str,
     state_db_path: PathBuf,
@@ -34,21 +35,22 @@ pub async fn run(
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => {
-                emit(&stats, &cache, &policy_expired_active, &host_id, watcher_backend, &state_db_path, &tx, started, true).await;
+                emit(&stats, &cache, &policy_expired_active, &jsonl_above_soft_floor, &host_id, watcher_backend, &state_db_path, &tx, started, true).await;
                 break;
             }
             _ = tick.tick() => {
-                emit(&stats, &cache, &policy_expired_active, &host_id, watcher_backend, &state_db_path, &tx, started, false).await;
+                emit(&stats, &cache, &policy_expired_active, &jsonl_above_soft_floor, &host_id, watcher_backend, &state_db_path, &tx, started, false).await;
             }
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)] // emit() mirrors run()'s dependency surface
-async fn emit(
+pub(crate) async fn emit(
     stats: &Arc<Stats>,
     cache: &Arc<Mutex<HashCache>>,
     policy_expired_active: &Arc<RwLock<bool>>,
+    jsonl_above_soft_floor_flag: &Arc<RwLock<bool>>,
     host_id: &str,
     watcher_backend: &'static str,
     state_db_path: &PathBuf,
@@ -66,6 +68,7 @@ async fn emit(
         .map(|m| m.last_applied_policy_version)
         .unwrap_or(0);
     let policy_expired = *policy_expired_active.read();
+    let jsonl_above_soft_floor = *jsonl_above_soft_floor_flag.read();
     let evidence = Evidence::Heartbeat {
         uptime_s: started.elapsed().as_secs(),
         is_final,
@@ -79,6 +82,7 @@ async fn emit(
         last_log_rotation_ts: None,
         last_applied_policy_version,
         policy_expired_active: policy_expired,
+        jsonl_above_soft_floor,
     };
     let event = Event {
         schema_version: SCHEMA_VERSION,
@@ -116,6 +120,7 @@ mod field_tests {
         cache.host_meta_set_policy_version(42).unwrap();
         let cache = Arc::new(Mutex::new(cache));
         let expired = Arc::new(RwLock::new(true));
+        let jsonl_above = Arc::new(RwLock::new(false));
         let stats = andeda_core::stats::Stats::shared();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
 
@@ -123,6 +128,7 @@ mod field_tests {
             &stats,
             &cache,
             &expired,
+            &jsonl_above,
             "test-host",
             "stub",
             &dir.path().join("state.db"),
@@ -141,6 +147,43 @@ mod field_tests {
             } => {
                 assert_eq!(last_applied_policy_version, 42);
                 assert!(policy_expired_active);
+            }
+            other => panic!("expected Heartbeat, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn heartbeat_carries_jsonl_above_soft_floor_flag() {
+        let dir = tempdir().unwrap();
+        let cache = Arc::new(Mutex::new(
+            HashCache::open(&dir.path().join("state.db")).unwrap(),
+        ));
+        let expired = Arc::new(RwLock::new(false));
+        let jsonl_above = Arc::new(RwLock::new(true));
+        let stats = andeda_core::stats::Stats::shared();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+        emit(
+            &stats,
+            &cache,
+            &expired,
+            &jsonl_above,
+            "test-host",
+            "stub",
+            &dir.path().join("state.db"),
+            &tx,
+            std::time::Instant::now(),
+            false,
+        )
+        .await;
+
+        let ev = rx.recv().await.unwrap();
+        match ev.event.evidence {
+            Evidence::Heartbeat {
+                jsonl_above_soft_floor,
+                ..
+            } => {
+                assert!(jsonl_above_soft_floor);
             }
             other => panic!("expected Heartbeat, got {other:?}"),
         }

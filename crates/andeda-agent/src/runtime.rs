@@ -74,6 +74,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Phase 2: shared state for IPC + expiry monitor + heartbeat.
     let policy_expired_active = Arc::new(parking_lot::RwLock::new(false));
+    let jsonl_above_soft_floor = Arc::new(parking_lot::RwLock::new(false));
+    let current_segment_filename = Arc::new(parking_lot::RwLock::new(String::new()));
     let active_valid_until: Arc<parking_lot::RwLock<Option<OffsetDateTime>>> =
         Arc::new(parking_lot::RwLock::new(None));
     let (policy_version_tx, _policy_version_rx_init) = watch::channel::<i64>(0);
@@ -310,11 +312,27 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         }),
     );
 
+    // Best-effort startup snapshot: pick the lexicographically largest segment
+    // as the "current" one. Full rotation-time wiring is a Plan A2 follow-up.
+    {
+        if let Ok(entries) = std::fs::read_dir(&cfg.events_dir) {
+            let latest = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("events-") && n.ends_with(".jsonl"))
+                .max();
+            if let Some(n) = latest {
+                *current_segment_filename.write() = n;
+            }
+        }
+    }
+
     // Heartbeat
     {
         let stats_h = stats.clone();
         let cache_h = cache.clone();
         let expired_h = policy_expired_active.clone();
+        let above_h = jsonl_above_soft_floor.clone();
         let host_id_h = host_id.clone();
         let cancel_h = cancel.clone();
         let tx_h = tx_sink.clone();
@@ -326,6 +344,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                     stats_h,
                     cache_h,
                     expired_h,
+                    above_h,
                     host_id_h,
                     backend_name,
                     dbp,
@@ -334,6 +353,32 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                     started,
                 )
                 .await
+            }),
+        );
+    }
+
+    // JSONL GC task (Phase 2 Plan A).
+    {
+        let host_id_g = host_id.clone();
+        let dir_g = cfg.events_dir.clone();
+        let cur_g = current_segment_filename.clone();
+        let above_g = jsonl_above_soft_floor.clone();
+        let tx_g = tx_sink.clone();
+        let cancel_g = cancel.clone();
+        sup.track(
+            "jsonl_gc",
+            tokio::spawn(async move {
+                crate::jsonl_gc_task::run(crate::jsonl_gc_task::GcTaskCtx {
+                    host_id: host_id_g,
+                    events_dir: dir_g,
+                    current_segment_filename: cur_g,
+                    above_soft_floor: above_g,
+                    cfg: crate::gc_config::GcConfig::defaults(),
+                    event_tx: tx_g,
+                    shutdown: cancel_g,
+                    tick: std::time::Duration::from_secs(10 * 60),
+                })
+                .await;
             }),
         );
     }

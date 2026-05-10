@@ -56,5 +56,7 @@ fn evidence_kind_str(e: &andeda_core::event::Evidence) -> &'static str {
         PolicySignatureInvalid { .. } => "policy_signature_invalid",
         PolicyReloaded { .. } => "policy_reloaded",
         PolicyExpiredActive { .. } => "policy_expired_active",
+        AgentJsonlForceGc { .. } => "agent_jsonl_force_gc",
+        SenderSkippedSegment { .. } => "sender_skipped_segment",
     }
 }

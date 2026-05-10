@@ -114,6 +114,8 @@ pub enum Evidence {
         last_applied_policy_version: i64,
         /// Phase 2: `true` iff the active envelope's valid_until is in the past.
         policy_expired_active: bool,
+        /// Phase 2: `true` iff `events/` is currently above the GC soft floor.
+        jsonl_above_soft_floor: bool,
     },
     PermissionMissing {
         resource: String,
@@ -149,6 +151,28 @@ pub enum Evidence {
         prev_fingerprint: String,
         /// Freshly-computed fingerprint hex.
         new_fingerprint: String,
+    },
+    /// Spec §3.9: emitted exactly once per GC cycle that crossed the
+    /// hard ceiling (size or age). Operators dashboard on this — non-zero
+    /// rate means the host is permanently behind on shipping.
+    AgentJsonlForceGc {
+        /// Total bytes in `events/` at the time of the cycle.
+        total_bytes: u64,
+        /// Age in seconds of the oldest segment at the time of the cycle.
+        oldest_segment_age_s: u64,
+        /// How many segments were deleted in the cycle.
+        segments_deleted: u32,
+        /// Of those, how many were past the sender offset.
+        segments_skipped_past_sender: u32,
+    },
+    /// Spec §3.9: emitted whenever the GC deleted at least one segment
+    /// that the sender had NOT yet shipped. One event per cycle (NOT per file).
+    SenderSkippedSegment {
+        /// Number of segments dropped past the sender in this cycle.
+        count: u32,
+        /// Filename of the OLDEST segment dropped past the sender (operators
+        /// can grep their SIEM around this segment's expected event-id range).
+        oldest_dropped_filename: String,
     },
     /// Spec §3.8.2: a `SignedPolicyResponse` was rejected by the verification
     /// chain. Emitted by the agent when an inbound envelope fails any check;
@@ -330,6 +354,7 @@ mod tests {
             last_log_rotation_ts: None,
             last_applied_policy_version: 0,
             policy_expired_active: false,
+            jsonl_above_soft_floor: false,
         };
         let j = serde_json::to_string(&ev).unwrap();
         assert!(j.starts_with(r#"{"kind":"heartbeat""#));
