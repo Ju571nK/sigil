@@ -30,6 +30,13 @@ pub enum ProducerError {
 }
 
 /// Producer (writer) for a single spool.
+///
+/// **Threading:** This type is `!Sync`-safe-but-not-`Sync`-aware — `&mut self`
+/// on `append_line` enforces single-threaded use within one process. To share
+/// across threads, wrap in a `Mutex`. **Cross-process** writers on the same
+/// spool directory are NOT supported (the producer holds no advisory lock and
+/// will silently interleave bytes with another producer). Run exactly one
+/// `Producer` instance per spool directory across the whole system.
 pub struct Producer {
     cfg: ProducerConfig,
     current_segment_n: u64,
@@ -150,15 +157,15 @@ fn last_newline_offset(file: &mut File, size: u64) -> std::io::Result<u64> {
     let mut reader = BufReader::new(file);
     let mut last_good: u64 = 0;
     let mut cursor: u64 = 0;
-    let mut buf = String::new();
+    let mut buf: Vec<u8> = Vec::new();
     loop {
         buf.clear();
-        let n = reader.read_line(&mut buf)?;
+        let n = reader.read_until(b'\n', &mut buf)?;
         if n == 0 {
             break;
         }
         cursor += n as u64;
-        if buf.ends_with('\n') {
+        if buf.last() == Some(&b'\n') {
             last_good = cursor;
         }
     }
