@@ -6,6 +6,7 @@ pub mod debouncer;
 pub mod doctor;
 pub mod hasher;
 pub mod heartbeat;
+pub mod host_meta_task;
 pub mod normalizer;
 pub mod platform;
 pub mod runtime;
