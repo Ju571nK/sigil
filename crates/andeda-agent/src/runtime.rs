@@ -61,6 +61,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Phase 2: load the policy-signing keystore. Optional — if missing, the
     // agent runs in Phase 1 mode (no inbound apply_policy can succeed).
+    // Note: live watcher reload not implemented in Plan A — apply_policy
+    // writes policy.yaml + state.db, but the running watcher subgraph does
+    // NOT re-pick up the new file; restart the agent to refresh watch targets.
     let keystore = match Keystore::load_from_file(keystore_path()) {
         Ok(k) => Arc::new(k),
         Err(e) => {

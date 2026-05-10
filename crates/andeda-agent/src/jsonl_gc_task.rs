@@ -132,6 +132,10 @@ async fn tick(ctx: &GcTaskCtx) {
     }
 
     if decision.force_deleted_past_sender > 0 {
+        // I1 (Plan A2): when consumed + force-deleted segments coexist in
+        // one cycle, this is the oldest DELETED filename, not strictly the
+        // oldest FORCE-DELETED past-sender filename. Tracked for diagnostic
+        // precision once Plan B sender ships and SIEM operators rely on it.
         let oldest_dropped = decision
             .to_delete
             .first()
