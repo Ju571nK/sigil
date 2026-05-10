@@ -52,5 +52,6 @@ fn evidence_kind_str(e: &andeda_core::event::Evidence) -> &'static str {
         WatcherDegraded { .. } => "watcher_degraded",
         AgentDying { .. } => "agent_dying",
         RateLimitExceeded { .. } => "rate_limit_exceeded",
+        HostIdFingerprintDrift { .. } => "host_id_fingerprint_drift",
     }
 }

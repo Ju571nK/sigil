@@ -118,6 +118,15 @@ pub enum Evidence {
         count_dropped_in_window: u64,
         common_path_prefix: PathBuf,
     },
+    /// Spec §3.10: hw_fingerprint changed while host_id stayed the same.
+    /// Emitted by the agent when the freshly-computed fingerprint differs
+    /// from the persisted one in `state.db`.
+    HostIdFingerprintDrift {
+        /// Previously-persisted fingerprint hex (blake3 → 64 chars).
+        prev_fingerprint: String,
+        /// Freshly-computed fingerprint hex.
+        new_fingerprint: String,
+    },
 }
 
 /// Schema version. Bumps follow the policy in spec section 3.3.
@@ -291,6 +300,18 @@ mod tests {
         };
         let j = serde_json::to_string(&ev).unwrap();
         assert!(j.contains("2026-05-08T14:23:45Z"));
+    }
+
+    #[test]
+    fn host_id_fingerprint_drift_serializes_with_snake_case_kind() {
+        let ev = Evidence::HostIdFingerprintDrift {
+            prev_fingerprint: "deadbeef".into(),
+            new_fingerprint: "cafef00d".into(),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"kind\":\"host_id_fingerprint_drift\""), "got: {s}");
+        assert!(s.contains("\"prev_fingerprint\":\"deadbeef\""));
+        assert!(s.contains("\"new_fingerprint\":\"cafef00d\""));
     }
 
     #[test]
