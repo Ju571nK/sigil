@@ -20,7 +20,11 @@ async fn read_send_ack_advances_state_to_high_water() {
     let dir = tempfile::tempdir().unwrap();
     let id_a = Uuid::from_u128(1);
     let id_b = Uuid::from_u128(2);
-    write_jsonl(dir.path(), "events-1.jsonl", &[(id_a, r#""a""#), (id_b, r#""b""#)]);
+    write_jsonl(
+        dir.path(),
+        "events-1.jsonl",
+        &[(id_a, r#""a""#), (id_b, r#""b""#)],
+    );
 
     let initial = SenderState {
         current_file: "events-1.jsonl".into(),
@@ -47,6 +51,8 @@ async fn read_send_ack_advances_state_to_high_water() {
     let next = apply_ack(&manifest, accepted.high_water_event_id).unwrap();
     assert_eq!(next.last_acked_sequence, 2);
     // byte_offset should equal end of last event line in jsonl.
-    let bytes_on_disk = std::fs::metadata(dir.path().join("events-1.jsonl")).unwrap().len();
+    let bytes_on_disk = std::fs::metadata(dir.path().join("events-1.jsonl"))
+        .unwrap()
+        .len();
     assert_eq!(next.byte_offset, bytes_on_disk);
 }

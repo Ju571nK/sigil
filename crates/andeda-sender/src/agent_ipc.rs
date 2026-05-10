@@ -29,7 +29,10 @@ pub enum ApplyPolicyResult {
 #[derive(Debug, Error)]
 pub enum IpcError {
     #[error("connect {path}: {source}")]
-    Connect { path: std::path::PathBuf, source: std::io::Error },
+    Connect {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("response parse: {0}")]

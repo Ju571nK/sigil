@@ -76,7 +76,10 @@ async fn loop_fires_once_then_shuts_down() {
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(outcome, andeda_sender::control_task::PollOutcome::NewPolicy { .. }));
+    assert!(matches!(
+        outcome,
+        andeda_sender::control_task::PollOutcome::NewPolicy { .. }
+    ));
     cancel.cancel();
     handle.await.unwrap();
 }

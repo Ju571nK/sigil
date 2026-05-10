@@ -7,7 +7,10 @@ use reqwest::Client;
 #[derive(Debug)]
 pub enum PollOutcome {
     /// Server returned a fresh policy. Caller hands this to apply_policy IPC.
-    NewPolicy { etag: String, response: SignedPolicyResponse },
+    NewPolicy {
+        etag: String,
+        response: SignedPolicyResponse,
+    },
     /// Server returned 304 — no work to do.
     Unmodified,
     /// 404 → host is not in inventory; emit local event.

@@ -43,14 +43,24 @@ mod tests {
 
     #[test]
     fn parses_doctor_with_global_config() {
-        let cli = Cli::try_parse_from(["andeda-sender", "--config", "/tmp/s.yaml", "doctor"]).unwrap();
-        assert_eq!(cli.config.as_deref().map(|p| p.to_str().unwrap()), Some("/tmp/s.yaml"));
+        let cli =
+            Cli::try_parse_from(["andeda-sender", "--config", "/tmp/s.yaml", "doctor"]).unwrap();
+        assert_eq!(
+            cli.config.as_deref().map(|p| p.to_str().unwrap()),
+            Some("/tmp/s.yaml")
+        );
         assert!(matches!(cli.command, Command::Doctor));
     }
 
     #[test]
     fn parses_dry_run_with_url() {
-        let cli = Cli::try_parse_from(["andeda-sender", "dry-run", "--url", "https://localhost:9443"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "andeda-sender",
+            "dry-run",
+            "--url",
+            "https://localhost:9443",
+        ])
+        .unwrap();
         match cli.command {
             Command::DryRun { url } => assert_eq!(url, "https://localhost:9443"),
             other => panic!("expected DryRun, got {other:?}"),

@@ -17,7 +17,7 @@ use andeda_sender::wire::{EventsAccepted, EventsRequest};
 /// Per-test mock state.
 pub struct MockState {
     pub received_batches: Vec<EventsRequest>,
-    pub next_status: u16,        // override for next response (default 200)
+    pub next_status: u16,          // override for next response (default 200)
     pub next_body: Option<String>, // override body
     pub policy_etag: String,
     pub policy_response: Option<andeda_sender::wire::SignedPolicyResponse>,
@@ -88,15 +88,26 @@ async fn handle_events(
 async fn handle_policy(
     State(state): State<SharedMock>,
     headers: axum::http::HeaderMap,
-) -> (axum::http::StatusCode, axum::http::HeaderMap, Json<serde_json::Value>) {
+) -> (
+    axum::http::StatusCode,
+    axum::http::HeaderMap,
+    Json<serde_json::Value>,
+) {
     let s = state.lock().await;
     let mut out_headers = axum::http::HeaderMap::new();
     if let Some(etag) = headers.get("if-none-match") {
         if etag.to_str().unwrap_or("") == s.policy_etag {
-            return (axum::http::StatusCode::NOT_MODIFIED, out_headers, Json(serde_json::json!(null)));
+            return (
+                axum::http::StatusCode::NOT_MODIFIED,
+                out_headers,
+                Json(serde_json::json!(null)),
+            );
         }
     }
-    out_headers.insert("etag", axum::http::HeaderValue::from_str(&s.policy_etag).unwrap());
+    out_headers.insert(
+        "etag",
+        axum::http::HeaderValue::from_str(&s.policy_etag).unwrap(),
+    );
     let body = s
         .policy_response
         .as_ref()

@@ -136,9 +136,7 @@ pub async fn send_one_batch(ctx: BatchSendCtx<'_>) -> BatchOutcome {
         SendOutcome::PermanentReject { status, body } => {
             BatchOutcome::PermanentReject { status, body }
         }
-        SendOutcome::ServerBusy { status, body } => {
-            BatchOutcome::ServerBusy { status, body }
-        }
+        SendOutcome::ServerBusy { status, body } => BatchOutcome::ServerBusy { status, body },
         SendOutcome::TlsFailure(s) => BatchOutcome::TlsFailure(s),
         SendOutcome::Network(s) => BatchOutcome::Network(s),
         SendOutcome::ProtocolViolation(s) => BatchOutcome::ProtocolViolation(s),
@@ -157,7 +155,10 @@ mod tests {
     fn entry(id: u128, seq: u64, end: u64) -> ManifestEntry {
         ManifestEntry {
             event_id: Uuid::from_u128(id),
-            byte_range: ByteRange { start: end - 100, end },
+            byte_range: ByteRange {
+                start: end - 100,
+                end,
+            },
             provisional_sequence: seq,
             current_file: "events-1.jsonl".into(),
         }

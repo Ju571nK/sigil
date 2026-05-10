@@ -16,9 +16,15 @@ use uuid::Uuid;
 #[derive(Debug, Error)]
 pub enum BatchReadError {
     #[error("io {path}: {source}")]
-    Io { path: std::path::PathBuf, source: std::io::Error },
+    Io {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
     #[error("json parse at offset {offset}: {source}")]
-    Parse { offset: u64, source: serde_json::Error },
+    Parse {
+        offset: u64,
+        source: serde_json::Error,
+    },
     #[error("event missing event_id at offset {offset}")]
     MissingEventId { offset: u64 },
 }
@@ -45,10 +51,11 @@ pub fn read_next_batch(
         path: path.clone(),
         source,
     })?;
-    file.seek(SeekFrom::Start(state.byte_offset)).map_err(|source| BatchReadError::Io {
-        path: path.clone(),
-        source,
-    })?;
+    file.seek(SeekFrom::Start(state.byte_offset))
+        .map_err(|source| BatchReadError::Io {
+            path: path.clone(),
+            source,
+        })?;
     let mut reader = BufReader::new(file);
 
     let mut events = Vec::new();
@@ -58,14 +65,22 @@ pub fn read_next_batch(
     let mut next_seq = state.last_acked_sequence;
 
     loop {
-        if events.len() >= max_events { break; }
-        if bytes_consumed >= max_bytes { break; }
+        if events.len() >= max_events {
+            break;
+        }
+        if bytes_consumed >= max_bytes {
+            break;
+        }
         let mut line = String::new();
-        let n = reader.read_line(&mut line).map_err(|source| BatchReadError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        if n == 0 { break; } // EOF
+        let n = reader
+            .read_line(&mut line)
+            .map_err(|source| BatchReadError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        if n == 0 {
+            break;
+        } // EOF
         if !line.ends_with('\n') {
             // Truncated trailing line — leave it for next iteration after producer flushes.
             break;
@@ -124,7 +139,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let id_a = Uuid::from_u128(1);
         let id_b = Uuid::from_u128(2);
-        write_events(dir.path(), "events-1.jsonl", &[(id_a, r#""a""#), (id_b, r#""b""#)]);
+        write_events(
+            dir.path(),
+            "events-1.jsonl",
+            &[(id_a, r#""a""#), (id_b, r#""b""#)],
+        );
         let state = SenderState {
             current_file: "events-1.jsonl".into(),
             byte_offset: 0,
@@ -143,7 +162,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let id_a = Uuid::from_u128(1);
         let id_b = Uuid::from_u128(2);
-        write_events(dir.path(), "events-1.jsonl", &[(id_a, r#""a""#), (id_b, r#""b""#)]);
+        write_events(
+            dir.path(),
+            "events-1.jsonl",
+            &[(id_a, r#""a""#), (id_b, r#""b""#)],
+        );
         let state = SenderState {
             current_file: "events-1.jsonl".into(),
             byte_offset: 0,

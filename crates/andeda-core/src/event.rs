@@ -207,9 +207,7 @@ pub enum Evidence {
         valid_until: time::OffsetDateTime,
     },
     /// Sender saw HTTP 409 from /v1/events: host_id bound to a different cert.
-    HostIdConflict {
-        observed_status: u16,
-    },
+    HostIdConflict { observed_status: u16 },
     /// Sender saw HTTP 426 from /v1/events: agent is two minor versions or older.
     AgentTooOld {
         observed_status: u16,
@@ -221,18 +219,14 @@ pub enum Evidence {
         cert_expires_at: time::OffsetDateTime,
     },
     /// TLS handshake failure (CA mismatch, expired cert, etc.).
-    TlsFailure {
-        reason: String,
-    },
+    TlsFailure { reason: String },
     /// Per-event hard rejection logged locally for operator audit.
     EventUnprocessableLocal {
         original_event_id: uuid::Uuid,
         server_reason: String,
     },
     /// Server returned 200 without `high_water_event_id` (or other shape break).
-    ServerProtocolViolation {
-        detail: String,
-    },
+    ServerProtocolViolation { detail: String },
     /// `oldest_unsent_age` exceeded the agent's JSONL retention window.
     SenderLagCritical {
         lag_events: u64,
@@ -481,13 +475,23 @@ mod tests {
     #[test]
     fn sender_variants_serialize_with_kind_tag() {
         let cases = [
-            (Evidence::HostIdConflict { observed_status: 409 }, "host_id_conflict"),
             (
-                Evidence::AgentTooOld { observed_status: 426, agent_version: "0.1.0".into() },
+                Evidence::HostIdConflict {
+                    observed_status: 409,
+                },
+                "host_id_conflict",
+            ),
+            (
+                Evidence::AgentTooOld {
+                    observed_status: 426,
+                    agent_version: "0.1.0".into(),
+                },
                 "agent_too_old",
             ),
             (
-                Evidence::CertExpired { cert_expires_at: time::macros::datetime!(2026-01-01 0:00 UTC) },
+                Evidence::CertExpired {
+                    cert_expires_at: time::macros::datetime!(2026-01-01 0:00 UTC),
+                },
                 "cert_expired",
             ),
             (Evidence::TlsFailure { reason: "x".into() }, "tls_failure"),
@@ -498,15 +502,25 @@ mod tests {
                 },
                 "event_unprocessable_local",
             ),
-            (Evidence::ServerProtocolViolation { detail: "x".into() }, "server_protocol_violation"),
             (
-                Evidence::SenderLagCritical { lag_events: 1, lag_bytes: 2, oldest_unsent_age_s: 3 },
+                Evidence::ServerProtocolViolation { detail: "x".into() },
+                "server_protocol_violation",
+            ),
+            (
+                Evidence::SenderLagCritical {
+                    lag_events: 1,
+                    lag_bytes: 2,
+                    oldest_unsent_age_s: 3,
+                },
                 "sender_lag_critical",
             ),
         ];
         for (ev, expected_kind) in cases {
             let s = serde_json::to_string(&ev).unwrap();
-            assert!(s.contains(&format!("\"kind\":\"{expected_kind}\"")), "for {expected_kind}: {s}");
+            assert!(
+                s.contains(&format!("\"kind\":\"{expected_kind}\"")),
+                "for {expected_kind}: {s}"
+            );
         }
     }
 

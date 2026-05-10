@@ -30,7 +30,9 @@ pub struct BatchManifest {
 }
 
 impl BatchManifest {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn push(&mut self, entry: ManifestEntry) {
         let idx = self.entries.len();
@@ -46,8 +48,12 @@ impl BatchManifest {
         self.entries.last()
     }
 
-    pub fn len(&self) -> usize { self.entries.len() }
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 
     pub fn iter(&self) -> impl Iterator<Item = &ManifestEntry> {
         self.entries.iter()

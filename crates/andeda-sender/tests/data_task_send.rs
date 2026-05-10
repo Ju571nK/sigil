@@ -8,8 +8,16 @@ use uuid::Uuid;
 async fn batch_with_events_returns_accepted_with_high_water() {
     let (addr, _state) = common::spawn_mock().await;
     let client = reqwest::Client::new();
-    let ev1 = EventEntry { event_id: Uuid::from_u128(1), sequence: 1, payload: serde_json::json!({}) };
-    let ev2 = EventEntry { event_id: Uuid::from_u128(2), sequence: 2, payload: serde_json::json!({}) };
+    let ev1 = EventEntry {
+        event_id: Uuid::from_u128(1),
+        sequence: 1,
+        payload: serde_json::json!({}),
+    };
+    let ev2 = EventEntry {
+        event_id: Uuid::from_u128(2),
+        sequence: 2,
+        payload: serde_json::json!({}),
+    };
     let ctx = BatchSendCtx {
         client: &client,
         server_base_url: &format!("http://{addr}"),
@@ -35,7 +43,11 @@ async fn batch_against_503_mock_returns_server_busy() {
         s.next_status = 503;
     }
     let client = reqwest::Client::new();
-    let ev = EventEntry { event_id: Uuid::from_u128(1), sequence: 1, payload: serde_json::json!({}) };
+    let ev = EventEntry {
+        event_id: Uuid::from_u128(1),
+        sequence: 1,
+        payload: serde_json::json!({}),
+    };
     let ctx = BatchSendCtx {
         client: &client,
         server_base_url: &format!("http://{addr}"),
@@ -58,7 +70,11 @@ async fn batch_against_409_mock_returns_permanent_reject() {
         s.next_status = 409;
     }
     let client = reqwest::Client::new();
-    let ev = EventEntry { event_id: Uuid::from_u128(1), sequence: 1, payload: serde_json::json!({}) };
+    let ev = EventEntry {
+        event_id: Uuid::from_u128(1),
+        sequence: 1,
+        payload: serde_json::json!({}),
+    };
     let ctx = BatchSendCtx {
         client: &client,
         server_base_url: &format!("http://{addr}"),

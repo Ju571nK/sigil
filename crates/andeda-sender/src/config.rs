@@ -36,9 +36,15 @@ pub struct SenderConfig {
     pub policy_poll_interval: Duration,
 }
 
-fn default_max_batch_events() -> usize { 256 }
-fn default_max_batch_bytes() -> usize { 1024 * 1024 }
-fn default_policy_poll_secs() -> Duration { Duration::from_secs(300) }
+fn default_max_batch_events() -> usize {
+    256
+}
+fn default_max_batch_bytes() -> usize {
+    1024 * 1024
+}
+fn default_policy_poll_secs() -> Duration {
+    Duration::from_secs(300)
+}
 
 mod serde_duration_secs {
     use serde::{Deserialize, Deserializer, Serializer};
@@ -56,9 +62,15 @@ mod serde_duration_secs {
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("read {path}: {source}")]
-    Read { path: PathBuf, source: std::io::Error },
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("yaml parse {path}: {source}")]
-    Parse { path: PathBuf, source: serde_yaml::Error },
+    Parse {
+        path: PathBuf,
+        source: serde_yaml::Error,
+    },
 }
 
 impl SenderConfig {
@@ -87,7 +99,9 @@ mod tests {
     fn loads_minimal_config_with_defaults() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("sender.yaml");
-        write(&p, r#"
+        write(
+            &p,
+            r#"
 server_base_url: "https://andeda.example.com"
 client_cert_path: "/etc/andeda/client.crt"
 client_key_path: "/etc/andeda/client.key"
@@ -96,7 +110,8 @@ events_dir: "/var/log/andeda/events"
 offset_path: "/var/lib/andeda/sender-offset.json"
 agent_control: "/var/run/andeda/control.sock"
 dead_letter_dir: "/var/log/andeda/dead-letter"
-"#);
+"#,
+        );
         let cfg = SenderConfig::load(&p).unwrap();
         assert_eq!(cfg.server_base_url, "https://andeda.example.com");
         assert_eq!(cfg.max_batch_events, 256);
@@ -108,7 +123,9 @@ dead_letter_dir: "/var/log/andeda/dead-letter"
     fn loads_overrides() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("sender.yaml");
-        write(&p, r#"
+        write(
+            &p,
+            r#"
 server_base_url: "https://x"
 client_cert_path: "/a"
 client_key_path: "/b"
@@ -120,7 +137,8 @@ dead_letter_dir: "/g"
 max_batch_events: 64
 max_batch_bytes: 65536
 policy_poll_interval: 30
-"#);
+"#,
+        );
         let cfg = SenderConfig::load(&p).unwrap();
         assert_eq!(cfg.max_batch_events, 64);
         assert_eq!(cfg.max_batch_bytes, 65536);

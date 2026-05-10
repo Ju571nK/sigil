@@ -13,7 +13,10 @@ use time::OffsetDateTime;
 #[derive(Debug, Error)]
 pub enum DeadLetterError {
     #[error("io {path}: {source}")]
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("serialize: {0}")]
     Serialize(serde_json::Error),
 }
@@ -28,7 +31,9 @@ pub fn append(dir: &Path, event: &Event) -> Result<(), DeadLetterError> {
     let now = OffsetDateTime::now_utc();
     let basename = format!(
         "sender-dead-letter-{:04}-{:02}-{:02}.jsonl",
-        now.year(), u8::from(now.month()), now.day()
+        now.year(),
+        u8::from(now.month()),
+        now.day()
     );
     let path = dir.join(basename);
     let mut bytes = serde_json::to_vec(event).map_err(DeadLetterError::Serialize)?;
@@ -37,16 +42,27 @@ pub fn append(dir: &Path, event: &Event) -> Result<(), DeadLetterError> {
         .create(true)
         .append(true)
         .open(&path)
-        .map_err(|source| DeadLetterError::Io { path: path.clone(), source })?;
-    f.write_all(&bytes).map_err(|source| DeadLetterError::Io { path: path.clone(), source })?;
-    f.sync_all().map_err(|source| DeadLetterError::Io { path: path.clone(), source })?;
+        .map_err(|source| DeadLetterError::Io {
+            path: path.clone(),
+            source,
+        })?;
+    f.write_all(&bytes).map_err(|source| DeadLetterError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    f.sync_all().map_err(|source| DeadLetterError::Io {
+        path: path.clone(),
+        source,
+    })?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use andeda_core::event::{Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION};
+    use andeda_core::event::{
+        Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
+    };
     use tempfile::tempdir;
 
     fn sample_event() -> Event {
@@ -75,7 +91,11 @@ mod tests {
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().starts_with("sender-dead-letter-"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("sender-dead-letter-")
+            })
             .collect();
         assert_eq!(entries.len(), 1);
         let body = std::fs::read_to_string(entries[0].path()).unwrap();
@@ -91,7 +111,11 @@ mod tests {
         let entry = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .find(|e| e.file_name().to_string_lossy().starts_with("sender-dead-letter-"))
+            .find(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("sender-dead-letter-")
+            })
             .unwrap();
         let body = std::fs::read_to_string(entry.path()).unwrap();
         assert_eq!(body.matches('\n').count(), 2);

@@ -71,14 +71,17 @@ async fn control_loop_emits_new_policy_then_ipc_handoff_succeeds() {
         .await;
     });
 
-    let outcome =
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await.unwrap().unwrap();
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
     let response = match outcome {
         PollOutcome::NewPolicy { response, .. } => response,
         other => panic!("expected NewPolicy, got {other:?}"),
     };
-    let agent_resp =
-        andeda_sender::agent_ipc::apply_policy(&socket, &response).await.unwrap();
+    let agent_resp = andeda_sender::agent_ipc::apply_policy(&socket, &response)
+        .await
+        .unwrap();
     assert!(agent_resp.ok);
     cancel.cancel();
     let _ = tokio::join!(ctl, agent);

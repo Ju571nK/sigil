@@ -9,7 +9,10 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum TransportError {
     #[error("read {path}: {source}")]
-    Read { path: std::path::PathBuf, source: std::io::Error },
+    Read {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
     #[error("invalid identity (cert+key): {0}")]
     Identity(reqwest::Error),
     #[error("invalid root CA bundle")]
@@ -104,9 +107,7 @@ pub fn classify_send_error<R>(err: reqwest::Error) -> SendOutcome<R> {
 /// Returns `Some(latest_mtime)` if any of the cert / key / CA files have
 /// changed since `since`; otherwise `None`. Used by the supervisor to
 /// rebuild the client on cert rotation.
-pub fn newest_pem_mtime(
-    paths: &[&Path],
-) -> std::io::Result<Option<std::time::SystemTime>> {
+pub fn newest_pem_mtime(paths: &[&Path]) -> std::io::Result<Option<std::time::SystemTime>> {
     let mut newest: Option<std::time::SystemTime> = None;
     for p in paths {
         let m = std::fs::metadata(p)?.modified()?;
@@ -170,19 +171,28 @@ mod tests {
     #[test]
     fn classify_409_is_permanent() {
         let outcome: SendOutcome<()> = classify_status(409, "conflict".into(), None);
-        assert!(matches!(outcome, SendOutcome::PermanentReject { status: 409, .. }));
+        assert!(matches!(
+            outcome,
+            SendOutcome::PermanentReject { status: 409, .. }
+        ));
     }
 
     #[test]
     fn classify_426_is_permanent() {
         let outcome: SendOutcome<()> = classify_status(426, "upgrade".into(), None);
-        assert!(matches!(outcome, SendOutcome::PermanentReject { status: 426, .. }));
+        assert!(matches!(
+            outcome,
+            SendOutcome::PermanentReject { status: 426, .. }
+        ));
     }
 
     #[test]
     fn classify_503_is_server_busy() {
         let outcome: SendOutcome<()> = classify_status(503, "busy".into(), None);
-        assert!(matches!(outcome, SendOutcome::ServerBusy { status: 503, .. }));
+        assert!(matches!(
+            outcome,
+            SendOutcome::ServerBusy { status: 503, .. }
+        ));
     }
 
     #[test]

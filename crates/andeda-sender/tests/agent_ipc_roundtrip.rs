@@ -49,7 +49,9 @@ async fn apply_policy_round_trips_against_fake_agent() {
     let agent_resp = apply_policy(&socket_for_client, &response).await.unwrap();
     assert!(agent_resp.ok);
     match agent_resp.apply_policy.unwrap() {
-        ApplyPolicyResult::Accepted { applied_policy_version } => {
+        ApplyPolicyResult::Accepted {
+            applied_policy_version,
+        } => {
             assert_eq!(applied_policy_version, 7);
         }
         other => panic!("expected Accepted, got {other:?}"),
