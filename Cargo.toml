@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/andeda-core", "crates/andeda-agent", "crates/andeda-spool", "crates/andeda-rules-basic"]
+members = ["crates/andeda-core", "crates/andeda-agent", "crates/andeda-spool", "crates/andeda-rules-basic", "crates/andeda-sender"]
 resolver = "2"
 
 [workspace.package]
@@ -35,6 +35,13 @@ insta = { version = "1", features = ["yaml", "json"] }
 proptest = "1"
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
 data-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
+http = "1"
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
+tower = "0.5"
+urlencoding = "2"
 
 [profile.release]
 panic = "unwind"

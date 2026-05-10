@@ -58,5 +58,12 @@ fn evidence_kind_str(e: &andeda_core::event::Evidence) -> &'static str {
         PolicyExpiredActive { .. } => "policy_expired_active",
         AgentJsonlForceGc { .. } => "agent_jsonl_force_gc",
         SenderSkippedSegment { .. } => "sender_skipped_segment",
+        HostIdConflict { .. } => "host_id_conflict",
+        AgentTooOld { .. } => "agent_too_old",
+        CertExpired { .. } => "cert_expired",
+        TlsFailure { .. } => "tls_failure",
+        EventUnprocessableLocal { .. } => "event_unprocessable_local",
+        ServerProtocolViolation { .. } => "server_protocol_violation",
+        SenderLagCritical { .. } => "sender_lag_critical",
     }
 }
