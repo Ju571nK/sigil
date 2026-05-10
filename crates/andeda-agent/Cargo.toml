@@ -32,6 +32,8 @@ clap = { workspace = true }
 parking_lot = { workspace = true }
 dunce = { workspace = true }
 tempfile = { workspace = true }
+mac_address = "1.1"
+blake3 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

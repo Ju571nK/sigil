@@ -101,6 +101,64 @@ impl UserEnumerator for MacosPlatform {
     }
 }
 
+use super::hw_fingerprint::{pick_stable_mac, HardwareFingerprint, IfaceKind};
+
+impl HardwareFingerprint for MacosPlatform {
+    fn platform_uuid(&self) -> String {
+        match Command::new("system_profiler")
+            .args(["SPHardwareDataType"])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                let s = String::from_utf8_lossy(&out.stdout);
+                for line in s.lines() {
+                    let line = line.trim();
+                    if let Some(rest) = line.strip_prefix("Hardware UUID:") {
+                        return rest.trim().to_string();
+                    }
+                }
+                String::new()
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn stable_mac(&self) -> String {
+        // MacAddressIterator yields MacAddress values with no name attached.
+        // Use name_by_mac_address to resolve interface name for each entry.
+        let ifaces: Vec<(String, [u8; 6])> = mac_address::MacAddressIterator::new()
+            .map(|it| {
+                it.filter_map(|m| {
+                    let bytes = m.bytes();
+                    let name = mac_address::name_by_mac_address(&m)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if name.is_empty() {
+                        None
+                    } else {
+                        Some((name, bytes))
+                    }
+                })
+                .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        pick_stable_mac(ifaces, |_| IfaceKind::Other)
+    }
+
+    fn cpu_brand(&self) -> String {
+        match Command::new("sysctl")
+            .args(["-n", "machdep.cpu.brand_string"])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            }
+            _ => String::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
