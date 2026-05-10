@@ -66,6 +66,25 @@ pub enum AgentDyingReason {
     Signal,
 }
 
+/// Spec §3.8.2 rejection reasons. Stable wire strings — operators filter by
+/// these in the SIEM, so renames are breaking changes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicySignatureInvalidReason {
+    /// `signing_pubkey_id` not present in the keystore at all.
+    PubkeyUnknown,
+    /// Keystore entry exists but `now` is outside its validity window.
+    PubkeyInactive,
+    /// Pubkey resolved but ed25519 verification failed against the canonical bytes.
+    SignatureInvalid,
+    /// `now >= signed_envelope.valid_until`.
+    Expired,
+    /// `policy_version <= host_meta.last_applied_policy_version` (replay or rollback).
+    VersionRegression,
+    /// Base64 decode succeeded but the YAML did not parse to a `Policy`.
+    ParseFailed,
+}
+
 /// The observation payload of an event.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -126,6 +145,20 @@ pub enum Evidence {
         prev_fingerprint: String,
         /// Freshly-computed fingerprint hex.
         new_fingerprint: String,
+    },
+    /// Spec §3.8.2: a `SignedPolicyResponse` was rejected by the verification
+    /// chain. Emitted by the agent when an inbound envelope fails any check;
+    /// the policy is NOT applied and `last_applied_policy_version` is NOT
+    /// advanced.
+    PolicySignatureInvalid {
+        /// Which check failed.
+        reason: PolicySignatureInvalidReason,
+        /// `signing_pubkey_id` from the rejected response (operator triage).
+        signing_pubkey_id: String,
+        /// `policy_version` claimed by the rejected envelope.
+        policy_version_in_envelope: i64,
+        /// The agent's current `last_applied_policy_version` at rejection time.
+        last_applied_policy_version: i64,
     },
 }
 
@@ -300,6 +333,37 @@ mod tests {
         };
         let j = serde_json::to_string(&ev).unwrap();
         assert!(j.contains("2026-05-08T14:23:45Z"));
+    }
+
+    #[test]
+    fn policy_signature_invalid_serializes_with_reason_field() {
+        let ev = Evidence::PolicySignatureInvalid {
+            reason: PolicySignatureInvalidReason::PubkeyUnknown,
+            signing_pubkey_id: "andeda-policy-2026-05".into(),
+            policy_version_in_envelope: 42,
+            last_applied_policy_version: 41,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"kind\":\"policy_signature_invalid\""), "got: {s}");
+        assert!(s.contains("\"reason\":\"pubkey_unknown\""));
+        assert!(s.contains("\"signing_pubkey_id\":\"andeda-policy-2026-05\""));
+        assert!(s.contains("\"policy_version_in_envelope\":42"));
+        assert!(s.contains("\"last_applied_policy_version\":41"));
+    }
+
+    #[test]
+    fn each_reason_renders_as_snake_case() {
+        for (variant, expected) in [
+            (PolicySignatureInvalidReason::PubkeyUnknown, "pubkey_unknown"),
+            (PolicySignatureInvalidReason::PubkeyInactive, "pubkey_inactive"),
+            (PolicySignatureInvalidReason::SignatureInvalid, "signature_invalid"),
+            (PolicySignatureInvalidReason::Expired, "expired"),
+            (PolicySignatureInvalidReason::VersionRegression, "version_regression"),
+            (PolicySignatureInvalidReason::ParseFailed, "parse_failed"),
+        ] {
+            let s = serde_json::to_string(&variant).unwrap();
+            assert_eq!(s, format!("\"{expected}\""));
+        }
     }
 
     #[test]

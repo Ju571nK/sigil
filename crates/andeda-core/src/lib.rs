@@ -16,4 +16,5 @@ pub mod sink;
 pub mod state;
 pub mod stats;
 
+pub use event::PolicySignatureInvalidReason;
 pub use host_meta::HostMeta;
