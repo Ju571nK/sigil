@@ -8,6 +8,7 @@ pub mod config;
 pub mod control_task;
 pub mod data_task;
 pub mod dead_letter;
+pub mod heartbeat;
 pub mod manifest;
 pub mod state;
 pub mod transport;
