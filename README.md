@@ -140,4 +140,7 @@ Use this software at your own risk.
 Commercial support, hosted services, enterprise features, paid add-ons,
 consulting, or professional services may be offered separately in the future.
 
+Some future commercial features, hosted components, enterprise modules, or
+binary-only add-ons may be distributed under separate commercial terms.
+
 The open-source version remains available under the Apache License 2.0.
