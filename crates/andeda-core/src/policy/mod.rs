@@ -192,46 +192,21 @@ pub fn merge(
 /// Built-in defaults for the current OS, parsed from a compile-time-embedded YAML.
 ///
 /// Source data lives in the `andeda-rules-basic` crate so the OSS baseline
-/// ruleset can evolve (and be re-licensed/swapped for commercial packs)
-/// without touching `andeda-core`.
-///
-/// When the `pro` feature is enabled, the extended ruleset from
-/// `andeda-rules-pro` is merged on top of the baseline (target IDs from
-/// the pro pack take precedence on collision).
+/// ruleset can evolve independently. Extended/commercial rule packs ship
+/// as **signed policy bundles** (Plan B) delivered over the Phase 2
+/// transport — they are NOT linked into the OSS binary at build time.
+/// See `LICENSING.md` for the rationale.
 pub fn defaults() -> Result<PolicyDocument, PolicyError> {
-    #[cfg_attr(not(feature = "pro"), allow(unused_mut))]
-    let mut doc = match andeda_rules_basic::defaults_for_current_os() {
-        Some(yaml) => parse(yaml)?,
-        None => PolicyDocument {
+    match andeda_rules_basic::defaults_for_current_os() {
+        Some(yaml) => parse(yaml),
+        None => Ok(PolicyDocument {
             // Linux build-only: baseline is empty.
             version: 1,
             host_id_strategy: HostIdStrategy::MachineId,
             overrides: vec![],
             targets: vec![],
-        },
-    };
-
-    #[cfg(feature = "pro")]
-    if let Some(yaml) = andeda_rules_pro::defaults_for_current_os() {
-        let pro = parse(yaml)?;
-        merge_targets(&mut doc, pro);
+        }),
     }
-
-    Ok(doc)
-}
-
-/// Merge `pro` targets into `base`. Pro target IDs override baseline IDs;
-/// new IDs are appended.
-#[cfg(feature = "pro")]
-fn merge_targets(base: &mut PolicyDocument, pro: PolicyDocument) {
-    use std::collections::HashMap;
-    let mut by_id: HashMap<String, WatchTarget> =
-        base.targets.drain(..).map(|t| (t.id.clone(), t)).collect();
-    for t in pro.targets {
-        by_id.insert(t.id.clone(), t);
-    }
-    base.targets = by_id.into_values().collect();
-    base.targets.sort_by(|a, b| a.id.cmp(&b.id));
 }
 
 // Silence unused-import warning when `PathBuf` is only used via submodules.

@@ -108,37 +108,37 @@ This is the recommended distribution form for closed rule packs.
 
 ---
 
-## Building with the `pro` feature
+## Distributing the pro rule pack — signed bundles, not build linking
 
-The OSS daemon links the commercial rule pack only when the `pro` Cargo
-feature is enabled. Without the feature, `andeda-rules-pro` is not a
-dependency at all — the OSS build does not require any access to the
-private repo.
+The OSS daemon does **not** link `andeda-rules-pro` at build time. We
+considered a Cargo `pro` feature gated behind a private git dep, but
+Cargo records every conditional dep in `Cargo.lock` and tries to fetch
+on every build, which (a) breaks OSS CI on forks/PRs without SSH access
+to the private repo and (b) leaks the private URL into a public lock
+file. The cleaner architecture — already enabled by Plan A — is to ship
+extended rule packs as **signed policy bundles**.
 
-**Building with pro** (requires SSH access to
-[Ju571nK/anti_i-rules-pro](https://github.com/Ju571nK/anti_i-rules-pro)):
+**The pipeline (already shipped in Plan A)**:
+1. `andeda-rules-pro` (private repo) holds the YAML rule sources.
+2. A signing tool (Plan B `andeda-sender` companion) wraps a YAML
+   payload in a [`SignedEnvelope`](crates/andeda-core/src/policy/signed_envelope.rs)
+   using a private ed25519 key.
+3. `andeda-sender` (Plan B) ships the envelope to fleet hosts over the
+   Phase 2 transport (mTLS + apply_policy IPC).
+4. The OSS agent verifies via [`verify_envelope`](crates/andeda-core/src/policy/verify.rs)
+   (5-check chain), commits via [`atomic_write`](crates/andeda-core/src/policy/atomic_writer.rs),
+   and emits `PolicyReloaded` — all paths operators can audit.
 
-```sh
-cargo build --workspace --features pro
-cargo test  --workspace --features pro
-```
+**Why this is better than build-time linking**:
+- OSS binary stays trivially reproducible — one artifact, no secret deps.
+- Rule pack iteration doesn't require an agent rebuild — push a signed
+  YAML and the live fleet picks it up.
+- Customer-specific rule packs are possible without a per-customer build.
+- Aligns with the open-mechanism / closed-content split this document
+  describes — the signing key is the only secret the daemon needs to
+  trust.
 
-Cargo fetches `andeda-rules-pro` from the private repo over SSH (pinned
-to `branch = "main"`). The repo includes [.cargo/config.toml](.cargo/config.toml)
-with `net.git-fetch-with-cli = true` so cargo uses the system `git` CLI
-(which honors `ssh-agent`) instead of libgit2's broken built-in SSH.
-
-**Local development against an unpushed pro branch**: add a `[patch]`
-section to your local (uncommitted) `Cargo.toml` to redirect the git
-URL to a sibling checkout:
-
-```toml
-[patch."ssh://git@github.com/Ju571nK/anti_i-rules-pro.git"]
-andeda-rules-pro = { path = "../anti_i-rules-pro/crates/andeda-rules-pro" }
-```
-
-**Merge semantics**: `andeda-core::policy::defaults()` first parses the
-baseline ruleset, then (when `pro` is enabled) merges the extended pack
-on top. Target IDs from the pro pack override baseline IDs of the same
-name; new IDs are appended. The merged document is sorted by ID for
-deterministic output.
+**Status**: `andeda-rules-pro` repo holds the rule YAML sources today
+([github.com/Ju571nK/anti_i-rules-pro](https://github.com/Ju571nK/anti_i-rules-pro)).
+The signer + sender pieces land in Plan B; until then the YAML is only
+consumed via the signed-bundle test fixtures used by `verify.rs`.

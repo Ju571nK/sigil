@@ -6,18 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[features]
-default = []
-# Enable the commercial rule pack. Pulled from a private GitHub repo;
-# requires SSH access to Ju571nK/anti_i-rules-pro. For local development
-# (avoid the network round-trip), see the [patch] section in the
-# workspace Cargo.toml. Builds without this feature do not link the
-# pro crate at all.
-pro = ["dep:andeda-rules-pro"]
-
 [dependencies]
 andeda-rules-basic = { path = "../andeda-rules-basic" }
-andeda-rules-pro = { git = "ssh://git@github.com/Ju571nK/anti_i-rules-pro.git", branch = "main", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
