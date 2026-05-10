@@ -20,3 +20,4 @@ pub mod test_support;
 pub mod watcher;
 pub mod sender_offset;
 pub mod gc_config;
+pub mod jsonl_gc;
