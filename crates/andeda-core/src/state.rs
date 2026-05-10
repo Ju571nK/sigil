@@ -11,7 +11,7 @@ pub enum StateError {
 }
 
 pub struct HashCache {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl HashCache {

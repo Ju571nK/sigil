@@ -9,8 +9,11 @@ pub mod debounce;
 pub mod event;
 pub mod hashing;
 pub mod host_id;
+pub mod host_meta;
 pub mod policy;
 pub mod ratelimit;
 pub mod sink;
 pub mod state;
 pub mod stats;
+
+pub use host_meta::HostMeta;
