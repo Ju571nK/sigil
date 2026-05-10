@@ -10,6 +10,7 @@ pub mod heartbeat;
 pub mod host_meta_task;
 pub mod normalizer;
 pub mod platform;
+pub mod policy_expiry_task;
 pub mod runtime;
 pub mod show;
 pub mod sink_task;

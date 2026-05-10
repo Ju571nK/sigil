@@ -4,7 +4,9 @@ use crate::state_task::CommittableEvent;
 use andeda_core::event::{
     Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
+use andeda_core::state::HashCache;
 use andeda_core::stats::Stats;
+use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +18,8 @@ use uuid::Uuid;
 
 pub async fn run(
     stats: Arc<Stats>,
+    cache: Arc<Mutex<HashCache>>,
+    policy_expired_active: Arc<RwLock<bool>>,
     host_id: String,
     watcher_backend: &'static str,
     state_db_path: PathBuf,
@@ -29,11 +33,11 @@ pub async fn run(
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => {
-                emit(&stats, &host_id, watcher_backend, &state_db_path, &tx, started, true).await;
+                emit(&stats, &cache, &policy_expired_active, &host_id, watcher_backend, &state_db_path, &tx, started, true).await;
                 break;
             }
             _ = tick.tick() => {
-                emit(&stats, &host_id, watcher_backend, &state_db_path, &tx, started, false).await;
+                emit(&stats, &cache, &policy_expired_active, &host_id, watcher_backend, &state_db_path, &tx, started, false).await;
             }
         }
     }
@@ -41,6 +45,8 @@ pub async fn run(
 
 async fn emit(
     stats: &Arc<Stats>,
+    cache: &Arc<Mutex<HashCache>>,
+    policy_expired_active: &Arc<RwLock<bool>>,
     host_id: &str,
     watcher_backend: &'static str,
     state_db_path: &PathBuf,
@@ -52,6 +58,12 @@ async fn emit(
     let state_db_size_bytes = std::fs::metadata(state_db_path)
         .map(|m| m.len())
         .unwrap_or(0);
+    let last_applied_policy_version = cache
+        .lock()
+        .host_meta_get()
+        .map(|m| m.last_applied_policy_version)
+        .unwrap_or(0);
+    let policy_expired = *policy_expired_active.read();
     let evidence = Evidence::Heartbeat {
         uptime_s: started.elapsed().as_secs(),
         is_final,
@@ -63,6 +75,8 @@ async fn emit(
         watcher_backend: watcher_backend.to_string(),
         state_db_size_bytes,
         last_log_rotation_ts: None,
+        last_applied_policy_version,
+        policy_expired_active: policy_expired,
     };
     let event = Event {
         schema_version: SCHEMA_VERSION,
@@ -84,4 +98,49 @@ async fn emit(
             target_id: String::new(),
         })
         .await;
+}
+
+#[cfg(test)]
+mod field_tests {
+    use super::*;
+    use andeda_core::state::HashCache;
+    use parking_lot::{Mutex, RwLock};
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn heartbeat_carries_policy_fields() {
+        let dir = tempdir().unwrap();
+        let cache = HashCache::open(&dir.path().join("state.db")).unwrap();
+        cache.host_meta_set_policy_version(42).unwrap();
+        let cache = Arc::new(Mutex::new(cache));
+        let expired = Arc::new(RwLock::new(true));
+        let stats = andeda_core::stats::Stats::shared();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+        emit(
+            &stats,
+            &cache,
+            &expired,
+            "test-host",
+            "stub",
+            &dir.path().join("state.db"),
+            &tx,
+            std::time::Instant::now(),
+            false,
+        )
+        .await;
+
+        let ev = rx.recv().await.unwrap();
+        match ev.event.evidence {
+            Evidence::Heartbeat {
+                last_applied_policy_version,
+                policy_expired_active,
+                ..
+            } => {
+                assert_eq!(last_applied_policy_version, 42);
+                assert!(policy_expired_active);
+            }
+            other => panic!("expected Heartbeat, got {other:?}"),
+        }
+    }
 }

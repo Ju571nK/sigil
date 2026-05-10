@@ -218,6 +218,11 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // Heartbeat
     {
         let stats_h = stats.clone();
+        let cache_h = cache.clone();
+        // TODO(A6.5): share this flag with ExpiryTaskCtx and ControlContext.
+        // For now a placeholder Arc<RwLock<bool>>(false) is used until A6.5
+        // wires the full ExpiryTaskCtx and passes the real shared flag here.
+        let expired_h = Arc::new(parking_lot::RwLock::new(false));
         let host_id_h = host_id.clone();
         let cancel_h = cancel.clone();
         let tx_h = tx_sink.clone();
@@ -227,6 +232,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             tokio::spawn(async move {
                 heartbeat::run(
                     stats_h,
+                    cache_h,
+                    expired_h,
                     host_id_h,
                     backend_name,
                     dbp,

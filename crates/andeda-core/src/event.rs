@@ -110,6 +110,10 @@ pub enum Evidence {
         state_db_size_bytes: u64,
         #[serde(with = "time::serde::rfc3339::option")]
         last_log_rotation_ts: Option<OffsetDateTime>,
+        /// Phase 2: agent's currently-applied policy version (0 if none yet).
+        last_applied_policy_version: i64,
+        /// Phase 2: `true` iff the active envelope's valid_until is in the past.
+        policy_expired_active: bool,
     },
     PermissionMissing {
         resource: String,
@@ -165,6 +169,18 @@ pub enum Evidence {
     PolicyReloaded {
         /// The new `last_applied_policy_version`.
         policy_version: i64,
+    },
+    /// Spec §3.10: emitted exactly once per "transition into expired".
+    /// The agent continues to enforce the expired policy until a replacement
+    /// arrives — `valid_until` is informational, not blocking. (Spec §1.4
+    /// "Active policy passing valid_until" — agent keeps applying the last
+    /// good policy on the local file system; SIEM operators triage.)
+    PolicyExpiredActive {
+        /// The version of the policy whose `valid_until` was crossed.
+        policy_version: i64,
+        /// RFC 3339 — when `valid_until` was crossed.
+        #[serde(with = "time::serde::rfc3339")]
+        valid_until: time::OffsetDateTime,
     },
 }
 
@@ -312,6 +328,8 @@ mod tests {
             watcher_backend: "fsevents".into(),
             state_db_size_bytes: 0,
             last_log_rotation_ts: None,
+            last_applied_policy_version: 0,
+            policy_expired_active: false,
         };
         let j = serde_json::to_string(&ev).unwrap();
         assert!(j.starts_with(r#"{"kind":"heartbeat""#));

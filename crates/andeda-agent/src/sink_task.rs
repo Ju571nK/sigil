@@ -55,5 +55,6 @@ fn evidence_kind_str(e: &andeda_core::event::Evidence) -> &'static str {
         HostIdFingerprintDrift { .. } => "host_id_fingerprint_drift",
         PolicySignatureInvalid { .. } => "policy_signature_invalid",
         PolicyReloaded { .. } => "policy_reloaded",
+        PolicyExpiredActive { .. } => "policy_expired_active",
     }
 }
