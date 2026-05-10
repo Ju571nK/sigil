@@ -5,10 +5,12 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use thiserror::Error;
 
+pub mod canonical;
 pub mod expand;
 pub mod glob;
 pub mod signed_envelope;
 
+pub use canonical::{to_canonical_bytes, CanonicalError};
 pub use signed_envelope::{SignedEnvelope, SignedPolicyResponse};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
