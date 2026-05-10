@@ -206,6 +206,39 @@ pub enum Evidence {
         #[serde(with = "time::serde::rfc3339")]
         valid_until: time::OffsetDateTime,
     },
+    /// Sender saw HTTP 409 from /v1/events: host_id bound to a different cert.
+    HostIdConflict {
+        observed_status: u16,
+    },
+    /// Sender saw HTTP 426 from /v1/events: agent is two minor versions or older.
+    AgentTooOld {
+        observed_status: u16,
+        agent_version: String,
+    },
+    /// Sender's client cert past `valid_until` or close to it.
+    CertExpired {
+        #[serde(with = "time::serde::rfc3339")]
+        cert_expires_at: time::OffsetDateTime,
+    },
+    /// TLS handshake failure (CA mismatch, expired cert, etc.).
+    TlsFailure {
+        reason: String,
+    },
+    /// Per-event hard rejection logged locally for operator audit.
+    EventUnprocessableLocal {
+        original_event_id: uuid::Uuid,
+        server_reason: String,
+    },
+    /// Server returned 200 without `high_water_event_id` (or other shape break).
+    ServerProtocolViolation {
+        detail: String,
+    },
+    /// `oldest_unsent_age` exceeded the agent's JSONL retention window.
+    SenderLagCritical {
+        lag_events: u64,
+        lag_bytes: u64,
+        oldest_unsent_age_s: u64,
+    },
 }
 
 /// Schema version. Bumps follow the policy in spec section 3.3.
@@ -443,6 +476,38 @@ mod tests {
         );
         assert!(s.contains("\"prev_fingerprint\":\"deadbeef\""));
         assert!(s.contains("\"new_fingerprint\":\"cafef00d\""));
+    }
+
+    #[test]
+    fn sender_variants_serialize_with_kind_tag() {
+        let cases = [
+            (Evidence::HostIdConflict { observed_status: 409 }, "host_id_conflict"),
+            (
+                Evidence::AgentTooOld { observed_status: 426, agent_version: "0.1.0".into() },
+                "agent_too_old",
+            ),
+            (
+                Evidence::CertExpired { cert_expires_at: time::macros::datetime!(2026-01-01 0:00 UTC) },
+                "cert_expired",
+            ),
+            (Evidence::TlsFailure { reason: "x".into() }, "tls_failure"),
+            (
+                Evidence::EventUnprocessableLocal {
+                    original_event_id: uuid::Uuid::nil(),
+                    server_reason: "x".into(),
+                },
+                "event_unprocessable_local",
+            ),
+            (Evidence::ServerProtocolViolation { detail: "x".into() }, "server_protocol_violation"),
+            (
+                Evidence::SenderLagCritical { lag_events: 1, lag_bytes: 2, oldest_unsent_age_s: 3 },
+                "sender_lag_critical",
+            ),
+        ];
+        for (ev, expected_kind) in cases {
+            let s = serde_json::to_string(&ev).unwrap();
+            assert!(s.contains(&format!("\"kind\":\"{expected_kind}\"")), "for {expected_kind}: {s}");
+        }
     }
 
     #[test]
