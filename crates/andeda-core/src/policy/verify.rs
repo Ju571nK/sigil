@@ -140,9 +140,34 @@ pub fn verify_envelope(
         return Err(VerifyError::SignatureInvalid);
     }
 
-    // Checks 3, 4, 5 added in Task A5.4.
-    let _ = last_applied_policy_version;
-    Err(VerifyError::SignatureInvalid)
+    // ─── Check 3: valid_until in future ──────────────────────────────────
+    if now >= response.signed_envelope.valid_until {
+        return Err(VerifyError::Expired);
+    }
+
+    // ─── Check 4: policy_version monotonic ───────────────────────────────
+    let envelope_version = response.signed_envelope.policy_version;
+    if envelope_version <= last_applied_policy_version {
+        return Err(VerifyError::VersionRegression {
+            envelope: envelope_version,
+            last_applied: last_applied_policy_version,
+        });
+    }
+
+    // ─── Check 5: decode + parse policy YAML ─────────────────────────────
+    let policy_bytes = response
+        .signed_envelope
+        .decode_policy_bytes()
+        .map_err(|e| VerifyError::ParseFailed(format!("base64: {e}")))?;
+    let policy: PolicyDocument = serde_yaml::from_slice(&policy_bytes)
+        .map_err(|e| VerifyError::ParseFailed(format!("yaml: {e}")))?;
+
+    Ok(VerifiedPolicy {
+        policy,
+        policy_version: envelope_version,
+        policy_bytes,
+        signing_pubkey_id: response.signing_pubkey_id.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -300,5 +325,109 @@ mod tests {
             Some(PolicySignatureInvalidReason::ParseFailed)
         );
         assert_eq!(VerifyError::Internal("io".into()).reason(), None);
+    }
+
+    #[test]
+    fn check3_envelope_already_expired_returns_expired() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let mut env = well_formed_envelope(10, now);
+        env.valid_until = now - time::Duration::seconds(1);
+        let resp = sign_response(&sk, env, "k1", now);
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::Expired)));
+    }
+
+    #[test]
+    fn check3_envelope_at_exact_valid_until_is_expired() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let mut env = well_formed_envelope(10, now);
+        env.valid_until = now;
+        let resp = sign_response(&sk, env, "k1", now);
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::Expired)));
+    }
+
+    #[test]
+    fn check4_same_version_as_last_applied_returns_version_regression() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let env = well_formed_envelope(10, now);
+        let resp = sign_response(&sk, env, "k1", now);
+
+        let r = verify_envelope(&store, &resp, now, 10);
+        assert!(matches!(
+            r,
+            Err(VerifyError::VersionRegression { envelope: 10, last_applied: 10 })
+        ));
+    }
+
+    #[test]
+    fn check4_lower_version_returns_version_regression() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let env = well_formed_envelope(5, now);
+        let resp = sign_response(&sk, env, "k1", now);
+
+        let r = verify_envelope(&store, &resp, now, 10);
+        assert!(matches!(
+            r,
+            Err(VerifyError::VersionRegression { envelope: 5, last_applied: 10 })
+        ));
+    }
+
+    #[test]
+    fn check5_undecodable_base64_returns_parse_failed() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let mut env = well_formed_envelope(10, now);
+        env.policy_bytes_b64 = "not!base64!".into();
+        let resp = sign_response(&sk, env, "k1", now);
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::ParseFailed(_))));
+    }
+
+    #[test]
+    fn check5_invalid_yaml_returns_parse_failed() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let mut env = well_formed_envelope(10, now);
+        env.policy_bytes_b64 = data_encoding::BASE64.encode(b"\xff\xfe not yaml :::");
+        let resp = sign_response(&sk, env, "k1", now);
+
+        let r = verify_envelope(&store, &resp, now, 0);
+        assert!(matches!(r, Err(VerifyError::ParseFailed(_))));
+    }
+
+    #[test]
+    fn happy_path_returns_verified_policy() {
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let env = well_formed_envelope(10, now);
+        let resp = sign_response(&sk, env, "k1", now);
+
+        let r = verify_envelope(&store, &resp, now, 9);
+        let v = r.expect("happy path should succeed");
+        assert_eq!(v.policy_version, 10);
+        assert_eq!(v.signing_pubkey_id, "k1");
+        assert_eq!(v.policy_bytes, b"version: 1\nrules: []\n");
+    }
+
+    #[test]
+    fn checks_run_in_spec_order() {
+        // An envelope failing check 3 + 4 + 5 → must report Expired (check 3).
+        let now = datetime!(2026-05-15 0:00 UTC);
+        let (store, sk) = fixture(now);
+        let mut env = well_formed_envelope(1, now);
+        env.valid_until = now - time::Duration::seconds(1);
+        env.policy_bytes_b64 = "not!base64!".into();
+        let resp = sign_response(&sk, env, "k1", now);
+
+        let r = verify_envelope(&store, &resp, now, 100);
+        assert!(matches!(r, Err(VerifyError::Expired)));
     }
 }
