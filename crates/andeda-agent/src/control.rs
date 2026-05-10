@@ -92,10 +92,14 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
         Request::ApplyPolicy { response } => {
             let outcome = apply(&ctx.apply_ctx, &response).await;
             match outcome {
-                ApplyOutcome::Accepted { applied_policy_version } => Response {
+                ApplyOutcome::Accepted {
+                    applied_policy_version,
+                } => Response {
                     ok: true,
                     stats: None,
-                    apply_policy: Some(ApplyPolicyResult::Accepted { applied_policy_version }),
+                    apply_policy: Some(ApplyPolicyResult::Accepted {
+                        applied_policy_version,
+                    }),
                     policy_status: None,
                     error: None,
                 },
@@ -125,7 +129,8 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 .unwrap_or(0);
             let valid_until_snapshot = *ctx.active_valid_until.read();
             let valid_until_str = valid_until_snapshot.and_then(|t| {
-                t.format(&time::format_description::well_known::Rfc3339).ok()
+                t.format(&time::format_description::well_known::Rfc3339)
+                    .ok()
             });
             let expired = valid_until_snapshot
                 .map(|t| time::OffsetDateTime::now_utc() >= t)
@@ -253,7 +258,9 @@ mod tests {
 
     #[test]
     fn apply_policy_request_round_trips() {
-        let req = Request::ApplyPolicy { response: sample_response() };
+        let req = Request::ApplyPolicy {
+            response: sample_response(),
+        };
         let s = serde_json::to_string(&req).unwrap();
         // The cmd discriminator MUST be exactly "apply_policy" (snake_case is
         // wrong here — the existing Phase 1 control protocol uses lowercase).

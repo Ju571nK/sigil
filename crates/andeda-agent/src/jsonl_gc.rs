@@ -181,9 +181,11 @@ mod tests {
     #[test]
     fn under_soft_floor_deletes_nothing() {
         let now = datetime!(2026-05-15 12:00 UTC);
-        let segs = vec![
-            seg("events-2026-05-15.jsonl", 50, now - Duration::from_secs(60)),
-        ];
+        let segs = vec![seg(
+            "events-2026-05-15.jsonl",
+            50,
+            now - Duration::from_secs(60),
+        )];
         let d = decide(&segs, None, "events-2026-05-15.jsonl", &cfg(), now);
         assert!(d.to_delete.is_empty());
         assert!(!d.above_soft_floor);
@@ -233,8 +235,16 @@ mod tests {
     fn above_hard_ceiling_force_deletes_past_sender() {
         let now = datetime!(2026-05-15 12:00 UTC);
         let segs = vec![
-            seg("events-2026-05-13.jsonl", 600, now - Duration::from_secs(60)),
-            seg("events-2026-05-14.jsonl", 600, now - Duration::from_secs(60)),
+            seg(
+                "events-2026-05-13.jsonl",
+                600,
+                now - Duration::from_secs(60),
+            ),
+            seg(
+                "events-2026-05-14.jsonl",
+                600,
+                now - Duration::from_secs(60),
+            ),
         ];
         // total = 1200 > hard (1000). Sender is still on 05-13 (none consumed).
         let off = SenderOffset {
@@ -256,15 +266,29 @@ mod tests {
         let now = datetime!(2026-05-15 12:00 UTC);
         let segs = vec![
             // ~3 hours old → above hard age (2h).
-            seg("events-2026-05-15-001.jsonl", 50, now - Duration::from_secs(3 * 3600)),
-            seg("events-2026-05-15-002.jsonl", 50, now - Duration::from_secs(60)),
+            seg(
+                "events-2026-05-15-001.jsonl",
+                50,
+                now - Duration::from_secs(3 * 3600),
+            ),
+            seg(
+                "events-2026-05-15-002.jsonl",
+                50,
+                now - Duration::from_secs(60),
+            ),
         ];
         let off = SenderOffset {
             current_segment: "events-2026-05-15-001.jsonl".into(),
             byte_offset: 10,
             updated_at: now,
         };
-        let d = decide(&segs, Some(&off), "events-2026-05-15-002.jsonl", &cfg(), now);
+        let d = decide(
+            &segs,
+            Some(&off),
+            "events-2026-05-15-002.jsonl",
+            &cfg(),
+            now,
+        );
         assert!(d.hard_ceiling_fired);
         assert_eq!(d.to_delete.len(), 1);
         assert_eq!(d.force_deleted_past_sender, 1);

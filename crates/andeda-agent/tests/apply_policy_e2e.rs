@@ -20,7 +20,9 @@ use tokio_util::sync::CancellationToken;
 #[tokio::test]
 async fn apply_policy_writes_yaml_advances_version_emits_reloaded_and_no_expiry_yet() {
     let dir = tempdir().unwrap();
-    let cache = Arc::new(Mutex::new(HashCache::open(&dir.path().join("state.db")).unwrap()));
+    let cache = Arc::new(Mutex::new(
+        HashCache::open(&dir.path().join("state.db")).unwrap(),
+    ));
     let now = OffsetDateTime::now_utc();
 
     // Keystore with one valid pubkey — use fill_bytes workaround (same as A6.3).
@@ -69,7 +71,12 @@ async fn apply_policy_writes_yaml_advances_version_emits_reloaded_and_no_expiry_
     };
 
     let outcome = apply(&apply_ctx, &resp).await;
-    assert_eq!(outcome, ApplyOutcome::Accepted { applied_policy_version: 1 });
+    assert_eq!(
+        outcome,
+        ApplyOutcome::Accepted {
+            applied_policy_version: 1
+        }
+    );
 
     // policy.yaml.
     let bytes = std::fs::read(&policy_path).unwrap();
@@ -77,7 +84,11 @@ async fn apply_policy_writes_yaml_advances_version_emits_reloaded_and_no_expiry_
 
     // state.db.
     assert_eq!(
-        cache.lock().host_meta_get().unwrap().last_applied_policy_version,
+        cache
+            .lock()
+            .host_meta_get()
+            .unwrap()
+            .last_applied_policy_version,
         1
     );
 

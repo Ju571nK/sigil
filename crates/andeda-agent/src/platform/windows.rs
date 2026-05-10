@@ -152,7 +152,10 @@ impl HardwareFingerprint for WindowsPlatform {
     }
 
     fn cpu_brand(&self) -> String {
-        match Command::new("wmic").args(["cpu", "get", "name", "/value"]).output() {
+        match Command::new("wmic")
+            .args(["cpu", "get", "name", "/value"])
+            .output()
+        {
             Ok(out) if out.status.success() => {
                 let s = String::from_utf8_lossy(&out.stdout);
                 for line in s.lines() {

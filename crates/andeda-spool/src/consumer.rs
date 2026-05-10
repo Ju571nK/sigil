@@ -157,7 +157,9 @@ impl Consumer {
     }
 
     fn open_current_if_exists(&mut self) -> Result<(), ConsumerError> {
-        let path = self.spool_dir.join(segment_basename(&self.prefix, self.cur_segment));
+        let path = self
+            .spool_dir
+            .join(segment_basename(&self.prefix, self.cur_segment));
         match File::open(&path) {
             Ok(f) => {
                 self.cur_file = Some(f);

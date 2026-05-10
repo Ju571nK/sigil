@@ -101,9 +101,7 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
                     .host_id
                     .clone()
                     .unwrap_or_else(|| "<not yet generated>".into());
-                println!(
-                    "[OK]   host_id: {host_id_display} (UUIDv4, persisted in state.db)"
-                );
+                println!("[OK]   host_id: {host_id_display} (UUIDv4, persisted in state.db)");
             }
             Err(e) => {
                 println!("[WARN] host_meta_get failed: {e}");

@@ -73,7 +73,10 @@ mod tests {
     fn does_not_have_host_id_field() {
         let e = sample();
         let s = serde_json::to_string(&e).unwrap();
-        assert!(!s.contains("host_id"), "spec §3.8.2: envelope MUST NOT include host_id");
+        assert!(
+            !s.contains("host_id"),
+            "spec §3.8.2: envelope MUST NOT include host_id"
+        );
     }
 
     #[test]

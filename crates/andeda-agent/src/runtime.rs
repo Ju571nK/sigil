@@ -601,10 +601,7 @@ fn default_policy_yaml_path() -> PathBuf {
 /// `state.db.last_applied_policy_version` (crash between rename and version-bump),
 /// advance state.db and return the new version so the caller can emit
 /// `PolicyReloaded` once `tx_sink` is bound.
-fn reconcile_policy_on_boot(
-    cache: &HashCache,
-    policy_path: &Path,
-) -> anyhow::Result<Option<i64>> {
+fn reconcile_policy_on_boot(cache: &HashCache, policy_path: &Path) -> anyhow::Result<Option<i64>> {
     if !policy_path.exists() {
         return Ok(None);
     }

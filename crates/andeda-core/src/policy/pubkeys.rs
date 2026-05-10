@@ -93,9 +93,8 @@ impl Keystore {
             }
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&raw);
-            let key = VerifyingKey::from_bytes(&arr).map_err(|_| {
-                KeystoreError::InvalidPubkeyEncoding { id: id.to_string() }
-            })?;
+            let key = VerifyingKey::from_bytes(&arr)
+                .map_err(|_| KeystoreError::InvalidPubkeyEncoding { id: id.to_string() })?;
             return Ok(Some(key));
         }
         Ok(None)
@@ -131,7 +130,10 @@ mod tests {
         let store = Keystore { pubkeys: vec![] };
         let path = write_keystore(&dir, &store);
         let loaded = Keystore::load_from_file(&path).unwrap();
-        assert!(loaded.active_pubkey("anything", datetime!(2026-05-15 0:00 UTC)).unwrap().is_none());
+        assert!(loaded
+            .active_pubkey("anything", datetime!(2026-05-15 0:00 UTC))
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -167,7 +169,10 @@ mod tests {
         };
         let path = write_keystore(&dir, &store);
         let loaded = Keystore::load_from_file(&path).unwrap();
-        assert!(loaded.active_pubkey("expired", datetime!(2026-01-01 0:00 UTC)).unwrap().is_none());
+        assert!(loaded
+            .active_pubkey("expired", datetime!(2026-01-01 0:00 UTC))
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -184,7 +189,10 @@ mod tests {
         };
         let path = write_keystore(&dir, &store);
         let loaded = Keystore::load_from_file(&path).unwrap();
-        assert!(loaded.active_pubkey("future", datetime!(2026-01-01 0:00 UTC)).unwrap().is_none());
+        assert!(loaded
+            .active_pubkey("future", datetime!(2026-01-01 0:00 UTC))
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -201,7 +209,10 @@ mod tests {
         };
         let path = write_keystore(&dir, &store);
         let loaded = Keystore::load_from_file(&path).unwrap();
-        assert!(loaded.active_pubkey("missing", datetime!(2026-05-15 0:00 UTC)).unwrap().is_none());
+        assert!(loaded
+            .active_pubkey("missing", datetime!(2026-05-15 0:00 UTC))
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -218,7 +229,10 @@ mod tests {
         let path = write_keystore(&dir, &store);
         let loaded = Keystore::load_from_file(&path).unwrap();
         let res = loaded.active_pubkey("bad", datetime!(2026-05-15 0:00 UTC));
-        assert!(matches!(res, Err(KeystoreError::InvalidPubkeyEncoding { .. })));
+        assert!(matches!(
+            res,
+            Err(KeystoreError::InvalidPubkeyEncoding { .. })
+        ));
     }
 
     #[test]
@@ -237,7 +251,10 @@ mod tests {
         let path = write_keystore(&dir, &store);
         let loaded = Keystore::load_from_file(&path).unwrap();
         let res = loaded.active_pubkey("short", datetime!(2026-05-15 0:00 UTC));
-        assert!(matches!(res, Err(KeystoreError::InvalidPubkeyLength { len: 31, .. })));
+        assert!(matches!(
+            res,
+            Err(KeystoreError::InvalidPubkeyLength { len: 31, .. })
+        ));
     }
 
     #[test]

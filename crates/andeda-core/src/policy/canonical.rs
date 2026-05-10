@@ -132,7 +132,10 @@ mod tests {
         let d = Doc {
             b: 2,
             a: 1,
-            nested: Inner { z: "zz".into(), a: 5 },
+            nested: Inner {
+                z: "zz".into(),
+                a: 5,
+            },
         };
         let bytes = to_canonical_bytes(&d).unwrap();
         let s = String::from_utf8(bytes).unwrap();
@@ -144,7 +147,10 @@ mod tests {
         let d = Doc {
             b: 2,
             a: 1,
-            nested: Inner { z: "x".into(), a: 0 },
+            nested: Inner {
+                z: "x".into(),
+                a: 0,
+            },
         };
         let s = String::from_utf8(to_canonical_bytes(&d).unwrap()).unwrap();
         assert!(!s.contains(' '));

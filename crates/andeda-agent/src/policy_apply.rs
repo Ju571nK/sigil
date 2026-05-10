@@ -7,8 +7,8 @@
 //!   4. On Err::Internal: log + 5xx-equivalent (re-tries OK).
 
 use andeda_core::event::{
-    Event, Evidence, PolicySignatureInvalidReason, Severity, SourceKind, Subject,
-    AGENT_VERSION, SCHEMA_VERSION,
+    Event, Evidence, PolicySignatureInvalidReason, Severity, SourceKind, Subject, AGENT_VERSION,
+    SCHEMA_VERSION,
 };
 use andeda_core::policy::{
     atomic_write, pubkeys::Keystore, signed_envelope::SignedPolicyResponse, verify_envelope,
@@ -30,7 +30,9 @@ pub enum ApplyOutcome {
     /// Verifier accepted; disk + state.db advanced.
     Accepted { applied_policy_version: i64 },
     /// Verifier rejected; event emitted; nothing changed on disk or in state.db.
-    Rejected { reason: PolicySignatureInvalidReason },
+    Rejected {
+        reason: PolicySignatureInvalidReason,
+    },
     /// Internal failure (keystore I/O, disk write failure, etc.). Sender SHOULD
     /// retry. NO `PolicySignatureInvalid` event was emitted.
     Internal { detail: String },
@@ -59,7 +61,9 @@ pub async fn apply(ctx: &ApplyContext, response: &SignedPolicyResponse) -> Apply
         match cache.host_meta_get() {
             Ok(m) => m.last_applied_policy_version,
             Err(e) => {
-                return ApplyOutcome::Internal { detail: format!("host_meta_get: {e}") };
+                return ApplyOutcome::Internal {
+                    detail: format!("host_meta_get: {e}"),
+                };
             }
         }
     };
@@ -75,7 +79,9 @@ pub async fn apply(ctx: &ApplyContext, response: &SignedPolicyResponse) -> Apply
             return ApplyOutcome::Internal { detail };
         }
         Err(other) => {
-            let reason = other.reason().expect("non-Internal verify error has a reason");
+            let reason = other
+                .reason()
+                .expect("non-Internal verify error has a reason");
             emit_invalid(ctx, &reason, response, last_applied).await;
             return ApplyOutcome::Rejected { reason };
         }
@@ -101,15 +107,19 @@ pub async fn apply(ctx: &ApplyContext, response: &SignedPolicyResponse) -> Apply
             // receiver is alive we still consider apply successful.
             let _ = ctx.policy_version_tx.send(verified.policy_version);
             emit_reloaded(ctx, verified.policy_version).await;
-            ApplyOutcome::Accepted { applied_policy_version: verified.policy_version }
+            ApplyOutcome::Accepted {
+                applied_policy_version: verified.policy_version,
+            }
         }
-        Err(AtomicWriteError::Io(e)) => {
-            ApplyOutcome::Internal { detail: format!("atomic disk write: {e}") }
-        }
+        Err(AtomicWriteError::Io(e)) => ApplyOutcome::Internal {
+            detail: format!("atomic disk write: {e}"),
+        },
         Err(AtomicWriteError::StateAfterDisk(e)) => {
             // Disk is ahead of state.db. Surface as Internal so the sender
             // retries; reconciliation on next boot will fix the gap.
-            ApplyOutcome::Internal { detail: format!("state-after-disk: {e}") }
+            ApplyOutcome::Internal {
+                detail: format!("state-after-disk: {e}"),
+            }
         }
     }
 }
@@ -158,7 +168,9 @@ async fn emit_reloaded(ctx: &ApplyContext, version: i64) {
         severity: Severity::Info,
         source: SourceKind::Agent,
         subject: Subject::Self_,
-        evidence: Evidence::PolicyReloaded { policy_version: version },
+        evidence: Evidence::PolicyReloaded {
+            policy_version: version,
+        },
         target_id: None,
     };
     let _ = ctx
@@ -236,8 +248,7 @@ mod tests {
     fn well_formed_envelope(version: i64, now: OffsetDateTime) -> SignedEnvelope {
         SignedEnvelope {
             policy_version: version,
-            policy_bytes_b64: data_encoding::BASE64
-                .encode(b"version: 1\nrules: []\n"),
+            policy_bytes_b64: data_encoding::BASE64.encode(b"version: 1\nrules: []\n"),
             valid_until: now + time::Duration::hours(24),
             issued_at: now,
         }
@@ -264,14 +275,25 @@ mod tests {
         let resp = sign(&h.sk, envelope, now);
 
         let outcome = apply(&h.ctx, &resp).await;
-        assert_eq!(outcome, ApplyOutcome::Accepted { applied_policy_version: 1 });
+        assert_eq!(
+            outcome,
+            ApplyOutcome::Accepted {
+                applied_policy_version: 1
+            }
+        );
 
         // policy.yaml exists with the decoded bytes.
         let written = std::fs::read(&h.ctx.policy_yaml_path).unwrap();
         assert_eq!(written, b"version: 1\nrules: []\n");
 
         // state.db advanced.
-        let v = h.ctx.cache.lock().host_meta_get().unwrap().last_applied_policy_version;
+        let v = h
+            .ctx
+            .cache
+            .lock()
+            .host_meta_get()
+            .unwrap()
+            .last_applied_policy_version;
         assert_eq!(v, 1);
 
         // active_valid_until cell mutated to the envelope's valid_until.
@@ -279,7 +301,10 @@ mod tests {
 
         // PolicyReloaded event emitted.
         let ev = h.rx_event.recv().await.unwrap();
-        assert!(matches!(ev.event.evidence, Evidence::PolicyReloaded { policy_version: 1 }));
+        assert!(matches!(
+            ev.event.evidence,
+            Evidence::PolicyReloaded { policy_version: 1 }
+        ));
 
         // Watch channel updated.
         h.rx_version.changed().await.unwrap();
@@ -296,11 +321,19 @@ mod tests {
         let outcome = apply(&h.ctx, &resp).await;
         assert_eq!(
             outcome,
-            ApplyOutcome::Rejected { reason: PolicySignatureInvalidReason::VersionRegression }
+            ApplyOutcome::Rejected {
+                reason: PolicySignatureInvalidReason::VersionRegression
+            }
         );
 
         assert!(!h.ctx.policy_yaml_path.exists());
-        let v = h.ctx.cache.lock().host_meta_get().unwrap().last_applied_policy_version;
+        let v = h
+            .ctx
+            .cache
+            .lock()
+            .host_meta_get()
+            .unwrap()
+            .last_applied_policy_version;
         assert_eq!(v, 5);
 
         // PolicySignatureInvalid event emitted.
@@ -323,7 +356,9 @@ mod tests {
         let outcome = apply(&h.ctx, &resp).await;
         assert_eq!(
             outcome,
-            ApplyOutcome::Rejected { reason: PolicySignatureInvalidReason::PubkeyUnknown }
+            ApplyOutcome::Rejected {
+                reason: PolicySignatureInvalidReason::PubkeyUnknown
+            }
         );
 
         let ev = h.rx_event.recv().await.unwrap();

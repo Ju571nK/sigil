@@ -215,7 +215,11 @@ mod tests {
         dir: &Path,
         current: &str,
         cfg: GcConfig,
-    ) -> (GcTaskCtx, mpsc::Receiver<CommittableEvent>, Arc<RwLock<bool>>) {
+    ) -> (
+        GcTaskCtx,
+        mpsc::Receiver<CommittableEvent>,
+        Arc<RwLock<bool>>,
+    ) {
         let (tx, rx) = mpsc::channel(8);
         let above = Arc::new(RwLock::new(false));
         let curr = Arc::new(RwLock::new(current.to_string()));
@@ -254,8 +258,7 @@ mod tests {
             hard_ceiling_bytes: 1000,
             hard_ceiling_age: Duration::from_secs(7200),
         };
-        let (ctx, mut rx, above) =
-            ctx_for(dir.path(), "events-2026-05-14.jsonl", cfg);
+        let (ctx, mut rx, above) = ctx_for(dir.path(), "events-2026-05-14.jsonl", cfg);
         tick(&ctx).await;
 
         assert!(*above.read());
@@ -303,8 +306,7 @@ mod tests {
             hard_ceiling_bytes: 1000,
             hard_ceiling_age: Duration::from_secs(3600 * 24 * 60),
         };
-        let (ctx, mut rx, above) =
-            ctx_for(dir.path(), "events-2026-05-15.jsonl", cfg);
+        let (ctx, mut rx, above) = ctx_for(dir.path(), "events-2026-05-15.jsonl", cfg);
         tick(&ctx).await;
 
         assert!(*above.read());

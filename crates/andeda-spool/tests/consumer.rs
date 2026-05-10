@@ -1,8 +1,6 @@
 //! Consumer + Checkpoint integration tests.
 
-use andeda_spool::{
-    Checkpoint, Consumer, DurableOffset, Producer, ProducerConfig,
-};
+use andeda_spool::{Checkpoint, Consumer, DurableOffset, Producer, ProducerConfig};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -26,9 +24,18 @@ fn consumer_reads_existing_lines_in_order() {
     let mut cp = Checkpoint::open(&cp_path).unwrap();
     let mut c = Consumer::open(dir.path(), "events", &mut cp).unwrap();
 
-    let r0 = c.next_with_timeout(Duration::from_millis(100)).unwrap().unwrap();
-    let r1 = c.next_with_timeout(Duration::from_millis(100)).unwrap().unwrap();
-    let r2 = c.next_with_timeout(Duration::from_millis(100)).unwrap().unwrap();
+    let r0 = c
+        .next_with_timeout(Duration::from_millis(100))
+        .unwrap()
+        .unwrap();
+    let r1 = c
+        .next_with_timeout(Duration::from_millis(100))
+        .unwrap()
+        .unwrap();
+    let r2 = c
+        .next_with_timeout(Duration::from_millis(100))
+        .unwrap()
+        .unwrap();
     assert_eq!(r0.bytes, b"alpha");
     assert_eq!(r1.bytes, b"beta");
     assert_eq!(r2.bytes, b"gamma");
@@ -47,10 +54,16 @@ fn consumer_resumes_from_checkpoint_after_drop() {
     {
         let mut cp = Checkpoint::open(&cp_path).unwrap();
         let mut c = Consumer::open(dir.path(), "events", &mut cp).unwrap();
-        let r = c.next_with_timeout(Duration::from_millis(100)).unwrap().unwrap();
+        let r = c
+            .next_with_timeout(Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
         assert_eq!(r.bytes, b"one");
         cp.advance(r.offset).unwrap();
-        let r = c.next_with_timeout(Duration::from_millis(100)).unwrap().unwrap();
+        let r = c
+            .next_with_timeout(Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
         assert_eq!(r.bytes, b"two");
         cp.advance(r.offset).unwrap();
     }
@@ -58,7 +71,10 @@ fn consumer_resumes_from_checkpoint_after_drop() {
     // Second session: should resume at "three".
     let mut cp = Checkpoint::open(&cp_path).unwrap();
     let mut c = Consumer::open(dir.path(), "events", &mut cp).unwrap();
-    let r = c.next_with_timeout(Duration::from_millis(100)).unwrap().unwrap();
+    let r = c
+        .next_with_timeout(Duration::from_millis(100))
+        .unwrap()
+        .unwrap();
     assert_eq!(r.bytes, b"three");
 }
 
@@ -67,7 +83,12 @@ fn consumer_crosses_segment_boundary() {
     let dir = TempDir::new().unwrap();
     let mut p = Producer::open(make_pcfg(&dir)).unwrap();
     // 64-byte cap; "AAAAAAAAAAAAAAAAAAAA" (20+1) repeated forces rolls.
-    for s in &["AAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBB", "CCCCCCCCCCCCCCCCCCCC", "DDDD"] {
+    for s in &[
+        "AAAAAAAAAAAAAAAAAAAA",
+        "BBBBBBBBBBBBBBBBBBBB",
+        "CCCCCCCCCCCCCCCCCCCC",
+        "DDDD",
+    ] {
         p.append_line(s.as_bytes()).unwrap();
     }
     let cp_path = dir.path().join("consumer.json");
@@ -76,10 +97,21 @@ fn consumer_crosses_segment_boundary() {
 
     let mut got = Vec::new();
     for _ in 0..4 {
-        let r = c.next_with_timeout(Duration::from_millis(100)).unwrap().unwrap();
+        let r = c
+            .next_with_timeout(Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
         got.push(String::from_utf8(r.bytes).unwrap());
     }
-    assert_eq!(got, ["AAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBB", "CCCCCCCCCCCCCCCCCCCC", "DDDD"]);
+    assert_eq!(
+        got,
+        [
+            "AAAAAAAAAAAAAAAAAAAA",
+            "BBBBBBBBBBBBBBBBBBBB",
+            "CCCCCCCCCCCCCCCCCCCC",
+            "DDDD"
+        ]
+    );
 }
 
 #[test]
@@ -87,7 +119,11 @@ fn checkpoint_advance_is_atomic_via_tmp_rename() {
     let dir = TempDir::new().unwrap();
     let cp_path = dir.path().join("consumer.json");
     let mut cp = Checkpoint::open(&cp_path).unwrap();
-    cp.advance(DurableOffset { segment: "events-0.jsonl".into(), byte_offset: 42 }).unwrap();
+    cp.advance(DurableOffset {
+        segment: "events-0.jsonl".into(),
+        byte_offset: 42,
+    })
+    .unwrap();
     let raw = std::fs::read_to_string(&cp_path).unwrap();
     assert!(raw.contains("\"byte_offset\":42"));
     assert!(raw.contains("\"events-0.jsonl\""));

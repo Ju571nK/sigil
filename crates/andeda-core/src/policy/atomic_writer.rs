@@ -46,7 +46,10 @@ pub fn atomic_write(
     let pid = std::process::id();
     let tmp = parent.join(format!(
         ".{}.{}.tmp",
-        target.file_name().and_then(|s| s.to_str()).unwrap_or("policy.yaml"),
+        target
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("policy.yaml"),
         pid
     ));
 
@@ -99,7 +102,10 @@ mod tests {
         atomic_write(&target, b"version: 5\nrules: []\n", &cache, 5).unwrap();
 
         assert_eq!(std::fs::read(&target).unwrap(), b"version: 5\nrules: []\n");
-        assert_eq!(cache.host_meta_get().unwrap().last_applied_policy_version, 5);
+        assert_eq!(
+            cache.host_meta_get().unwrap().last_applied_policy_version,
+            5
+        );
     }
 
     #[test]
@@ -111,7 +117,10 @@ mod tests {
         atomic_write(&target, b"version: 2\n", &cache, 2).unwrap();
 
         assert_eq!(std::fs::read(&target).unwrap(), b"version: 2\n");
-        assert_eq!(cache.host_meta_get().unwrap().last_applied_policy_version, 2);
+        assert_eq!(
+            cache.host_meta_get().unwrap().last_applied_policy_version,
+            2
+        );
     }
 
     #[test]
@@ -124,13 +133,12 @@ mod tests {
         let leftover: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .ends_with(".tmp")
-            })
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
-        assert!(leftover.is_empty(), "no .tmp files should remain after successful rename");
+        assert!(
+            leftover.is_empty(),
+            "no .tmp files should remain after successful rename"
+        );
     }
 
     #[test]

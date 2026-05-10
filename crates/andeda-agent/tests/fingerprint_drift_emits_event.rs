@@ -8,9 +8,15 @@ use tempfile::tempdir;
 
 struct Mock(String, String, String);
 impl HardwareFingerprint for Mock {
-    fn platform_uuid(&self) -> String { self.0.clone() }
-    fn stable_mac(&self) -> String { self.1.clone() }
-    fn cpu_brand(&self) -> String { self.2.clone() }
+    fn platform_uuid(&self) -> String {
+        self.0.clone()
+    }
+    fn stable_mac(&self) -> String {
+        self.1.clone()
+    }
+    fn cpu_brand(&self) -> String {
+        self.2.clone()
+    }
 }
 
 #[test]

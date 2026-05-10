@@ -78,7 +78,9 @@ where
     if candidates.is_empty() {
         return String::new();
     }
-    let has_ethernet = candidates.iter().any(|(_, _, k)| matches!(k, IfaceKind::Ethernet));
+    let has_ethernet = candidates
+        .iter()
+        .any(|(_, _, k)| matches!(k, IfaceKind::Ethernet));
     if has_ethernet {
         candidates.retain(|(_, _, k)| matches!(k, IfaceKind::Ethernet | IfaceKind::Other));
     }
@@ -108,9 +110,15 @@ mod tests {
         cpu_brand: String,
     }
     impl HardwareFingerprint for Mock {
-        fn platform_uuid(&self) -> String { self.platform_uuid.clone() }
-        fn stable_mac(&self) -> String { self.stable_mac.clone() }
-        fn cpu_brand(&self) -> String { self.cpu_brand.clone() }
+        fn platform_uuid(&self) -> String {
+            self.platform_uuid.clone()
+        }
+        fn stable_mac(&self) -> String {
+            self.stable_mac.clone()
+        }
+        fn cpu_brand(&self) -> String {
+            self.cpu_brand.clone()
+        }
     }
 
     fn clone(m: &Mock) -> Mock {
@@ -138,9 +146,18 @@ mod tests {
             stable_mac: "00:11:22:33:44:55".into(),
             cpu_brand: "Apple M2".into(),
         };
-        let with_diff_uuid = Mock { platform_uuid: "BBB".into(), ..clone(&base) };
-        let with_diff_mac = Mock { stable_mac: "ff:ee:dd:cc:bb:aa".into(), ..clone(&base) };
-        let with_diff_cpu = Mock { cpu_brand: "Intel i9".into(), ..clone(&base) };
+        let with_diff_uuid = Mock {
+            platform_uuid: "BBB".into(),
+            ..clone(&base)
+        };
+        let with_diff_mac = Mock {
+            stable_mac: "ff:ee:dd:cc:bb:aa".into(),
+            ..clone(&base)
+        };
+        let with_diff_cpu = Mock {
+            cpu_brand: "Intel i9".into(),
+            ..clone(&base)
+        };
         assert_ne!(compute(&base), compute(&with_diff_uuid));
         assert_ne!(compute(&base), compute(&with_diff_mac));
         assert_ne!(compute(&base), compute(&with_diff_cpu));
@@ -148,14 +165,26 @@ mod tests {
 
     #[test]
     fn empty_inputs_still_produce_a_hash() {
-        let m = Mock { platform_uuid: "".into(), stable_mac: "".into(), cpu_brand: "".into() };
+        let m = Mock {
+            platform_uuid: "".into(),
+            stable_mac: "".into(),
+            cpu_brand: "".into(),
+        };
         let h = compute(&m);
         assert_eq!(h.len(), 64);
     }
 
     #[test]
     fn exclusion_list_filters_loopback_and_virtual() {
-        for name in ["lo0", "docker0", "veth1234", "awdl0", "utun3", "br-abcdef", "Bluetooth PAN"] {
+        for name in [
+            "lo0",
+            "docker0",
+            "veth1234",
+            "awdl0",
+            "utun3",
+            "br-abcdef",
+            "Bluetooth PAN",
+        ] {
             assert!(is_excluded_iface(name), "expected {name} to be excluded");
         }
         for name in ["en0", "eth0", "Ethernet 1", "Wi-Fi"] {
@@ -169,17 +198,20 @@ mod tests {
             ("en1".to_string(), [0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
             ("en0".to_string(), [0x90, 0xa0, 0xb0, 0xc0, 0xd0, 0xe0]),
         ];
-        let kind = |n: &str| if n == "en0" { IfaceKind::Ethernet } else { IfaceKind::WiFi };
+        let kind = |n: &str| {
+            if n == "en0" {
+                IfaceKind::Ethernet
+            } else {
+                IfaceKind::WiFi
+            }
+        };
         let mac = pick_stable_mac(ifaces, kind);
         assert_eq!(mac, "90:a0:b0:c0:d0:e0");
     }
 
     #[test]
     fn pick_returns_empty_when_all_excluded() {
-        let ifaces = vec![
-            ("lo0".to_string(), [0; 6]),
-            ("docker0".to_string(), [1; 6]),
-        ];
+        let ifaces = vec![("lo0".to_string(), [0; 6]), ("docker0".to_string(), [1; 6])];
         let mac = pick_stable_mac(ifaces, |_| IfaceKind::Other);
         assert_eq!(mac, "");
     }

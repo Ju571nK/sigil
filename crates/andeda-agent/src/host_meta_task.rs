@@ -121,16 +121,26 @@ mod fingerprint_tests {
         cb: String,
     }
     impl HardwareFingerprint for Mock {
-        fn platform_uuid(&self) -> String { self.pu.clone() }
-        fn stable_mac(&self) -> String { self.sm.clone() }
-        fn cpu_brand(&self) -> String { self.cb.clone() }
+        fn platform_uuid(&self) -> String {
+            self.pu.clone()
+        }
+        fn stable_mac(&self) -> String {
+            self.sm.clone()
+        }
+        fn cpu_brand(&self) -> String {
+            self.cb.clone()
+        }
     }
 
     #[test]
     fn first_run_persists_fingerprint_and_returns_no_drift() {
         let dir = tempdir().unwrap();
         let cache = HashCache::open(&dir.path().join("state.db")).unwrap();
-        let hw = Mock { pu: "A".into(), sm: "B".into(), cb: "C".into() };
+        let hw = Mock {
+            pu: "A".into(),
+            sm: "B".into(),
+            cb: "C".into(),
+        };
         let outcome = ensure_fingerprint(&cache, &hw).unwrap();
         assert_eq!(outcome, FingerprintOutcome::FreshlyPersisted);
         let m = cache.host_meta_get().unwrap();
@@ -141,7 +151,11 @@ mod fingerprint_tests {
     fn second_run_with_same_hw_returns_unchanged() {
         let dir = tempdir().unwrap();
         let cache = HashCache::open(&dir.path().join("state.db")).unwrap();
-        let hw = Mock { pu: "A".into(), sm: "B".into(), cb: "C".into() };
+        let hw = Mock {
+            pu: "A".into(),
+            sm: "B".into(),
+            cb: "C".into(),
+        };
         let _ = ensure_fingerprint(&cache, &hw).unwrap();
         let outcome = ensure_fingerprint(&cache, &hw).unwrap();
         assert_eq!(outcome, FingerprintOutcome::Unchanged);
@@ -151,8 +165,16 @@ mod fingerprint_tests {
     fn second_run_with_changed_hw_returns_drift_with_prev_and_new() {
         let dir = tempdir().unwrap();
         let cache = HashCache::open(&dir.path().join("state.db")).unwrap();
-        let hw1 = Mock { pu: "A".into(), sm: "B".into(), cb: "C".into() };
-        let hw2 = Mock { pu: "Z".into(), sm: "B".into(), cb: "C".into() };
+        let hw1 = Mock {
+            pu: "A".into(),
+            sm: "B".into(),
+            cb: "C".into(),
+        };
+        let hw2 = Mock {
+            pu: "Z".into(),
+            sm: "B".into(),
+            cb: "C".into(),
+        };
         let _ = ensure_fingerprint(&cache, &hw1).unwrap();
         let outcome = ensure_fingerprint(&cache, &hw2).unwrap();
         match outcome {

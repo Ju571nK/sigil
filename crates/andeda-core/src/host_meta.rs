@@ -89,9 +89,14 @@ mod tests {
     #[test]
     fn set_and_get_host_id() {
         let (_dir, cache) = fresh_cache();
-        cache.host_meta_set_host_id("5a7c3e91-aaaa-bbbb-cccc-dddddddddddd").unwrap();
+        cache
+            .host_meta_set_host_id("5a7c3e91-aaaa-bbbb-cccc-dddddddddddd")
+            .unwrap();
         let m = cache.host_meta_get().unwrap();
-        assert_eq!(m.host_id.as_deref(), Some("5a7c3e91-aaaa-bbbb-cccc-dddddddddddd"));
+        assert_eq!(
+            m.host_id.as_deref(),
+            Some("5a7c3e91-aaaa-bbbb-cccc-dddddddddddd")
+        );
     }
 
     #[test]

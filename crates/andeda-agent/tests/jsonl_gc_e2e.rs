@@ -34,7 +34,11 @@ fn build_ctx(
     dir: &Path,
     current: &str,
     cfg: GcConfig,
-) -> (GcTaskCtx, mpsc::Receiver<andeda_agent::state_task::CommittableEvent>, Arc<RwLock<bool>>) {
+) -> (
+    GcTaskCtx,
+    mpsc::Receiver<andeda_agent::state_task::CommittableEvent>,
+    Arc<RwLock<bool>>,
+) {
     let (tx, rx) = mpsc::channel(8);
     let above = Arc::new(RwLock::new(false));
     let curr = Arc::new(RwLock::new(current.to_string()));
@@ -99,12 +103,19 @@ async fn hard_ceiling_forces_gc_and_emits_both_events() {
     let mut got_skipped = false;
     while let Ok(ev) = rx.try_recv() {
         match ev.event.evidence {
-            Evidence::AgentJsonlForceGc { segments_deleted, segments_skipped_past_sender, .. } => {
+            Evidence::AgentJsonlForceGc {
+                segments_deleted,
+                segments_skipped_past_sender,
+                ..
+            } => {
                 got_force = true;
                 assert!(segments_deleted >= 1);
                 assert!(segments_skipped_past_sender >= 1);
             }
-            Evidence::SenderSkippedSegment { count, oldest_dropped_filename } => {
+            Evidence::SenderSkippedSegment {
+                count,
+                oldest_dropped_filename,
+            } => {
                 got_skipped = true;
                 assert!(count >= 1);
                 assert!(oldest_dropped_filename.contains("05-13"));

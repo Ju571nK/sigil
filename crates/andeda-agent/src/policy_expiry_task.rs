@@ -46,10 +46,7 @@ pub async fn run(ctx: ExpiryTaskCtx) {
 }
 
 #[doc(hidden)]
-pub async fn evaluate_for_test(
-    ctx: &ExpiryTaskCtx,
-    last_emitted_for_version: &mut Option<i64>,
-) {
+pub async fn evaluate_for_test(ctx: &ExpiryTaskCtx, last_emitted_for_version: &mut Option<i64>) {
     evaluate(ctx, last_emitted_for_version).await;
 }
 
@@ -103,7 +100,13 @@ mod tests {
     fn fixture(
         valid_until: Option<OffsetDateTime>,
         version: i64,
-    ) -> (ExpiryTaskCtx, mpsc::Receiver<CommittableEvent>, Arc<RwLock<bool>>, Arc<RwLock<Option<OffsetDateTime>>>, watch::Sender<i64>) {
+    ) -> (
+        ExpiryTaskCtx,
+        mpsc::Receiver<CommittableEvent>,
+        Arc<RwLock<bool>>,
+        Arc<RwLock<Option<OffsetDateTime>>>,
+        watch::Sender<i64>,
+    ) {
         let expired = Arc::new(RwLock::new(false));
         let vu_cell = Arc::new(RwLock::new(valid_until));
         let (tx, rx) = mpsc::channel(8);
@@ -134,7 +137,10 @@ mod tests {
         let ev = rx.recv().await.unwrap();
         assert!(matches!(
             ev.event.evidence,
-            Evidence::PolicyExpiredActive { policy_version: 7, .. }
+            Evidence::PolicyExpiredActive {
+                policy_version: 7,
+                ..
+            }
         ));
         // No second event in the channel.
         assert!(rx.try_recv().is_err());
@@ -163,7 +169,10 @@ mod tests {
         let ev = rx.recv().await.unwrap();
         assert!(matches!(
             ev.event.evidence,
-            Evidence::PolicyExpiredActive { policy_version: 8, .. }
+            Evidence::PolicyExpiredActive {
+                policy_version: 8,
+                ..
+            }
         ));
     }
 

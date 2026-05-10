@@ -254,7 +254,9 @@ mod tests {
         let (store, sk) = fixture(now);
         let env = well_formed_envelope(10, now);
         let mut resp = sign_response(&sk, env, "k1", now);
-        let mut sig_bytes = data_encoding::BASE64.decode(resp.signature.as_bytes()).unwrap();
+        let mut sig_bytes = data_encoding::BASE64
+            .decode(resp.signature.as_bytes())
+            .unwrap();
         sig_bytes[0] ^= 0xff;
         resp.signature = data_encoding::BASE64.encode(&sig_bytes);
 
@@ -317,7 +319,11 @@ mod tests {
             Some(PolicySignatureInvalidReason::Expired)
         );
         assert_eq!(
-            VerifyError::VersionRegression { envelope: 1, last_applied: 2 }.reason(),
+            VerifyError::VersionRegression {
+                envelope: 1,
+                last_applied: 2
+            }
+            .reason(),
             Some(PolicySignatureInvalidReason::VersionRegression)
         );
         assert_eq!(
@@ -361,7 +367,10 @@ mod tests {
         let r = verify_envelope(&store, &resp, now, 10);
         assert!(matches!(
             r,
-            Err(VerifyError::VersionRegression { envelope: 10, last_applied: 10 })
+            Err(VerifyError::VersionRegression {
+                envelope: 10,
+                last_applied: 10
+            })
         ));
     }
 
@@ -375,7 +384,10 @@ mod tests {
         let r = verify_envelope(&store, &resp, now, 10);
         assert!(matches!(
             r,
-            Err(VerifyError::VersionRegression { envelope: 5, last_applied: 10 })
+            Err(VerifyError::VersionRegression {
+                envelope: 5,
+                last_applied: 10
+            })
         ));
     }
 

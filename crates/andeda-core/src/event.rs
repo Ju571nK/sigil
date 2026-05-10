@@ -393,7 +393,10 @@ mod tests {
             last_applied_policy_version: 41,
         };
         let s = serde_json::to_string(&ev).unwrap();
-        assert!(s.contains("\"kind\":\"policy_signature_invalid\""), "got: {s}");
+        assert!(
+            s.contains("\"kind\":\"policy_signature_invalid\""),
+            "got: {s}"
+        );
         assert!(s.contains("\"reason\":\"pubkey_unknown\""));
         assert!(s.contains("\"signing_pubkey_id\":\"andeda-policy-2026-05\""));
         assert!(s.contains("\"policy_version_in_envelope\":42"));
@@ -403,11 +406,23 @@ mod tests {
     #[test]
     fn each_reason_renders_as_snake_case() {
         for (variant, expected) in [
-            (PolicySignatureInvalidReason::PubkeyUnknown, "pubkey_unknown"),
-            (PolicySignatureInvalidReason::PubkeyInactive, "pubkey_inactive"),
-            (PolicySignatureInvalidReason::SignatureInvalid, "signature_invalid"),
+            (
+                PolicySignatureInvalidReason::PubkeyUnknown,
+                "pubkey_unknown",
+            ),
+            (
+                PolicySignatureInvalidReason::PubkeyInactive,
+                "pubkey_inactive",
+            ),
+            (
+                PolicySignatureInvalidReason::SignatureInvalid,
+                "signature_invalid",
+            ),
             (PolicySignatureInvalidReason::Expired, "expired"),
-            (PolicySignatureInvalidReason::VersionRegression, "version_regression"),
+            (
+                PolicySignatureInvalidReason::VersionRegression,
+                "version_regression",
+            ),
             (PolicySignatureInvalidReason::ParseFailed, "parse_failed"),
         ] {
             let s = serde_json::to_string(&variant).unwrap();
@@ -422,7 +437,10 @@ mod tests {
             new_fingerprint: "cafef00d".into(),
         };
         let s = serde_json::to_string(&ev).unwrap();
-        assert!(s.contains("\"kind\":\"host_id_fingerprint_drift\""), "got: {s}");
+        assert!(
+            s.contains("\"kind\":\"host_id_fingerprint_drift\""),
+            "got: {s}"
+        );
         assert!(s.contains("\"prev_fingerprint\":\"deadbeef\""));
         assert!(s.contains("\"new_fingerprint\":\"cafef00d\""));
     }

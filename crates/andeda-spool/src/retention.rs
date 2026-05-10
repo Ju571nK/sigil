@@ -57,9 +57,7 @@ impl Retention {
             ));
         }
         if cfg.max_age <= Duration::ZERO {
-            return Err(RetentionError::InvalidConfig(
-                "max_age must be > 0".into(),
-            ));
+            return Err(RetentionError::InvalidConfig("max_age must be > 0".into()));
         }
         Ok(Self { cfg })
     }
