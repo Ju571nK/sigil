@@ -63,6 +63,7 @@ name = "andeda-core"
 version = "0.1.0"
 dependencies = [
  "andeda-rules-basic",
+ "andeda-rules-pro",
  "blake3",
  "data-encoding",
  "dunce",
@@ -86,6 +87,10 @@ dependencies = [
 
 [[package]]
 name = "andeda-rules-basic"
+version = "0.1.0"
+
+[[package]]
+name = "andeda-rules-pro"
 version = "0.1.0"
 
 [[package]]

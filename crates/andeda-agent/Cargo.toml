@@ -14,6 +14,12 @@ path = "src/lib.rs"
 name = "andeda"
 path = "src/main.rs"
 
+[features]
+default = []
+# Forward to andeda-core's pro feature so `cargo build --features pro` from
+# the agent activates the commercial rule pack end-to-end.
+pro = ["andeda-core/pro"]
+
 [dependencies]
 andeda-core = { path = "../andeda-core" }
 serde = { workspace = true }

@@ -105,3 +105,36 @@ This is the recommended distribution form for closed rule packs.
   `andeda-rules-pro`), never as `.gitignored` files in this tree.
 - `andeda-rules-basic` is the boundary marker: anything more specialized
   than its baseline targets is a candidate for the closed track.
+
+---
+
+## Building with the `pro` feature
+
+The OSS daemon links the commercial rule pack only when the `pro` Cargo
+feature is enabled. Without the feature, `andeda-rules-pro` is not a
+dependency at all — the OSS build does not require the private crate to
+be present.
+
+**Local development**: check out the private repo as a sibling of this
+one, then build with `--features pro`:
+
+```
+parent/
+├── anti_i/                  # this repo (Apache 2.0)
+└── anti_i-rules-pro/        # private repo (commercial)
+
+cd anti_i
+cargo build --workspace --features pro
+cargo test  --workspace --features pro
+```
+
+The path resolution is `../../../anti_i-rules-pro/crates/andeda-rules-pro`
+from `crates/andeda-core/Cargo.toml`. Once the private repo is published,
+this path dependency can be swapped for a `git = "ssh://..."` URL with no
+other changes.
+
+**Merge semantics**: `andeda-core::policy::defaults()` first parses the
+baseline ruleset, then (when `pro` is enabled) merges the extended pack
+on top. Target IDs from the pro pack override baseline IDs of the same
+name; new IDs are appended. The merged document is sorted by ID for
+deterministic output.
