@@ -33,6 +33,7 @@ reqwest = { workspace = true }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 http = { workspace = true }
+urlencoding = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -5,6 +5,7 @@
 pub mod batch_reader;
 pub mod cli;
 pub mod config;
+pub mod control_task;
 pub mod data_task;
 pub mod manifest;
 pub mod state;

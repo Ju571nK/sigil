@@ -41,6 +41,7 @@ rustls-pemfile = "2"
 http = "1"
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
 tower = "0.5"
+urlencoding = "2"
 
 [profile.release]
 panic = "unwind"
