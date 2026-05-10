@@ -73,6 +73,46 @@ pub fn load(path: &Path) -> Result<Option<SenderState>, StateError> {
     Ok(Some(s))
 }
 
+/// Atomically persist a small string (the latest policy ETag) to `path`.
+/// Reuses the same tmp+fsync+rename pattern as `store`.
+pub fn store_etag(path: &Path, etag: &str) -> Result<(), StateError> {
+    use std::io::Write;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|source| StateError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    let tmp = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("policy-etag.txt"),
+        std::process::id()
+    ));
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp)
+            .map_err(|source| StateError::Io { path: tmp.clone(), source })?;
+        f.write_all(etag.as_bytes()).map_err(|source| StateError::Io { path: tmp.clone(), source })?;
+        f.sync_all().map_err(|source| StateError::Io { path: tmp.clone(), source })?;
+    }
+    std::fs::rename(&tmp, path).map_err(|source| StateError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(())
+}
+
+/// Load the persisted policy ETag; returns `Ok(None)` if absent.
+pub fn load_etag(path: &Path) -> Result<Option<String>, StateError> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(StateError::Io { path: path.to_path_buf(), source }),
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SenderState {
     /// Filename of the JSONL segment the sender is currently shipping.
@@ -195,5 +235,20 @@ mod tests {
         };
         store(&p, &stored).unwrap();
         assert_eq!(load_or_empty(&p).unwrap(), stored);
+    }
+
+    #[test]
+    fn etag_round_trips() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("policy-etag.txt");
+        store_etag(&p, "abc123").unwrap();
+        assert_eq!(load_etag(&p).unwrap().as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn missing_etag_returns_none() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("policy-etag.txt");
+        assert!(load_etag(&p).unwrap().is_none());
     }
 }
