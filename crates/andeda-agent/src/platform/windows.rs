@@ -94,6 +94,80 @@ impl UserEnumerator for WindowsPlatform {
     }
 }
 
+use super::hw_fingerprint::{pick_stable_mac, HardwareFingerprint, IfaceKind};
+
+impl HardwareFingerprint for WindowsPlatform {
+    fn platform_uuid(&self) -> String {
+        match Command::new("reg")
+            .args([
+                "query",
+                r"HKLM\SOFTWARE\Microsoft\Cryptography",
+                "/v",
+                "MachineGuid",
+            ])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                let s = String::from_utf8_lossy(&out.stdout);
+                for line in s.lines() {
+                    if let Some(idx) = line.find("REG_SZ") {
+                        return line[idx + "REG_SZ".len()..].trim().to_string();
+                    }
+                }
+                String::new()
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn stable_mac(&self) -> String {
+        let ifaces: Vec<(String, [u8; 6])> = mac_address::MacAddressIterator::new()
+            .map(|it| {
+                it.filter_map(|m| {
+                    let bytes = m.bytes();
+                    let name = mac_address::name_by_mac_address(&m)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if name.is_empty() {
+                        None
+                    } else {
+                        Some((name, bytes))
+                    }
+                })
+                .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        // Windows interface description usually contains "Ethernet" / "Wi-Fi".
+        pick_stable_mac(ifaces, |name| {
+            let lc = name.to_lowercase();
+            if lc.contains("ethernet") {
+                IfaceKind::Ethernet
+            } else if lc.contains("wi-fi") || lc.contains("wireless") || lc.contains("wlan") {
+                IfaceKind::WiFi
+            } else {
+                IfaceKind::Other
+            }
+        })
+    }
+
+    fn cpu_brand(&self) -> String {
+        match Command::new("wmic").args(["cpu", "get", "name", "/value"]).output() {
+            Ok(out) if out.status.success() => {
+                let s = String::from_utf8_lossy(&out.stdout);
+                for line in s.lines() {
+                    let line = line.trim();
+                    if let Some(rest) = line.strip_prefix("Name=") {
+                        return rest.trim().to_string();
+                    }
+                }
+                String::new()
+            }
+            _ => String::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
