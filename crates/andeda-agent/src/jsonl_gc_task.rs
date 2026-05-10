@@ -45,6 +45,11 @@ pub async fn run(ctx: GcTaskCtx) {
     }
 }
 
+#[doc(hidden)]
+pub async fn tick_for_test(ctx: &GcTaskCtx) {
+    tick(ctx).await;
+}
+
 async fn tick(ctx: &GcTaskCtx) {
     let now = OffsetDateTime::now_utc();
     let segs = match list_segments(&ctx.events_dir) {

@@ -45,6 +45,14 @@ pub async fn run(ctx: ExpiryTaskCtx) {
     }
 }
 
+#[doc(hidden)]
+pub async fn evaluate_for_test(
+    ctx: &ExpiryTaskCtx,
+    last_emitted_for_version: &mut Option<i64>,
+) {
+    evaluate(ctx, last_emitted_for_version).await;
+}
+
 async fn evaluate(ctx: &ExpiryTaskCtx, last_emitted_for_version: &mut Option<i64>) {
     let now = OffsetDateTime::now_utc();
     let valid_until = *ctx.active_valid_until.read();
