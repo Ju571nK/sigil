@@ -61,6 +61,20 @@ async fn tick(ctx: &GcTaskCtx) {
             None
         }
     };
+    // Defensive: refresh the snapshotted current-segment if the runtime's
+    // boot-time snapshot has rotated away. Without this, Plan A's once-at-
+    // startup snapshot can mis-identify the live writer's file as deletable
+    // under a hard ceiling — see jsonl_gc.rs algorithm. Plan A2 will replace
+    // this with a sink-pushed update on every rotation.
+    {
+        let stored = ctx.current_segment_filename.read().clone();
+        let lex_max = segs.iter().map(|s| s.filename.as_str()).max();
+        if let Some(latest) = lex_max {
+            if stored.is_empty() || stored.as_str() < latest {
+                *ctx.current_segment_filename.write() = latest.to_string();
+            }
+        }
+    }
     let current = ctx.current_segment_filename.read().clone();
     let decision = decide(&segs, off.as_ref(), &current, &ctx.cfg, now);
     *ctx.above_soft_floor.write() = decision.above_soft_floor;
