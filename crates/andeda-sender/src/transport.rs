@@ -55,6 +55,52 @@ pub fn build_client(
         .map_err(TransportError::Build)
 }
 
+/// High-level outcome of an HTTP send. The data_task uses this to decide
+/// retry vs. permanent-pause vs. event emission.
+#[derive(Debug)]
+pub enum SendOutcome<R> {
+    /// 2xx with parsed body.
+    Ok2xx(R),
+    /// 4xx with a documented "permanent" status (409, 426). data_task pauses.
+    PermanentReject { status: u16, body: String },
+    /// 5xx (any) — retryable with backoff.
+    ServerBusy { status: u16, body: String },
+    /// TLS handshake failed — typically cert expired or CA mismatch.
+    TlsFailure(String),
+    /// Network failure (DNS, connect, timeout) — retry.
+    Network(String),
+    /// Unparseable body or other unexpected protocol issue.
+    ProtocolViolation(String),
+}
+
+/// Classify a `reqwest::Error` (or status) into a `SendOutcome`. Caller
+/// passes the raw response status + body for status-based mapping.
+pub fn classify_status<R>(status: u16, body: String, parsed: Option<R>) -> SendOutcome<R> {
+    if (200..300).contains(&status) {
+        match parsed {
+            Some(r) => SendOutcome::Ok2xx(r),
+            None => SendOutcome::ProtocolViolation(format!("2xx without parseable body: {body}")),
+        }
+    } else if status == 409 || status == 426 {
+        SendOutcome::PermanentReject { status, body }
+    } else if (500..600).contains(&status) || status == 503 {
+        SendOutcome::ServerBusy { status, body }
+    } else {
+        SendOutcome::ProtocolViolation(format!("unexpected status {status}: {body}"))
+    }
+}
+
+/// Maps a `reqwest::Error` from the *send/connect* phase (no HTTP status
+/// available) to either a TLS or network failure.
+pub fn classify_send_error<R>(err: reqwest::Error) -> SendOutcome<R> {
+    let msg = err.to_string();
+    if msg.contains("tls") || msg.contains("certificate") || msg.contains("handshake") {
+        SendOutcome::TlsFailure(msg)
+    } else {
+        SendOutcome::Network(msg)
+    }
+}
+
 /// Returns `Some(latest_mtime)` if any of the cert / key / CA files have
 /// changed since `since`; otherwise `None`. Used by the supervisor to
 /// rebuild the client on cert rotation.
@@ -113,5 +159,35 @@ mod tests {
         let m = newest_pem_mtime(&[&a, &b]).unwrap().unwrap();
         let m_b = std::fs::metadata(&b).unwrap().modified().unwrap();
         assert_eq!(m, m_b);
+    }
+
+    #[test]
+    fn classify_2xx_returns_ok() {
+        let outcome: SendOutcome<()> = classify_status(200, "{}".into(), Some(()));
+        assert!(matches!(outcome, SendOutcome::Ok2xx(())));
+    }
+
+    #[test]
+    fn classify_409_is_permanent() {
+        let outcome: SendOutcome<()> = classify_status(409, "conflict".into(), None);
+        assert!(matches!(outcome, SendOutcome::PermanentReject { status: 409, .. }));
+    }
+
+    #[test]
+    fn classify_426_is_permanent() {
+        let outcome: SendOutcome<()> = classify_status(426, "upgrade".into(), None);
+        assert!(matches!(outcome, SendOutcome::PermanentReject { status: 426, .. }));
+    }
+
+    #[test]
+    fn classify_503_is_server_busy() {
+        let outcome: SendOutcome<()> = classify_status(503, "busy".into(), None);
+        assert!(matches!(outcome, SendOutcome::ServerBusy { status: 503, .. }));
+    }
+
+    #[test]
+    fn classify_2xx_without_body_is_protocol_violation() {
+        let outcome: SendOutcome<()> = classify_status(200, "".into(), None);
+        assert!(matches!(outcome, SendOutcome::ProtocolViolation(_)));
     }
 }
