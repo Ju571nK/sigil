@@ -33,6 +33,8 @@ pub struct EventEntry {
     pub payload: JsonValue,
 }
 
+pub use andeda_core::policy::signed_envelope::SignedPolicyResponse;
+
 /// `200 OK` response from `POST /v1/events`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EventsAccepted {
@@ -114,5 +116,11 @@ mod tests {
         let json = r#"{"event_id":"00000000-0000-0000-0000-000000000000","reason":"x"}"#;
         let r: EventRejection = serde_json::from_str(json).unwrap();
         assert!(r.detail.is_none());
+    }
+
+    #[test]
+    fn signed_policy_response_re_exported() {
+        // Just a compile-time check that the type is reachable from this crate.
+        fn _accepts(_: SignedPolicyResponse) {}
     }
 }
