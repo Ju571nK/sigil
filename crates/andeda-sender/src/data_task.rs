@@ -69,6 +69,86 @@ impl BackoffPolicy {
     }
 }
 
+use crate::transport::{classify_send_error, classify_status, SendOutcome};
+use crate::wire::{Envelope, EventsAccepted, EventsRequest};
+use reqwest::Client;
+use std::path::PathBuf;
+use time::OffsetDateTime;
+
+/// Inputs for one batch send (no loop).
+pub struct BatchSendCtx<'a> {
+    pub client: &'a Client,
+    pub server_base_url: &'a str,
+    pub host_id: &'a str,
+    pub agent_version: &'a str,
+    pub sender_version: &'a str,
+    pub events: Vec<crate::wire::EventEntry>,
+}
+
+/// Outcome of `send_one_batch` — caller decides what to do with offset
+/// advance and event emission.
+#[derive(Debug)]
+pub enum BatchOutcome {
+    Accepted(EventsAccepted),
+    PermanentReject { status: u16, body: String },
+    ServerBusy { status: u16, body: String },
+    TlsFailure(String),
+    Network(String),
+    ProtocolViolation(String),
+}
+
+pub async fn send_one_batch(ctx: BatchSendCtx<'_>) -> BatchOutcome {
+    let req = EventsRequest {
+        envelope: Envelope {
+            schema_version: 1,
+            batch_id: uuid::Uuid::now_v7(),
+            host_id: ctx.host_id.to_string(),
+            agent_version: ctx.agent_version.to_string(),
+            sender_version: ctx.sender_version.to_string(),
+            sent_at: OffsetDateTime::now_utc(),
+        },
+        events: ctx.events,
+    };
+    let url = format!("{}/v1/events", ctx.server_base_url.trim_end_matches('/'));
+    let resp = match ctx.client.post(&url).json(&req).send().await {
+        Ok(r) => r,
+        Err(e) => match classify_send_error::<EventsAccepted>(e) {
+            SendOutcome::TlsFailure(s) => return BatchOutcome::TlsFailure(s),
+            SendOutcome::Network(s) => return BatchOutcome::Network(s),
+            other => return BatchOutcome::ProtocolViolation(format!("{other:?}")),
+        },
+    };
+    let status = resp.status().as_u16();
+    let body_bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            return BatchOutcome::ProtocolViolation(format!("body read: {e}"));
+        }
+    };
+    let body_text = String::from_utf8_lossy(&body_bytes).to_string();
+    let parsed: Option<EventsAccepted> = if (200..300).contains(&status) {
+        serde_json::from_slice(&body_bytes).ok()
+    } else {
+        None
+    };
+    match classify_status(status, body_text.clone(), parsed) {
+        SendOutcome::Ok2xx(r) => BatchOutcome::Accepted(r),
+        SendOutcome::PermanentReject { status, body } => {
+            BatchOutcome::PermanentReject { status, body }
+        }
+        SendOutcome::ServerBusy { status, body } => {
+            BatchOutcome::ServerBusy { status, body }
+        }
+        SendOutcome::TlsFailure(s) => BatchOutcome::TlsFailure(s),
+        SendOutcome::Network(s) => BatchOutcome::Network(s),
+        SendOutcome::ProtocolViolation(s) => BatchOutcome::ProtocolViolation(s),
+    }
+}
+
+// (silence unused-import warning when path types only used in tests)
+#[allow(dead_code)]
+fn _path_marker(_p: PathBuf) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
