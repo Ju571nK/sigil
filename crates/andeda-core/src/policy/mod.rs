@@ -10,10 +10,12 @@ pub mod expand;
 pub mod glob;
 pub mod pubkeys;
 pub mod signed_envelope;
+pub mod verify;
 
 pub use canonical::{to_canonical_bytes, CanonicalError};
 pub use pubkeys::{Keystore, KeystoreEntry, KeystoreError};
 pub use signed_envelope::{SignedEnvelope, SignedPolicyResponse};
+pub use verify::{verify_envelope, VerifiedPolicy, VerifyError};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
