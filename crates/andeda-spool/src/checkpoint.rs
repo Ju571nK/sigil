@@ -18,6 +18,9 @@ pub enum CheckpointError {
     Json(#[from] serde_json::Error),
 }
 
+// Stable on-disk format — do NOT collapse into `DurableOffset`; that type's
+// in-memory wire shape may evolve, but this on-disk JSON layout must stay
+// frozen for backward compatibility with existing checkpoints.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct OnDisk {
     segment: String,
@@ -25,6 +28,12 @@ struct OnDisk {
 }
 
 /// Persistent checkpoint state for one consumer.
+///
+/// **Threading:** Single-writer per path. The `&mut self` on `advance` enforces
+/// it within one process; the type holds no advisory lock, so two processes
+/// or threads racing `advance` on the same path would race on the `.tmp` file
+/// and the rename. Wrap in a `Mutex` for cross-thread use; do NOT instantiate
+/// two `Checkpoint`s for the same file across processes.
 pub struct Checkpoint {
     path: PathBuf,
     state: Option<DurableOffset>,
