@@ -173,12 +173,12 @@ impl Consumer {
 }
 
 fn segment_basename(prefix: &str, n: u64) -> String {
-    format!("{}-{}.jsonl", prefix, n)
+    format!("{prefix}-{n}.jsonl")
 }
 
 fn parse_segment_n(basename: &str, prefix: &str) -> u64 {
     basename
-        .strip_prefix(&format!("{}-", prefix))
+        .strip_prefix(&format!("{prefix}-"))
         .and_then(|s| s.strip_suffix(".jsonl"))
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0)

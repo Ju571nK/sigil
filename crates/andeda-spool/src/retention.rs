@@ -197,7 +197,7 @@ fn list_segments(pcfg: &ProducerConfig) -> Result<Vec<SegInfo>, RetentionError> 
 
 fn parse_n(basename: &str, prefix: &str) -> u64 {
     basename
-        .strip_prefix(&format!("{}-", prefix))
+        .strip_prefix(&format!("{prefix}-"))
         .and_then(|s| s.strip_suffix(".jsonl"))
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0)
