@@ -18,3 +18,5 @@ pub mod state_task;
 pub mod supervisor;
 pub mod test_support;
 pub mod watcher;
+pub mod sender_offset;
+pub mod gc_config;
