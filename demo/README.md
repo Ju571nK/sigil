@@ -64,13 +64,16 @@ echo "// touched at $(date)" >> watched/mcp.json
 
 `sigil` notices the change, hashes the file, writes a `file_change` event to its
 spool; `sigil-sender` batches it and POSTs it to `sigil-server`. (Do it again and
-the event carries both the previous and the new hash.)
+the event carries both the previous and the new hash.) Allow a few seconds — the
+demo runs the agent with `--poll`.
 
-> **Note — Docker Desktop / Rancher Desktop:** the agent uses **inotify**, and on
-> Docker Desktop / Rancher Desktop (and similar VM-backed engines on macOS/Windows)
-> the VM doesn't deliver inotify events for changes inside container mounts — so
-> this step won't fire there. It works on a **native Linux engine**. The control
-> plane and data-plane delivery above work everywhere regardless.
+> **Why `--poll`?** The agent's default watcher is the OS-native one (inotify on
+> Linux). On Docker Desktop / Rancher Desktop (and similar VM-backed engines on
+> macOS/Windows) the VM doesn't deliver inotify events for changes inside
+> container mounts, so the demo passes `--poll` to fall back to a polling watcher
+> that `stat()`s the files instead — it works everywhere, at the cost of a few
+> seconds' latency. On a native Linux host you'd drop `--poll` and get instant,
+> push-based events.
 
 ## Stop / reset
 
@@ -88,4 +91,4 @@ docker compose down -v     # stop and wipe everything (next `up` re-bootstraps)
 | `init.sh` | one-shot: demo CA/certs, signing key + agent keystore, signs the policy (`policy-version 2`), writes `sender.yaml` / `server.yaml` |
 | `sender-entrypoint.sh` | reads the agent's `host_id` from `state.db`, then `exec sigil-sender start` (the server requires the envelope `host_id` to match each event's) |
 | `policy.demo.yaml` | the watch policy used by the agent (and the bytes that get signed) — watches `/watched/*` |
-| `watched/` | bind-mounted into the agent; edit these files to trigger events (on a native Linux engine — see the note above) |
+| `watched/` | bind-mounted into the agent; edit these files to trigger `file_change` events (the agent runs with `--poll` so this works on VM-backed engines too — see the note above) |

@@ -13,6 +13,7 @@ fn main() -> anyhow::Result<()> {
                 events_dir: cli.events_dir.clone().unwrap_or_else(default_events_dir),
                 control_socket: default_control_socket(),
                 control_pipe_name: default_control_pipe_name(),
+                poll_watcher: cli.poll,
             };
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()

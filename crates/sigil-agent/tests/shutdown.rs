@@ -3,10 +3,10 @@ use common::{policy_for_paths, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "FSEvents tempdir timing issue (Phase 1 known limit) — run with --ignored"]
 async fn it_graceful_shutdown_drains_queue() {
     let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("x.json");
+    // Canonicalize: agent event paths are canonical; `/var` -> `/private/var` on macOS.
+    let target = std::fs::canonicalize(dir.path()).unwrap().join("x.json");
     let policy = policy_for_paths(&[target.to_str().unwrap()], "standard");
     let agent = TestAgentBuilder::new().policy(&policy).start().await;
     for i in 0..5 {

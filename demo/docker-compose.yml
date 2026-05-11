@@ -50,14 +50,17 @@ services:
 
   sigil:
     <<: *sigil-image
-    command: ["sigil", "run", "--policy", "/etc/sigil/policy.yaml", "--state-db", "/var/lib/sigil/state.db", "--events-dir", "/var/log/sigil"]
+    # --poll: use a polling watcher. Docker Desktop / Rancher Desktop run the
+    # engine in a VM and don't deliver inotify events for changes inside
+    # container mounts; polling stat()s the files and works everywhere.
+    command: ["sigil", "run", "--poll", "--policy", "/etc/sigil/policy.yaml", "--state-db", "/var/lib/sigil/state.db", "--events-dir", "/var/log/sigil"]
     environment:
       SIGIL_LOG: "info"
     depends_on:
       init:
         condition: service_completed_successfully
     volumes:
-      - ./watched:/watched              # edit files here to trigger events (works on a native Linux engine — see README)
+      - ./watched:/watched              # edit files here to trigger events
       - etc-sigil:/etc/sigil
       - var-lib-sigil:/var/lib/sigil
       - var-log-sigil:/var/log/sigil
