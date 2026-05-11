@@ -31,6 +31,8 @@ pub struct RuntimeConfig {
     pub events_dir: PathBuf,
     pub control_socket: PathBuf,
     pub control_pipe_name: String,
+    /// Force a polling watcher instead of the OS-native backend (`--poll`).
+    pub poll_watcher: bool,
 }
 
 pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
@@ -254,11 +256,22 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Watcher (notify → raw events → tx_norm via normalizer wrapper).
     let runtime_handle = tokio::runtime::Handle::current();
-    let watcher_handle = watcher::spawn_watcher(watch_roots.clone(), runtime_handle.clone(), 1024)?;
+    let poll_interval = if cfg.poll_watcher {
+        tracing::info!("forcing polling watcher (--poll); OS-native FS events disabled");
+        Some(std::time::Duration::from_secs(5))
+    } else {
+        None
+    };
+    let watcher_handle = watcher::spawn_watcher(
+        watch_roots.clone(),
+        runtime_handle.clone(),
+        1024,
+        poll_interval,
+    )?;
     let backend_name = watcher_handle.backend_name;
     let raw_rx = watcher_handle.rx;
 
-    let targets = normalizer::compile_targets(&effective, &expanded_paths);
+    let targets = Arc::new(normalizer::compile_targets(&effective, &expanded_paths));
     let mut sup = Supervisor::new();
     let cancel = sup.shutdown.clone();
 
@@ -267,6 +280,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         tokio::spawn({
             let tx_norm = tx_norm.clone();
             let tx_dropped = tx_dropped.clone();
+            let targets = targets.clone();
             async move {
                 normalizer::run(targets, raw_rx, tx_norm, tx_dropped).await;
             }
@@ -284,11 +298,12 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         "hasher",
         tokio::spawn({
             let stats = stats.clone();
-            // A simple `TargetLookup` placeholder: in Phase 1 we recover the
-            // NormalizedEvent from the debouncer-side state. The hasher task here
-            // is a stub for the wiring; the actual NormalizedEvent metadata is
-            // forwarded inline through the Debouncer's `PendingEvent`.
-            let lookup: Arc<dyn TargetLookup + Send + Sync> = Arc::new(NoopLookup);
+            // The hasher re-derives a `PendingEvent`'s target/tier by matching
+            // the (already-canonical) path against the same compiled globs the
+            // normalizer used.
+            let lookup: Arc<dyn TargetLookup + Send + Sync> = Arc::new(GlobTargetLookup {
+                targets: targets.clone(),
+            });
             async move {
                 crate::hasher::run(rx_pending, tx_hashed, lookup, stats).await;
             }
@@ -553,14 +568,16 @@ fn rate_limit_to_event(
     }
 }
 
-struct NoopLookup;
-impl TargetLookup for NoopLookup {
+struct GlobTargetLookup {
+    targets: Arc<Vec<normalizer::CompiledTarget>>,
+}
+impl TargetLookup for GlobTargetLookup {
     fn find_for_path(
         &self,
-        _path: &std::path::Path,
-        _kind: sigil_core::event::FileChangeKind,
+        path: &std::path::Path,
+        kind: sigil_core::event::FileChangeKind,
     ) -> Option<NormalizedEvent> {
-        None
+        normalizer::lookup(&self.targets, path, kind)
     }
 }
 

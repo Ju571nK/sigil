@@ -3,11 +3,14 @@ use common::{policy_for_paths, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "FSEvents tempdir timing issue (Phase 1 known limit) — run with --ignored"]
 async fn it_emits_modified_event() {
+    // Canonicalize the temp dir: the agent canonicalizes event paths, and on
+    // macOS `/var` is a symlink to `/private/var`, so an un-canonicalized policy
+    // path wouldn't match.
+    let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     let watch_path_template = format!(
         "{}/sigil-it-{}.json",
-        std::env::temp_dir().display(),
+        tmp.display(),
         uuid::Uuid::new_v4().simple()
     );
     let policy = policy_for_paths(&[&watch_path_template], "standard");

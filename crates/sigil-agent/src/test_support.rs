@@ -51,12 +51,22 @@ impl TestAgentBuilder {
             events_dir: events_dir.clone(),
             control_socket: control_socket.clone(),
             control_pipe_name: control_pipe_name.clone(),
+            poll_watcher: false,
         };
         let join = tokio::spawn(async move {
             let _ = runtime::run(cfg).await;
         });
-        // Allow watcher registration to complete.
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // Wait until the control IPC is listening: the runtime registers every
+        // watch root *before* opening the control listener, so the socket file
+        // appearing means all watchers are live. (On Windows the IPC is a named
+        // pipe with no socket file, so this just runs out the deadline — fine,
+        // ReadDirectoryChangesW registration is synchronous and fast.)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !control_socket.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // Small settle window for the OS watcher to start delivering events.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         TestAgent {
             td,
             events_dir,

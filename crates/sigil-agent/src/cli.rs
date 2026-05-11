@@ -24,6 +24,14 @@ pub struct Cli {
     /// Override the events directory.
     #[arg(long, global = true)]
     pub events_dir: Option<PathBuf>,
+
+    /// Use a polling watcher instead of the OS-native one (inotify / FSEvents /
+    /// ReadDirectoryChangesW). Use this where native filesystem events are
+    /// unreliable — e.g. NFS-mounted homes, `virtiofs`/`9p` shares, or
+    /// bind-mounts inside VM-backed container engines (Docker Desktop, Rancher
+    /// Desktop). Only affects `run`.
+    #[arg(long, global = true)]
+    pub poll: bool,
 }
 
 #[derive(Subcommand, Debug)]
