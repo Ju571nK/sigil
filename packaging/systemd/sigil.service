@@ -1,0 +1,48 @@
+# Sigil agent — systemd unit (Linux).
+#
+# Install:
+#   sudo install -m 0755 target/release/sigil /usr/local/bin/sigil
+#   sudo install -m 0644 packaging/systemd/sigil.service /etc/systemd/system/sigil.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now sigil
+#
+# Default paths the agent uses on Linux (override with --policy / --state-db /
+# --events-dir on ExecStart if you want something else):
+#   policy : /etc/sigil/policy.yaml          (optional; built-in defaults apply if absent)
+#   state  : /var/lib/sigil/state.db
+#   events : /var/log/sigil/events-*.jsonl   (point your SIEM agent here)
+#   IPC    : /var/run/sigil/control.sock
+#
+# Runs as root so the watcher can read other users' home directories
+# (~/.cursor/mcp.json, ~/.aws/credentials, etc.). To run unprivileged,
+# set User=/Group= to a dedicated account and accept that coverage is
+# limited to files that account can read. See `sigil doctor`.
+
+[Unit]
+Description=Sigil — AI-Native Detection Engine for Device Assurance (agent)
+Documentation=https://github.com/Ju571nK/sigil
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sigil run
+Restart=on-failure
+RestartSec=5
+User=root
+# State / log directories the agent writes to (created by systemd if missing).
+StateDirectory=sigil
+LogsDirectory=sigil
+RuntimeDirectory=sigil
+# Mild hardening — the agent only reads files and writes to its own dirs.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sigil /var/log/sigil /var/run/sigil
+ProtectHome=read-only
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

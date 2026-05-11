@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-2022]
+        os: [macos-14, windows-2022, ubuntu-22.04]
         toolchain: [stable]
     steps:
       - uses: actions/checkout@v5
@@ -30,19 +30,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: build
         run: cargo build --workspace
-      - name: test (core)
-        run: cargo test -p sigil-core
-      - name: test (agent)
-        run: cargo test -p sigil-agent --tests
+      - name: test (workspace)
+        run: cargo test --workspace
       - name: release build
         run: cargo build --release --workspace
-
-  linux_build_only:
-    name: linux build verification
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: build (no tests)
-        run: cargo build --workspace

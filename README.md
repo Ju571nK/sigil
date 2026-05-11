@@ -135,19 +135,24 @@ flowchart LR
 - **0.1.x — alpha.** The event schema and CLI surface can break between minor
   releases until 0.2. `schema_version` in every event lets downstream
   consumers detect this.
-- **Platforms.** macOS and Windows at runtime. Linux has CI scaffolding only;
-  it is on the Phase 3 roadmap.
+- **Platforms.** macOS, Windows, and Linux at runtime. The Linux runtime
+  landed as a minimal foundation (Phase 3a) and is exercised in CI; some
+  refinements are marked `TODO(community)` in `platform/linux.rs` — see
+  [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Schema.** Version `1`.
 
 ## Roadmap
 
 - **Phase 1 — shipped.** Filesystem watcher, JSONL sink, host metadata, state
   database, debounce / rate-limit, JSONL retention GC.
-- **Phase 2 — in progress.** Split-process IPC via the durable spool, signed
-  policy envelopes, and a sender that ships JSONL to a SIEM endpoint.
-  Transport spec was locked on 2026-05-10.
-- **Phase 3 — planned.** Linux runtime, additional posture signals,
-  reproducible-build attestation.
+- **Phase 2 — shipped.** Split-process IPC via the durable spool, signed
+  policy envelopes, a sender that ships JSONL over mTLS, an operator signing
+  CLI, and an OSS reference server. Transport spec was locked on 2026-05-10.
+- **Phase 3a — shipped.** Linux runtime (inotify watcher, `/etc/passwd` user
+  enumeration, hardware fingerprint). Minimal foundation; refinements open
+  for community contribution.
+- **Phase 3b/c — planned.** Additional posture signals, reproducible-build
+  attestation.
 
 ## Design principles
 

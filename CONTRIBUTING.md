@@ -13,6 +13,38 @@ Thank you for your interest in contributing to Sigil.
 - Do not submit code copied from an employer or another project unless you have
   the legal right to contribute it under the Apache License 2.0.
 
+## Good first contributions — Linux runtime
+
+The Linux runtime (`crates/sigil-agent/src/platform/linux.rs`) landed as a
+minimal foundation in Phase 3a: it watches files (via `notify`'s inotify
+backend), enumerates users from `/etc/passwd`, and computes the hardware
+fingerprint. Several refinements are deliberately left open and marked
+`TODO(community)` in that file — they make good standalone PRs:
+
+- **inotify watch-count limits.** A recursive watch tree larger than
+  `/proc/sys/fs/inotify/max_user_watches` causes `notify` to fail on some
+  subdirectories. Today those errors are logged; a better treatment emits a
+  posture event ("coverage degraded — N subtrees unwatched") and has
+  `sigil doctor` warn when the sysctl looks low relative to the policy's path
+  count.
+- **`fda_state()` nuance.** It returns `Granted` unconditionally on Linux
+  (there is no Full-Disk-Access gate). It could instead reflect whether the
+  daemon runs as root / with `CAP_DAC_READ_SEARCH` vs. a limited user and
+  surface that in `sigil doctor`.
+- **LDAP / Active Directory users.** `list()` parses `/etc/passwd` directly.
+  On directory-joined hosts, real users may only appear via `getent passwd`.
+  An opt-in (config-gated) `getent` path would broaden coverage — gated
+  because AD homes are often NFS-mounted and slow.
+- **Init-system-agnostic service status.** `sigil doctor` does not check
+  whether the agent service is running. A check that handles systemd /
+  OpenRC / runit would be useful (systemd unit ships in
+  `packaging/systemd/sigil.service`).
+- **Packaging.** `.deb` / `.rpm` build recipes (only the systemd unit ships
+  today).
+
+Linux runtime tests run in CI on `ubuntu-22.04`, so platform-specific test
+gaps in the existing agent integration suite are also fair game.
+
 ## License of Contributions
 
 Unless you clearly state otherwise, any contribution intentionally submitted to

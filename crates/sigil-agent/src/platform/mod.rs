@@ -30,7 +30,13 @@ pub mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::WindowsPlatform as ActivePlatform;
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::LinuxPlatform as ActivePlatform;
+
+// Fallback for any OS that isn't macOS / Windows / Linux: build-only stub.
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub mod stub;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub use stub::StubPlatform as ActivePlatform;
