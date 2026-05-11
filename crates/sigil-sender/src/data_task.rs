@@ -147,6 +147,262 @@ pub async fn send_one_batch(ctx: BatchSendCtx<'_>) -> BatchOutcome {
 #[allow(dead_code)]
 fn _path_marker(_p: PathBuf) {}
 
+use crate::batch_reader::read_next_batch;
+use crate::config::SenderConfig;
+use crate::dead_letter;
+use crate::heartbeat::SharedStats;
+use crate::state;
+use sigil_core::event::{
+    Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
+};
+use tokio_util::sync::CancellationToken;
+
+/// Idle poll interval when no batch is available.
+const IDLE_POLL: Duration = Duration::from_millis(500);
+
+pub struct DataTaskCtx {
+    pub client: Client,
+    pub config: SenderConfig,
+    pub host_id: String,
+    pub agent_version: String,
+    pub sender_version: String,
+    pub stats: SharedStats,
+    pub shutdown: CancellationToken,
+}
+
+/// Build a local diagnostic Event tagged with the sender's host_id.
+/// Used for HostUnknown / TlsFailure / ProtocolViolation / per-event
+/// rejections, all of which get appended to the dead-letter spool.
+pub fn local_event(host_id: &str, evidence: Evidence) -> Event {
+    Event {
+        schema_version: SCHEMA_VERSION,
+        event_id: uuid::Uuid::now_v7(),
+        ts: OffsetDateTime::now_utc(),
+        host_id: host_id.to_string(),
+        agent_version: AGENT_VERSION.to_string(),
+        severity: Severity::Warn,
+        source: SourceKind::Agent,
+        subject: Subject::Self_,
+        evidence,
+        target_id: None,
+    }
+}
+
+/// Top-level data plane loop: read JSONL → POST /v1/events → apply_ack
+/// → state::store → dead-letter rejections → update stats. Handles all
+/// `BatchOutcome` variants per spec §3.8.2.
+pub async fn run(ctx: DataTaskCtx) {
+    let backoff_busy = BackoffPolicy::server_busy();
+    let backoff_perm = BackoffPolicy::upgrade_required();
+    let mut state = match state::load_or_empty(&ctx.config.offset_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = ?e, "load_or_empty failed; starting empty");
+            SenderState::empty()
+        }
+    };
+    let mut consecutive_failures: u32 = 0;
+
+    loop {
+        if ctx.shutdown.is_cancelled() {
+            break;
+        }
+
+        if state.current_file.is_empty() {
+            if let Some(seg) = discover_first_segment(&ctx.config.events_dir) {
+                state.current_file = seg;
+            } else if !idle_sleep(&ctx.shutdown, IDLE_POLL).await {
+                break;
+            } else {
+                continue;
+            }
+        }
+
+        let read_result = read_next_batch(
+            &ctx.config.events_dir,
+            &state,
+            ctx.config.max_batch_events,
+            ctx.config.max_batch_bytes,
+        );
+        let (events, manifest) = match read_result {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    current_file = %state.current_file,
+                    "read_next_batch failed"
+                );
+                if !idle_sleep(&ctx.shutdown, Duration::from_secs(1)).await {
+                    break;
+                }
+                continue;
+            }
+        };
+
+        if events.is_empty() {
+            if let Some(next) = next_segment(&ctx.config.events_dir, &state) {
+                state.current_file = next;
+                state.byte_offset = 0;
+                continue;
+            }
+            if !idle_sleep(&ctx.shutdown, IDLE_POLL).await {
+                break;
+            }
+            continue;
+        }
+
+        let batch_size = events.len();
+        let outcome = send_one_batch(BatchSendCtx {
+            client: &ctx.client,
+            server_base_url: &ctx.config.server_base_url,
+            host_id: &ctx.host_id,
+            agent_version: &ctx.agent_version,
+            sender_version: &ctx.sender_version,
+            events,
+        })
+        .await;
+
+        match outcome {
+            BatchOutcome::Accepted(accepted) => {
+                consecutive_failures = 0;
+                let new_state = match apply_ack(&manifest, accepted.high_water_event_id) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!(error = ?e, "apply_ack failed");
+                        let evt = local_event(
+                            &ctx.host_id,
+                            Evidence::ServerProtocolViolation {
+                                detail: format!("apply_ack: {e}"),
+                            },
+                        );
+                        let _ = dead_letter::append(&ctx.config.dead_letter_dir, &evt);
+                        continue;
+                    }
+                };
+                for r in &accepted.rejected {
+                    let evt = local_event(
+                        &ctx.host_id,
+                        Evidence::EventUnprocessableLocal {
+                            original_event_id: r.event_id,
+                            server_reason: r.reason.clone(),
+                        },
+                    );
+                    if let Err(e) = dead_letter::append(&ctx.config.dead_letter_dir, &evt) {
+                        tracing::warn!(
+                            error = ?e,
+                            event_id = %r.event_id,
+                            "dead_letter::append failed"
+                        );
+                    }
+                }
+                if let Err(e) = state::store(&ctx.config.offset_path, &new_state) {
+                    tracing::warn!(error = ?e, "state::store failed; will retry");
+                    continue;
+                }
+                state = new_state;
+                {
+                    let mut s = ctx.stats.write();
+                    s.last_server_ack_at = Some(OffsetDateTime::now_utc());
+                    s.last_server_response_code = Some(200);
+                    s.lag_events = s.lag_events.saturating_sub(batch_size as u64);
+                }
+            }
+            BatchOutcome::PermanentReject { status, body } => {
+                consecutive_failures += 1;
+                let evt = local_event(
+                    &ctx.host_id,
+                    Evidence::ServerProtocolViolation {
+                        detail: format!("batch rejected status={status}: {body}"),
+                    },
+                );
+                let _ = dead_letter::append(&ctx.config.dead_letter_dir, &evt);
+                {
+                    let mut s = ctx.stats.write();
+                    s.last_server_response_code = Some(status);
+                }
+                let delay = backoff_perm.next_delay(consecutive_failures.saturating_sub(1));
+                if !idle_sleep(&ctx.shutdown, delay).await {
+                    break;
+                }
+            }
+            BatchOutcome::ServerBusy { status, .. } => {
+                consecutive_failures += 1;
+                {
+                    let mut s = ctx.stats.write();
+                    s.last_server_response_code = Some(status);
+                }
+                let delay = backoff_busy.next_delay(consecutive_failures.saturating_sub(1));
+                if !idle_sleep(&ctx.shutdown, delay).await {
+                    break;
+                }
+            }
+            BatchOutcome::TlsFailure(reason) => {
+                consecutive_failures += 1;
+                let evt = local_event(&ctx.host_id, Evidence::TlsFailure { reason });
+                let _ = dead_letter::append(&ctx.config.dead_letter_dir, &evt);
+                let delay = backoff_busy.next_delay(consecutive_failures.saturating_sub(1));
+                if !idle_sleep(&ctx.shutdown, delay).await {
+                    break;
+                }
+            }
+            BatchOutcome::Network(reason) => {
+                consecutive_failures += 1;
+                tracing::warn!(reason = %reason, "network failure; will retry");
+                let delay = backoff_busy.next_delay(consecutive_failures.saturating_sub(1));
+                if !idle_sleep(&ctx.shutdown, delay).await {
+                    break;
+                }
+            }
+            BatchOutcome::ProtocolViolation(detail) => {
+                consecutive_failures += 1;
+                let evt = local_event(&ctx.host_id, Evidence::ServerProtocolViolation { detail });
+                let _ = dead_letter::append(&ctx.config.dead_letter_dir, &evt);
+                let delay = backoff_busy.next_delay(consecutive_failures.saturating_sub(1));
+                if !idle_sleep(&ctx.shutdown, delay).await {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Sleep for `delay` unless cancelled. Returns `false` if cancelled (caller breaks).
+async fn idle_sleep(cancel: &CancellationToken, delay: Duration) -> bool {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => false,
+        _ = tokio::time::sleep(delay) => true,
+    }
+}
+
+/// Find the lexically smallest `events-*.jsonl` segment in `events_dir`.
+/// Used on first run when no `current_file` has been persisted yet.
+fn discover_first_segment(events_dir: &std::path::Path) -> Option<String> {
+    let mut entries: Vec<String> = std::fs::read_dir(events_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("events-") && n.ends_with(".jsonl"))
+        .collect();
+    entries.sort();
+    entries.into_iter().next()
+}
+
+/// Find the lexically next `events-*.jsonl` segment after the current one.
+/// Returns `None` if `current_file` is the latest. Used to roll forward
+/// after the current segment is fully drained.
+fn next_segment(events_dir: &std::path::Path, state: &SenderState) -> Option<String> {
+    let mut entries: Vec<String> = std::fs::read_dir(events_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("events-") && n.ends_with(".jsonl"))
+        .collect();
+    entries.sort();
+    let cur = &state.current_file;
+    entries.into_iter().find(|n| n > cur)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

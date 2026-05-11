@@ -12,13 +12,15 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-use sigil_sender::wire::{EventsAccepted, EventsRequest};
+use sigil_sender::wire::{EventRejection, EventsAccepted, EventsRequest};
 
 /// Per-test mock state.
 pub struct MockState {
     pub received_batches: Vec<EventsRequest>,
     pub next_status: u16,          // override for next response (default 200)
     pub next_body: Option<String>, // override body
+    /// Per-event rejections appended to the 200 response. Cleared after use.
+    pub next_rejected: Vec<EventRejection>,
     pub policy_etag: String,
     pub policy_response: Option<sigil_sender::wire::SignedPolicyResponse>,
 }
@@ -29,6 +31,7 @@ impl Default for MockState {
             received_batches: Vec::new(),
             next_status: 200,
             next_body: None,
+            next_rejected: Vec::new(),
             policy_etag: String::new(),
             policy_response: None,
         }
@@ -62,10 +65,18 @@ async fn handle_events(
     let mut s = state.lock().await;
     s.received_batches.push(req.clone());
     let status = s.next_status;
+    let rejected = std::mem::take(&mut s.next_rejected);
     if (200..300).contains(&status) {
+        let rejected_ids: std::collections::HashSet<_> =
+            rejected.iter().map(|r| r.event_id).collect();
         let resp = EventsAccepted {
-            accepted: req.events.iter().map(|e| e.event_id).collect(),
-            rejected: vec![],
+            accepted: req
+                .events
+                .iter()
+                .filter(|e| !rejected_ids.contains(&e.event_id))
+                .map(|e| e.event_id)
+                .collect(),
+            rejected,
             high_water_event_id: req
                 .events
                 .last()
