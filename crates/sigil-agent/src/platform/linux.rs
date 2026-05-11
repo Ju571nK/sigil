@@ -215,13 +215,11 @@ mod tests {
 
     #[test]
     fn enumerates_users_from_real_passwd() {
-        // CI ubuntu runners have at least the `runner` account (uid ~1001,
-        // home /home/runner) in /etc/passwd.
+        // Whatever this box's /etc/passwd holds — a dev machine or a hosted CI
+        // VM has human users, a minimal container often has none — list() must
+        // not panic, and every entry it does return must look like a real human
+        // account. (The parsing itself is covered by parse_passwd_* below.)
         let users = LinuxPlatform::new().list();
-        assert!(
-            !users.is_empty(),
-            "expected at least one human user in /etc/passwd"
-        );
         for u in &users {
             assert!(u.home.starts_with("/"));
             assert!(u.uid_or_sid.parse::<u32>().unwrap() >= 1000);
