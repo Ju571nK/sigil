@@ -36,7 +36,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn default_state_db_path() -> std::path::PathBuf {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "linux")) {
         "/var/lib/sigil/state.db".into()
     } else {
         std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
@@ -45,7 +45,7 @@ fn default_state_db_path() -> std::path::PathBuf {
 }
 
 fn default_events_dir() -> std::path::PathBuf {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "linux")) {
         "/var/log/sigil".into()
     } else {
         std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
