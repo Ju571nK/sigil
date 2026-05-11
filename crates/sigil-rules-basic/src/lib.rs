@@ -1,4 +1,4 @@
-//! Basic open-source detection rule defaults for ANDEDA.
+//! Basic open-source detection rule defaults for Sigil.
 //!
 //! This crate ships the OSS baseline ruleset (file-watch targets) that the
 //! agent uses when no operator policy is supplied. It is intentionally

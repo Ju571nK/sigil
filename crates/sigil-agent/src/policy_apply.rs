@@ -6,6 +6,7 @@
 //!   3. On Err with reason: emit PolicySignatureInvalid → reject ack.
 //!   4. On Err::Internal: log + 5xx-equivalent (re-tries OK).
 
+use parking_lot::{Mutex, RwLock};
 use sigil_core::event::{
     Event, Evidence, PolicySignatureInvalidReason, Severity, SourceKind, Subject, AGENT_VERSION,
     SCHEMA_VERSION,
@@ -15,7 +16,6 @@ use sigil_core::policy::{
     AtomicWriteError, VerifyError,
 };
 use sigil_core::state::HashCache;
-use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -187,11 +187,11 @@ async fn emit_reloaded(ctx: &ApplyContext, version: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use rand_core::RngCore;
     use sigil_core::policy::canonical::to_canonical_bytes;
     use sigil_core::policy::pubkeys::KeystoreEntry;
     use sigil_core::policy::signed_envelope::SignedEnvelope;
-    use ed25519_dalek::{Signer, SigningKey};
-    use rand_core::RngCore;
     use tempfile::tempdir;
     use time::macros::datetime;
 

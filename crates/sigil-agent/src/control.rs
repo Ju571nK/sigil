@@ -3,11 +3,11 @@
 //! Phase 1 supports a single command: `{"cmd":"stats"}` returning the current
 //! Heartbeat-equivalent payload as JSON.
 
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use sigil_core::policy::signed_envelope::SignedPolicyResponse;
 use sigil_core::stats::{Stats, StatsSnapshot};
 use sigil_core::PolicySignatureInvalidReason;
-use parking_lot::RwLock;
-use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::path::Path;
 use std::sync::Arc;

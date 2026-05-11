@@ -1,8 +1,8 @@
+use anyhow::Result;
+use clap::Parser;
 use sigil_sender::cli::{Cli, Command};
 use sigil_sender::config::SenderConfig;
 use sigil_sender::runtime::{run, RuntimeCtx};
-use anyhow::Result;
-use clap::Parser;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
         }
         Command::Doctor => {
             let cfg = SenderConfig::load(&config_path)?;
-            println!("ANDEDA sender doctor");
+            println!("Sigil sender doctor");
             println!("[OK] config loaded: {}", config_path.display());
             println!("[OK] server_base_url: {}", cfg.server_base_url);
             println!("[OK] events_dir: {}", cfg.events_dir.display());

@@ -1,10 +1,10 @@
 //! e2e: jsonl_gc_task soft-floor / hard-ceiling behaviors.
 
+use parking_lot::RwLock;
 use sigil_agent::gc_config::GcConfig;
 use sigil_agent::jsonl_gc_task::{tick_for_test, GcTaskCtx};
 use sigil_agent::sender_offset::SenderOffset;
 use sigil_core::event::Evidence;
-use parking_lot::RwLock;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

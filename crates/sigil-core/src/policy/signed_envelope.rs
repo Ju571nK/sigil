@@ -106,7 +106,7 @@ mod tests {
             etag: "abc".into(),
             signed_envelope: sample(),
             signature: "sig".into(),
-            signing_pubkey_id: "andeda-policy-2026-05".into(),
+            signing_pubkey_id: "sigil-policy-2026-05".into(),
             applied_at: datetime!(2026-05-15 8:01 UTC),
         };
         let s = serde_json::to_string(&r).unwrap();

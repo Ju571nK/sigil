@@ -1,11 +1,11 @@
 //! Sink task. Owns the `JsonlSink`; calls `commit_baseline` after each write.
 
 use crate::state_task::{commit_baseline, CommittableEvent};
+use parking_lot::Mutex;
 use sigil_core::sink::jsonl::JsonlSink;
 use sigil_core::sink::EventSink;
 use sigil_core::state::HashCache;
 use sigil_core::stats::Stats;
-use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;

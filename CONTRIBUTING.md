@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in contributing to ANDEDA.
+Thank you for your interest in contributing to Sigil.
 
 ## Contribution Guidelines
 

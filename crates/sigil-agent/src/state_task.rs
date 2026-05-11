@@ -4,12 +4,12 @@
 //! 3. After sink confirms write (returns Ok), update state.db.
 
 use crate::hasher::HashedEvent;
+use parking_lot::Mutex;
 use sigil_core::event::{
     Event, Evidence, FileChangeKind, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
 use sigil_core::state::HashCache;
 use sigil_core::stats::Stats;
-use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;

@@ -5,10 +5,10 @@ use crate::gc_config::GcConfig;
 use crate::jsonl_gc::{decide, Segment};
 use crate::sender_offset;
 use crate::state_task::CommittableEvent;
+use parking_lot::RwLock;
 use sigil_core::event::{
     Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
-use parking_lot::RwLock;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;

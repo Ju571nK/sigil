@@ -1,12 +1,12 @@
 //! Heartbeat task: emits an Event every 60s, plus one on shutdown with is_final=true.
 
 use crate::state_task::CommittableEvent;
+use parking_lot::{Mutex, RwLock};
 use sigil_core::event::{
     Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
 use sigil_core::state::HashCache;
 use sigil_core::stats::Stats;
-use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,8 +109,8 @@ pub(crate) async fn emit(
 #[cfg(test)]
 mod field_tests {
     use super::*;
-    use sigil_core::state::HashCache;
     use parking_lot::{Mutex, RwLock};
+    use sigil_core::state::HashCache;
     use tempfile::tempdir;
 
     #[tokio::test]

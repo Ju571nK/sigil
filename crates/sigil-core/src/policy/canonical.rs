@@ -2,7 +2,7 @@
 //!
 //! Used to produce the byte sequence the policy signing key signs (and
 //! agents verify against). The full JCS spec covers many edge cases; this
-//! implementation handles the subset that ANDEDA's `SignedEnvelope` exercises:
+//! implementation handles the subset that Sigil's `SignedEnvelope` exercises:
 //!
 //! - Object keys sorted lexicographically (UTF-16 code units).
 //! - No insignificant whitespace.

@@ -1,4 +1,4 @@
-//! ANDEDA core domain library.
+//! Sigil core domain library.
 //!
 //! This crate is OS-, tokio-, and notify-independent.
 

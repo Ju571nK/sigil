@@ -1,11 +1,11 @@
 //! Regression test: Plan A's Phase 2 surface is no-op when no sender
 //! offset and no apply_policy ever happen.
 
+use parking_lot::RwLock;
 use sigil_agent::gc_config::GcConfig;
 use sigil_agent::jsonl_gc_task::{tick_for_test, GcTaskCtx};
 use sigil_agent::policy_expiry_task::{evaluate_for_test, ExpiryTaskCtx};
 use sigil_core::state::HashCache;
-use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;

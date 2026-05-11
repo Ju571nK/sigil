@@ -1,9 +1,9 @@
 //! Six properties covering the spec's invariants.
 
+use proptest::prelude::*;
 use sigil_core::debounce::Debouncer;
 use sigil_core::event::{Event, FileChangeKind};
 use sigil_core::policy::{merge, HostIdStrategy, Platform, PolicyDocument, Tier, WatchTarget};
-use proptest::prelude::*;
 use std::collections::HashSet;
 use std::path::PathBuf;
 

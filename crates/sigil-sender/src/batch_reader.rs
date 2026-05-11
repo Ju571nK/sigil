@@ -29,7 +29,7 @@ pub enum BatchReadError {
     MissingEventId { offset: u64 },
 }
 
-/// Subset of an ANDEDA Event needed by the sender (just the id).
+/// Subset of an Sigil Event needed by the sender (just the id).
 /// The full payload is forwarded to the server as opaque JSON.
 #[derive(Deserialize)]
 struct EventIdProbe {

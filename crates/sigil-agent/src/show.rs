@@ -1,4 +1,4 @@
-//! `andeda show ...` — print effective config, expanded paths, or live stats.
+//! `sigil show ...` — print effective config, expanded paths, or live stats.
 
 use crate::cli::ShowWhat;
 use crate::platform::ActivePlatform;
@@ -34,7 +34,7 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
             }
         }
         ShowWhat::Stats => {
-            println!("(Phase 1: stats over IPC implemented in a later task; for now, run `andeda run` and read the next heartbeat from the JSONL.)");
+            println!("(Phase 1: stats over IPC implemented in a later task; for now, run `sigil run` and read the next heartbeat from the JSONL.)");
         }
     }
     Ok(0)

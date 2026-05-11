@@ -2,8 +2,8 @@
 //!
 //! Spec §3.8.1: at-most-one-duplicate per crash point, no event loss.
 
-use sigil_spool::{Checkpoint, Consumer, Producer, ProducerConfig};
 use proptest::prelude::*;
+use sigil_spool::{Checkpoint, Consumer, Producer, ProducerConfig};
 use std::time::Duration;
 use tempfile::TempDir;
 

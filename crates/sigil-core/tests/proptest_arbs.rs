@@ -5,9 +5,9 @@
 
 #![allow(dead_code)]
 
-use sigil_core::policy::{Override, Platform, Tier, WatchTarget};
 use proptest::collection::vec;
 use proptest::prelude::*;
+use sigil_core::policy::{Override, Platform, Tier, WatchTarget};
 
 pub fn arb_target() -> impl Strategy<Value = WatchTarget> {
     ("[a-z][a-z0-9-]{2,15}", any::<u8>()).prop_map(|(id, n)| WatchTarget {

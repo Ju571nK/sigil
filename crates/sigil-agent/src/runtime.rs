@@ -11,13 +11,13 @@ use crate::{
     supervisor::Supervisor,
     watcher,
 };
+use parking_lot::Mutex;
 use sigil_core::policy::expand::{expand_per_user, EnvLookup, UserEnumerator};
 use sigil_core::policy::pubkeys::Keystore;
 use sigil_core::policy::{current_platform, defaults, merge, Tier};
 use sigil_core::sink::jsonl::JsonlSink;
 use sigil_core::state::HashCache;
 use sigil_core::stats::Stats;
-use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

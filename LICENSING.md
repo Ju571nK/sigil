@@ -1,6 +1,6 @@
-# ANDEDA Licensing & Module-Split Policy
+# Sigil Licensing & Module-Split Policy
 
-This document describes which parts of ANDEDA are open source under
+This document describes which parts of Sigil are open source under
 [Apache License 2.0](LICENSE), and which parts are reserved for
 binary-only / commercial distribution. It is the canonical reference
 when adding new modules or rule packs.
@@ -44,7 +44,7 @@ services. The choice depends on integration depth.
 
 | Deliverable                  | Form                            | Notes                                          |
 | ---------------------------- | ------------------------------- | ---------------------------------------------- |
-| Extended detection rule pack | `andeda-rules-pro` (private)    | Shadow AI, MCP/IDE configs, SaaS agents, etc.  |
+| Extended detection rule pack | `sigil-rules-pro` (private)    | Shadow AI, MCP/IDE configs, SaaS agents, etc.  |
 | Enterprise rule packs        | Signed policy bundle (Phase 2)  | Verified via `sigil-core::policy::verify`     |
 | `sigil-sender`              | Binary release (Plan B)         | Signs + ships envelopes to fleet               |
 | Hosted policy service        | Cloud service                   | Enterprise rule distribution + telemetry       |
@@ -89,7 +89,7 @@ Plan A (already merged) shipped:
 - Atomic disk + state.db commit ([atomic_writer.rs](crates/sigil-core/src/policy/atomic_writer.rs))
 
 Together these form a **signed policy bundle pipeline**: a private
-`andeda-rules-pro` build can ship as a signed YAML that the OSS agent
+`sigil-rules-pro` build can ship as a signed YAML that the OSS agent
 applies via the same code path operators audit. No `.dylib`/`.dll`
 plugin loading, no Rust ABI boundary, no commercial-only code paths in
 the daemon binary itself.
@@ -102,7 +102,7 @@ This is the recommended distribution form for closed rule packs.
 
 - The `main` branch is and remains Apache 2.0.
 - Closed content lives in **separate repositories** (e.g.
-  `andeda-rules-pro`), never as `.gitignored` files in this tree.
+  `sigil-rules-pro`), never as `.gitignored` files in this tree.
 - `sigil-rules-basic` is the boundary marker: anything more specialized
   than its baseline targets is a candidate for the closed track.
 
@@ -110,7 +110,7 @@ This is the recommended distribution form for closed rule packs.
 
 ## Distributing the pro rule pack — signed bundles, not build linking
 
-The OSS daemon does **not** link `andeda-rules-pro` at build time. We
+The OSS daemon does **not** link `sigil-rules-pro` at build time. We
 considered a Cargo `pro` feature gated behind a private git dep, but
 Cargo records every conditional dep in `Cargo.lock` and tries to fetch
 on every build, which (a) breaks OSS CI on forks/PRs without SSH access
@@ -119,7 +119,7 @@ file. The cleaner architecture — already enabled by Plan A — is to ship
 extended rule packs as **signed policy bundles**.
 
 **The pipeline (already shipped in Plan A)**:
-1. `andeda-rules-pro` (private repo) holds the YAML rule sources.
+1. `sigil-rules-pro` (private repo) holds the YAML rule sources.
 2. A signing tool (Plan B `sigil-sender` companion) wraps a YAML
    payload in a [`SignedEnvelope`](crates/sigil-core/src/policy/signed_envelope.rs)
    using a private ed25519 key.
@@ -138,7 +138,7 @@ extended rule packs as **signed policy bundles**.
   describes — the signing key is the only secret the daemon needs to
   trust.
 
-**Status**: `andeda-rules-pro` repo holds the rule YAML sources today
-([github.com/Ju571nK/anti_i-rules-pro](https://github.com/Ju571nK/anti_i-rules-pro)).
+**Status**: `sigil-rules-pro` repo holds the rule YAML sources today
+([github.com/Ju571nK/sigil-rules-pro](https://github.com/Ju571nK/sigil-rules-pro)).
 The signer + sender pieces land in Plan B; until then the YAML is only
 consumed via the signed-bundle test fixtures used by `verify.rs`.

@@ -1,6 +1,6 @@
-//! ANDEDA Phase 2 sender process.
+//! Sigil Phase 2 sender process.
 //!
-//! See `docs/superpowers/specs/2026-05-08-andeda-design.md` §3.8.
+//! See `docs/superpowers/specs/2026-05-08-sigil-design.md` §3.8.
 
 pub mod agent_ipc;
 pub mod batch_reader;

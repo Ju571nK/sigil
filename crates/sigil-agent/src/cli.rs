@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "andeda",
+    name = "sigil",
     version,
     about = "AI-Native Detection Engine for Device Assurance"
 )]

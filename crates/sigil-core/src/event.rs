@@ -415,7 +415,7 @@ mod tests {
     fn policy_signature_invalid_serializes_with_reason_field() {
         let ev = Evidence::PolicySignatureInvalid {
             reason: PolicySignatureInvalidReason::PubkeyUnknown,
-            signing_pubkey_id: "andeda-policy-2026-05".into(),
+            signing_pubkey_id: "sigil-policy-2026-05".into(),
             policy_version_in_envelope: 42,
             last_applied_policy_version: 41,
         };
@@ -425,7 +425,7 @@ mod tests {
             "got: {s}"
         );
         assert!(s.contains("\"reason\":\"pubkey_unknown\""));
-        assert!(s.contains("\"signing_pubkey_id\":\"andeda-policy-2026-05\""));
+        assert!(s.contains("\"signing_pubkey_id\":\"sigil-policy-2026-05\""));
         assert!(s.contains("\"policy_version_in_envelope\":42"));
         assert!(s.contains("\"last_applied_policy_version\":41"));
     }

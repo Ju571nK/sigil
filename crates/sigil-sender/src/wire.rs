@@ -29,7 +29,7 @@ pub struct Envelope {
 pub struct EventEntry {
     pub event_id: Uuid,
     pub sequence: u64,
-    /// Opaque ANDEDA Event payload — see `sigil-core::event::Event`.
+    /// Opaque Sigil Event payload — see `sigil-core::event::Event`.
     pub payload: JsonValue,
 }
 

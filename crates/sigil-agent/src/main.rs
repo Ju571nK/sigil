@@ -1,7 +1,7 @@
-//! ANDEDA agent — tokio runtime + system integration.
+//! Sigil agent — tokio runtime + system integration.
 
-use sigil_agent::{cli, doctor, runtime, show};
 use clap::Parser;
+use sigil_agent::{cli, doctor, runtime, show};
 
 fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
@@ -29,7 +29,7 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(code);
         }
         cli::Command::Version => {
-            println!("andeda {}", env!("CARGO_PKG_VERSION"));
+            println!("sigil {}", env!("CARGO_PKG_VERSION"));
         }
     }
     Ok(())

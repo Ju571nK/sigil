@@ -1,4 +1,4 @@
-//! `andeda doctor` — startup diagnostics, prints a formatted report.
+//! `sigil doctor` — startup diagnostics, prints a formatted report.
 
 use crate::platform::{ActivePlatform, FdaState, Platform};
 use sigil_core::policy::expand::{expand_per_user, EnvLookup};
@@ -10,7 +10,7 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
     let mut warn_count = 0;
     let mut error_count = 0;
 
-    println!("ANDEDA doctor {}", env!("CARGO_PKG_VERSION"));
+    println!("Sigil doctor {}", env!("CARGO_PKG_VERSION"));
     println!("─────────────────────────────────────────────");
 
     let user_doc = match policy_override.as_ref() {
@@ -163,6 +163,6 @@ fn default_state_db_path() -> PathBuf {
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        PathBuf::from("/tmp/andeda-state.db")
+        PathBuf::from("/tmp/sigil-state.db")
     }
 }

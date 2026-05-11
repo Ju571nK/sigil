@@ -4,10 +4,10 @@
 //! into expired, and resets the transition when a new apply commits.
 
 use crate::state_task::CommittableEvent;
+use parking_lot::RwLock;
 use sigil_core::event::{
     Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
-use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;

@@ -5,10 +5,10 @@
 | Item             | macOS                              | Windows                              |
 |------------------|------------------------------------|--------------------------------------|
 | Binary           | /usr/local/bin/sigil              | %PROGRAMFILES%\Sigil\sigil.exe     |
-| Policy           | /etc/sigil/policy.yaml            | %ProgramData%\Andeda\policy.yaml     |
-| Events           | /var/log/sigil/                   | %ProgramData%\Andeda\events\         |
-| State            | /var/lib/sigil/state.db           | %ProgramData%\Andeda\state.db        |
-| Service id       | com.sigil.agent (launchd label)   | Andeda (Windows Service name)        |
+| Policy           | /etc/sigil/policy.yaml            | %ProgramData%\Sigil\policy.yaml     |
+| Events           | /var/log/sigil/                   | %ProgramData%\Sigil\events\         |
+| State            | /var/lib/sigil/state.db           | %ProgramData%\Sigil\state.db        |
+| Service id       | com.sigil.agent (launchd label)   | Sigil (Windows Service name)        |
 | Control IPC      | /var/run/sigil/control.sock       | \\.\pipe\sigil-control              |
 
 ## Signal handling

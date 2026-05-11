@@ -6,7 +6,7 @@ use std::time::Duration;
 #[ignore = "FSEvents tempdir timing issue (Phase 1 known limit) — run with --ignored"]
 async fn it_emits_modified_event() {
     let watch_path_template = format!(
-        "{}/andeda-it-{}.json",
+        "{}/sigil-it-{}.json",
         std::env::temp_dir().display(),
         uuid::Uuid::new_v4().simple()
     );

@@ -9,7 +9,7 @@ use thiserror::Error;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SenderConfig {
-    /// HTTPS URL of `andeda-server-gateway`. e.g., `https://andeda.example.com`.
+    /// HTTPS URL of `sigil-server-gateway`. e.g., `https://sigil.example.com`.
     pub server_base_url: String,
     /// Path to client cert (PEM).
     pub client_cert_path: PathBuf,
@@ -102,7 +102,7 @@ mod tests {
         write(
             &p,
             r#"
-server_base_url: "https://andeda.example.com"
+server_base_url: "https://sigil.example.com"
 client_cert_path: "/etc/sigil/client.crt"
 client_key_path: "/etc/sigil/client.key"
 server_ca_path: "/etc/sigil/server-ca.pem"
@@ -113,7 +113,7 @@ dead_letter_dir: "/var/log/sigil/dead-letter"
 "#,
         );
         let cfg = SenderConfig::load(&p).unwrap();
-        assert_eq!(cfg.server_base_url, "https://andeda.example.com");
+        assert_eq!(cfg.server_base_url, "https://sigil.example.com");
         assert_eq!(cfg.max_batch_events, 256);
         assert_eq!(cfg.max_batch_bytes, 1024 * 1024);
         assert_eq!(cfg.policy_poll_interval.as_secs(), 300);

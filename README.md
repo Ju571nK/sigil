@@ -1,6 +1,6 @@
-# Quill
+# Sigil
 
-> Quill writes a line for every change on your machine.
+> Sigil writes a line for every change on your machine.
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![macOS](https://img.shields.io/badge/macOS-supported-success)
@@ -39,7 +39,7 @@ Each event is one JSON object on its own line:
 }
 ```
 
-## Why Quill?
+## Why Sigil?
 
 - **Tiny, honest, host-only.** Pure user-space. No kernel module, no eBPF, no
   phone-home. A single binary plus a YAML policy file.
@@ -65,14 +65,12 @@ emit a JSONL line every time something changes:
 
 ## Architecture
 
-Quill is a Rust workspace with five crates, organized as two long-running
-processes plus three shared libraries. The crate names below carry the
-project's prior codename (`andeda`); they are scheduled for a renaming
-pass in a later release.
+Sigil is a Rust workspace with five crates, organized as two long-running
+processes plus three shared libraries.
 
 **Processes**
 
-- `sigil-agent` — the host daemon (`andeda` binary). Owns the `tokio`
+- `sigil-agent` — the host daemon (`sigil` binary). Owns the `tokio`
   runtime, the `notify`-based filesystem watcher, the event pipeline, CLI
   commands, and platform glue. Writes JSONL posture events to the local
   spool.
@@ -97,7 +95,7 @@ flowchart LR
     FS[("Filesystem<br/>policy targets")]
     SIEM[("Your SIEM<br/>endpoint")]
 
-    subgraph agent["sigil-agent (bin: andeda)"]
+    subgraph agent["sigil-agent (bin: sigil)"]
         direction TB
         a_pipe["watcher · debouncer<br/>normalizer · hasher<br/>sink_task · state_task"]
         a_ctrl["supervisor · policy_apply<br/>cli · doctor · show"]
@@ -174,7 +172,7 @@ cargo build --release
 The agent binary is produced at:
 
 ```sh
-target/release/andeda
+target/release/sigil
 ```
 
 For development builds, run:
@@ -182,10 +180,6 @@ For development builds, run:
 ```sh
 cargo build
 ```
-
-> The binary is currently named `andeda` — that was the project's working
-> codename before it was renamed to Quill. The binary and crate names will
-> be unified under `quill` in a future release.
 
 ## Usage
 
@@ -221,7 +215,7 @@ cargo run -p sigil-agent -- version
 
 ## Configuration
 
-Quill uses built-in defaults plus an optional YAML policy file.
+Sigil uses built-in defaults plus an optional YAML policy file.
 
 Example policy:
 
@@ -258,7 +252,7 @@ cargo run -p sigil-agent -- \
 
 Default production policy locations are platform-specific. The example policy
 can be adapted for `/etc/sigil/policy.yaml` on Unix-like systems or
-`%ProgramData%\Andeda\policy.yaml` on Windows.
+`%ProgramData%\Sigil\policy.yaml` on Windows.
 
 ## Security
 
