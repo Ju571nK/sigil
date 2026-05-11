@@ -8,7 +8,10 @@
 # the COPY paths below are repo-root-relative.
 
 # ---- builder ----
-FROM rust:slim AS builder
+# Pinned to the bookworm variant so the binaries link against the same glibc
+# (2.36) the runtime stage has — a bare `rust:slim` tracks the newest Debian and
+# would emit GLIBC_2.38+ symbol refs that `debian:bookworm-slim` can't satisfy.
+FROM rust:slim-bookworm AS builder
 WORKDIR /src
 # Copy only what cargo needs (keeps this layer cacheable; no host target/ or .git).
 COPY Cargo.toml Cargo.lock ./

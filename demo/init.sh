@@ -63,10 +63,13 @@ EOF
 
 echo "init: copying + signing the demo policy..."
 cp "$SEED_POLICY" "$SIGIL_ETC/policy.yaml"
+# policy-version 2: the agent's boot reconciliation reads the policy YAML's
+# `version:` field (1, the schema version) into last_applied_policy_version,
+# so the pushed envelope must be > 1 to clear the version-regression check.
 sigil-sign sign \
   --in "$SIGIL_ETC/policy.yaml" \
   --key "$SIGIL_ETC/signing-key.json" \
-  --policy-version 1 \
+  --policy-version 2 \
   --valid-until 2099-01-01T00:00:00Z \
   --out "$SERVER_ETC/signed-policy.json" >/dev/null
 

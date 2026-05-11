@@ -71,6 +71,8 @@ pub fn spawn_watcher(
         "fsevents"
     } else if cfg!(target_os = "windows") {
         "read_directory_changes_w"
+    } else if cfg!(target_os = "linux") {
+        "inotify"
     } else {
         "polling"
     };
