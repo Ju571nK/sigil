@@ -18,9 +18,10 @@ pub fn arb_target() -> impl Strategy<Value = WatchTarget> {
         } else {
             Tier::Standard
         },
-        platform: match n % 3 {
+        platform: match n % 4 {
             0 => Platform::Macos,
             1 => Platform::Windows,
+            2 => Platform::Linux,
             _ => Platform::Any,
         },
         paths: vec![format!("/p{n}")],

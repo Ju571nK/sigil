@@ -31,6 +31,7 @@ pub enum Tier {
 pub enum Platform {
     Macos,
     Windows,
+    Linux,
     Any,
 }
 
@@ -125,6 +126,8 @@ pub fn current_platform() -> Platform {
         Platform::Macos
     } else if cfg!(target_os = "windows") {
         Platform::Windows
+    } else if cfg!(target_os = "linux") {
+        Platform::Linux
     } else {
         Platform::Any
     }
@@ -200,7 +203,8 @@ pub fn defaults() -> Result<PolicyDocument, PolicyError> {
     match sigil_rules_basic::defaults_for_current_os() {
         Some(yaml) => parse(yaml),
         None => Ok(PolicyDocument {
-            // Linux build-only: baseline is empty.
+            // Platforms with no built-in baseline (anything other than
+            // macOS / Windows / Linux): empty until an operator policy loads.
             version: 1,
             host_id_strategy: HostIdStrategy::MachineId,
             overrides: vec![],
@@ -412,12 +416,45 @@ targets:
     fn defaults_parses_for_current_platform() {
         let doc = defaults().unwrap();
         assert_eq!(doc.version, 1);
-        if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux"
+        )) {
             assert!(!doc.targets.is_empty());
             for t in &doc.targets {
                 assert!(!t.id.is_empty());
                 assert!(!t.paths.is_empty());
             }
+        }
+    }
+
+    #[test]
+    fn builtin_defaults_merge_nonempty_for_current_platform() {
+        // The OSS baseline + current platform filter must leave at least one
+        // target — otherwise a fresh agent on this OS watches nothing and
+        // `doctor` fails. (Only meaningful on the three runtime platforms.)
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux"
+        )) {
+            let eff = merge(defaults().unwrap(), None, current_platform()).unwrap();
+            assert!(!eff.targets.is_empty());
+        }
+    }
+
+    #[test]
+    fn builtin_linux_baseline_is_valid() {
+        // Compiled in on every platform but only consumed at runtime on Linux —
+        // parse it here so a YAML mistake fails CI everywhere, not just Linux.
+        let doc = parse(sigil_rules_basic::DEFAULTS_LINUX).unwrap();
+        assert_eq!(doc.version, 1);
+        assert!(!doc.targets.is_empty());
+        for t in &doc.targets {
+            assert_eq!(t.platform, Platform::Linux);
+            assert!(!t.id.is_empty());
+            assert!(!t.paths.is_empty());
         }
     }
 }

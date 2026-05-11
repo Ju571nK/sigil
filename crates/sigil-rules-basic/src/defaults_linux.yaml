@@ -1,0 +1,64 @@
+version: 1
+host_id_strategy: machine_id
+
+targets:
+  - id: claude-config-linux
+    description: Claude Desktop / Claude Code config and MCP server definitions
+    tier: critical
+    platform: linux
+    paths:
+      - "~/.config/Claude/claude_desktop_config.json"
+      - "~/.claude.json"
+    recursive: false
+    follow_symlinks: false
+
+  - id: cursor-mcp-linux
+    description: Cursor IDE MCP and global storage
+    tier: critical
+    platform: linux
+    paths:
+      - "~/.config/Cursor/User/globalStorage/*.json"
+    recursive: false
+    follow_symlinks: false
+
+  - id: mcp-configs-linux
+    description: Generic MCP allowlist / server config locations
+    tier: critical
+    platform: linux
+    paths:
+      - "~/.config/mcp/*.json"
+    recursive: false
+    follow_symlinks: false
+
+  - id: credential-files-linux
+    description: Cloud and SSH credential files
+    tier: critical
+    platform: linux
+    paths:
+      - "~/.aws/credentials"
+      - "~/.ssh/authorized_keys"
+      - "~/.ssh/config"
+    recursive: false
+    follow_symlinks: false
+
+  - id: shell-startup-linux
+    description: Shell startup files (a common quiet persistence spot)
+    tier: standard
+    platform: linux
+    paths:
+      - "~/.bashrc"
+      - "~/.bash_profile"
+      - "~/.profile"
+      - "~/.zshrc"
+    recursive: false
+    follow_symlinks: false
+
+  - id: user-autostart-linux
+    description: XDG autostart entries and systemd user units (background daemons installed by tooling)
+    tier: standard
+    platform: linux
+    paths:
+      - "~/.config/autostart/*.desktop"
+      - "~/.config/systemd/user/*.service"
+    recursive: false
+    follow_symlinks: false
