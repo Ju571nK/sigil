@@ -1,0 +1,19 @@
+# Demo watch policy — see demo/README.md.
+#
+# The `init` container copies this file to /etc/sigil/policy.yaml (so `sigil`
+# starts watching the demo path) AND signs this exact file with a freshly
+# generated ed25519 key, serving the signed bundle from `sigil-server` at
+# GET /v1/policy. `sigil-sender` pulls it back over mTLS and `sigil` verifies
+# (the 5-check chain) + applies it — watch `sigil`'s log for `PolicyReloaded`.
+version: 1
+host_id_strategy: machine_id
+
+targets:
+  - id: demo-watched-files
+    description: "Demo: files under /watched (bind-mounted from ./watched — edit them on the host to trigger events)"
+    tier: critical
+    platform: linux
+    paths:
+      - "/watched/*"
+    recursive: false
+    follow_symlinks: false
