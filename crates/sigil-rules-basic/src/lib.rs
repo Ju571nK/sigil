@@ -14,8 +14,12 @@ pub const DEFAULTS_MACOS: &str = include_str!("defaults_macos.yaml");
 /// Compile-time-embedded YAML for the Windows basic ruleset.
 pub const DEFAULTS_WINDOWS: &str = include_str!("defaults_windows.yaml");
 
+/// Compile-time-embedded YAML for the Linux basic ruleset.
+pub const DEFAULTS_LINUX: &str = include_str!("defaults_linux.yaml");
+
 /// Returns the basic ruleset YAML for the current build target, or `None`
-/// for platforms (e.g. Linux) that have no built-in baseline.
+/// for platforms other than macOS / Windows / Linux (which have no built-in
+/// baseline — an operator policy must be supplied there).
 pub const fn defaults_for_current_os() -> Option<&'static str> {
     #[cfg(target_os = "macos")]
     {
@@ -25,7 +29,11 @@ pub const fn defaults_for_current_os() -> Option<&'static str> {
     {
         Some(DEFAULTS_WINDOWS)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        Some(DEFAULTS_LINUX)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         None
     }
