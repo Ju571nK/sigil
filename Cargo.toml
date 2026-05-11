@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/andeda-core", "crates/andeda-agent", "crates/andeda-spool", "crates/andeda-rules-basic", "crates/andeda-sender"]
+members = ["crates/sigil-core", "crates/sigil-agent", "crates/sigil-spool", "crates/sigil-rules-basic", "crates/sigil-sender"]
 resolver = "2"
 
 [workspace.package]
@@ -7,8 +7,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.78"
 license = "Apache-2.0"
-authors = ["ANDEDA contributors"]
-repository = "https://github.com/Ju571nK/quill"
+authors = ["Sigil contributors"]
+repository = "https://github.com/Ju571nK/sigil"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

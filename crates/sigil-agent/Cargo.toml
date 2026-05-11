@@ -1,0 +1,45 @@
+[package]
+name = "sigil-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "sigil_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sigil"
+path = "src/main.rs"
+
+[dependencies]
+sigil-core = { path = "../sigil-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+time = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+notify = { workspace = true }
+clap = { workspace = true }
+parking_lot = { workspace = true }
+dunce = { workspace = true }
+tempfile = { workspace = true }
+mac_address = "1.1"
+blake3 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+insta = { workspace = true }
+uuid = { workspace = true }
+data-encoding = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand_core = { version = "0.6", features = ["std"] }
+serde_json = { workspace = true }

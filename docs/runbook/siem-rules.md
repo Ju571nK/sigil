@@ -1,12 +1,12 @@
-# Recommended SIEM rules for ANDEDA
+# Recommended SIEM rules for Sigil
 
-ANDEDA itself does not enforce these rules — they live in the customer's SIEM.
+Sigil itself does not enforce these rules — they live in the customer's SIEM.
 
 ## Splunk inputs.conf
 
 ```
-[monitor:///var/log/andeda/events-*.jsonl]
-sourcetype = andeda:event:json
+[monitor:///var/log/sigil/events-*.jsonl]
+sourcetype = sigil:event:json
 disabled   = false
 ```
 
@@ -15,9 +15,9 @@ disabled   = false
 ```yaml
 logs:
   - type: file
-    path: /var/log/andeda/events-*.jsonl
-    service: andeda
-    source: andeda
+    path: /var/log/sigil/events-*.jsonl
+    service: sigil
+    source: sigil
 ```
 
 ## Heartbeat absence (host went silent)

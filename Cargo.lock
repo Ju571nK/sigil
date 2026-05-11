@@ -30,109 +30,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "andeda-agent"
-version = "0.1.0"
-dependencies = [
- "andeda-core",
- "anyhow",
- "blake3",
- "clap",
- "data-encoding",
- "dunce",
- "ed25519-dalek",
- "insta",
- "mac_address",
- "notify",
- "parking_lot",
- "rand_core 0.6.4",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "andeda-core"
-version = "0.1.0"
-dependencies = [
- "andeda-rules-basic",
- "blake3",
- "data-encoding",
- "dunce",
- "ed25519-dalek",
- "globset",
- "hdrhistogram",
- "insta",
- "parking_lot",
- "proptest",
- "rand_core 0.6.4",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
- "time",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "andeda-rules-basic"
-version = "0.1.0"
-
-[[package]]
-name = "andeda-sender"
-version = "0.1.0"
-dependencies = [
- "andeda-core",
- "anyhow",
- "axum",
- "clap",
- "http",
- "parking_lot",
- "reqwest",
- "rustls",
- "rustls-pemfile",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
- "time",
- "tokio",
- "tokio-util",
- "tower",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
-name = "andeda-spool"
-version = "0.1.0"
-dependencies = [
- "notify",
- "parking_lot",
- "proptest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1997,6 +1894,109 @@ name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+
+[[package]]
+name = "sigil-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "clap",
+ "data-encoding",
+ "dunce",
+ "ed25519-dalek",
+ "insta",
+ "mac_address",
+ "notify",
+ "parking_lot",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sigil-core",
+ "tempfile",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "sigil-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "data-encoding",
+ "dunce",
+ "ed25519-dalek",
+ "globset",
+ "hdrhistogram",
+ "insta",
+ "parking_lot",
+ "proptest",
+ "rand_core 0.6.4",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sigil-rules-basic",
+ "tempfile",
+ "thiserror 1.0.69",
+ "time",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "sigil-rules-basic"
+version = "0.1.0"
+
+[[package]]
+name = "sigil-sender"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "http",
+ "parking_lot",
+ "reqwest",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sigil-core",
+ "tempfile",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "sigil-spool"
+version = "0.1.0"
+dependencies = [
+ "notify",
+ "parking_lot",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "signal-hook-registry"

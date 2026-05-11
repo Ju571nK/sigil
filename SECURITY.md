@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you believe you have found a security vulnerability in ANDEDA, please report
+If you believe you have found a security vulnerability in Sigil, please report
 it privately before opening a public issue.
 
 Use one of these options:
