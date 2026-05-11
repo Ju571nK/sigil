@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-pub use andeda_agent::test_support::*;
+pub use sigil_agent::test_support::*;
 
 pub fn policy_for_paths(paths: &[&str], tier: &str) -> String {
     let id = format!("test-target-{}", uuid::Uuid::new_v4().simple());

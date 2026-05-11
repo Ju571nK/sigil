@@ -17,17 +17,17 @@ These modules are public and accept community contributions:
 
 | Crate / module                                    | Role                                             |
 | ------------------------------------------------- | ------------------------------------------------ |
-| `crates/andeda-core`                              | Event schema, policy types, signing primitives   |
-| `crates/andeda-agent`                             | Daemon runtime, file watcher, IPC, GC, heartbeat |
-| `crates/andeda-spool`                             | Generic JSONL spool (producer/consumer/GC)       |
-| `crates/andeda-rules-basic`                       | Baseline detection ruleset (macOS + Windows)     |
-| `crates/andeda-core/src/sink/jsonl.rs`            | JSONL output sink                                |
-| `crates/andeda-core/src/policy/verify.rs`         | Signed-policy verification chain                 |
-| `crates/andeda-core/src/policy/canonical.rs`      | RFC 8785 canonical JSON for signature input      |
-| `crates/andeda-core/src/policy/atomic_writer.rs`  | Crash-safe policy.yaml + state.db commit         |
-| `crates/andeda-agent/src/policy_apply.rs`         | apply_policy IPC handler                         |
-| `crates/andeda-agent/src/normalizer.rs`           | Default event normalizer/classifier              |
-| `crates/andeda-agent/src/cli.rs`                  | CLI surface                                      |
+| `crates/sigil-core`                              | Event schema, policy types, signing primitives   |
+| `crates/sigil-agent`                             | Daemon runtime, file watcher, IPC, GC, heartbeat |
+| `crates/sigil-spool`                             | Generic JSONL spool (producer/consumer/GC)       |
+| `crates/sigil-rules-basic`                       | Baseline detection ruleset (macOS + Windows)     |
+| `crates/sigil-core/src/sink/jsonl.rs`            | JSONL output sink                                |
+| `crates/sigil-core/src/policy/verify.rs`         | Signed-policy verification chain                 |
+| `crates/sigil-core/src/policy/canonical.rs`      | RFC 8785 canonical JSON for signature input      |
+| `crates/sigil-core/src/policy/atomic_writer.rs`  | Crash-safe policy.yaml + state.db commit         |
+| `crates/sigil-agent/src/policy_apply.rs`         | apply_policy IPC handler                         |
+| `crates/sigil-agent/src/normalizer.rs`           | Default event normalizer/classifier              |
+| `crates/sigil-agent/src/cli.rs`                  | CLI surface                                      |
 | All Phase 1+ tests                                | Integration + property tests                     |
 
 **Why these stay open**: trust in a security daemon depends on operators
@@ -45,8 +45,8 @@ services. The choice depends on integration depth.
 | Deliverable                  | Form                            | Notes                                          |
 | ---------------------------- | ------------------------------- | ---------------------------------------------- |
 | Extended detection rule pack | `andeda-rules-pro` (private)    | Shadow AI, MCP/IDE configs, SaaS agents, etc.  |
-| Enterprise rule packs        | Signed policy bundle (Phase 2)  | Verified via `andeda-core::policy::verify`     |
-| `andeda-sender`              | Binary release (Plan B)         | Signs + ships envelopes to fleet               |
+| Enterprise rule packs        | Signed policy bundle (Phase 2)  | Verified via `sigil-core::policy::verify`     |
+| `sigil-sender`              | Binary release (Plan B)         | Signs + ships envelopes to fleet               |
 | Hosted policy service        | Cloud service                   | Enterprise rule distribution + telemetry       |
 | SIEM / EDR connectors        | Separate private crates         | One per upstream (Splunk/Sentinel/CrowdStrike) |
 
@@ -68,7 +68,7 @@ When adding a new file or crate, ask:
    ML models, threat-intel)?**
    → Closed if it represents non-trivial research or customer value;
    open otherwise (e.g. trivial single-target watch rules belong in
-   `andeda-rules-basic`).
+   `sigil-rules-basic`).
 
 3. **Does it integrate with an enterprise upstream (SIEM, IdP, ticketing)?**
    → Closed (separate private crate or service).
@@ -82,11 +82,11 @@ content is not.
 
 Plan A (already merged) shipped:
 
-- `SignedEnvelope` + RFC 8785 canonical JSON ([signed_envelope.rs](crates/andeda-core/src/policy/signed_envelope.rs), [canonical.rs](crates/andeda-core/src/policy/canonical.rs))
-- 5-check `verify_envelope` chain ([verify.rs](crates/andeda-core/src/policy/verify.rs))
-- Pubkey keystore loader ([pubkeys.rs](crates/andeda-core/src/policy/pubkeys.rs))
-- `apply_policy` IPC handler ([policy_apply.rs](crates/andeda-agent/src/policy_apply.rs))
-- Atomic disk + state.db commit ([atomic_writer.rs](crates/andeda-core/src/policy/atomic_writer.rs))
+- `SignedEnvelope` + RFC 8785 canonical JSON ([signed_envelope.rs](crates/sigil-core/src/policy/signed_envelope.rs), [canonical.rs](crates/sigil-core/src/policy/canonical.rs))
+- 5-check `verify_envelope` chain ([verify.rs](crates/sigil-core/src/policy/verify.rs))
+- Pubkey keystore loader ([pubkeys.rs](crates/sigil-core/src/policy/pubkeys.rs))
+- `apply_policy` IPC handler ([policy_apply.rs](crates/sigil-agent/src/policy_apply.rs))
+- Atomic disk + state.db commit ([atomic_writer.rs](crates/sigil-core/src/policy/atomic_writer.rs))
 
 Together these form a **signed policy bundle pipeline**: a private
 `andeda-rules-pro` build can ship as a signed YAML that the OSS agent
@@ -103,7 +103,7 @@ This is the recommended distribution form for closed rule packs.
 - The `main` branch is and remains Apache 2.0.
 - Closed content lives in **separate repositories** (e.g.
   `andeda-rules-pro`), never as `.gitignored` files in this tree.
-- `andeda-rules-basic` is the boundary marker: anything more specialized
+- `sigil-rules-basic` is the boundary marker: anything more specialized
   than its baseline targets is a candidate for the closed track.
 
 ---
@@ -120,13 +120,13 @@ extended rule packs as **signed policy bundles**.
 
 **The pipeline (already shipped in Plan A)**:
 1. `andeda-rules-pro` (private repo) holds the YAML rule sources.
-2. A signing tool (Plan B `andeda-sender` companion) wraps a YAML
-   payload in a [`SignedEnvelope`](crates/andeda-core/src/policy/signed_envelope.rs)
+2. A signing tool (Plan B `sigil-sender` companion) wraps a YAML
+   payload in a [`SignedEnvelope`](crates/sigil-core/src/policy/signed_envelope.rs)
    using a private ed25519 key.
-3. `andeda-sender` (Plan B) ships the envelope to fleet hosts over the
+3. `sigil-sender` (Plan B) ships the envelope to fleet hosts over the
    Phase 2 transport (mTLS + apply_policy IPC).
-4. The OSS agent verifies via [`verify_envelope`](crates/andeda-core/src/policy/verify.rs)
-   (5-check chain), commits via [`atomic_write`](crates/andeda-core/src/policy/atomic_writer.rs),
+4. The OSS agent verifies via [`verify_envelope`](crates/sigil-core/src/policy/verify.rs)
+   (5-check chain), commits via [`atomic_write`](crates/sigil-core/src/policy/atomic_writer.rs),
    and emits `PolicyReloaded` — all paths operators can audit.
 
 **Why this is better than build-time linking**:

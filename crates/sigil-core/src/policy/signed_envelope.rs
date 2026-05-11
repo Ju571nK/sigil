@@ -23,7 +23,7 @@ pub struct SignedEnvelope {
 }
 
 /// The wire shape returned by the control endpoint and handed to
-/// `andeda-agent`'s `apply_policy` IPC.
+/// `sigil-agent`'s `apply_policy` IPC.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SignedPolicyResponse {
     /// SHA-256(canonical_json(signed_envelope)) — used for ETag and caching.

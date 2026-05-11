@@ -27,7 +27,7 @@ impl VarLookup for EnvLookup {
         std::env::var(name).ok()
     }
     fn home(&self) -> Option<PathBuf> {
-        // We avoid the `dirs` crate here to keep andeda-core dep-free of OS APIs.
+        // We avoid the `dirs` crate here to keep sigil-core dep-free of OS APIs.
         std::env::var_os("HOME").map(PathBuf::from)
     }
 }

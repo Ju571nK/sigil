@@ -29,11 +29,11 @@ pub struct Envelope {
 pub struct EventEntry {
     pub event_id: Uuid,
     pub sequence: u64,
-    /// Opaque ANDEDA Event payload — see `andeda-core::event::Event`.
+    /// Opaque ANDEDA Event payload — see `sigil-core::event::Event`.
     pub payload: JsonValue,
 }
 
-pub use andeda_core::policy::signed_envelope::SignedPolicyResponse;
+pub use sigil_core::policy::signed_envelope::SignedPolicyResponse;
 
 /// `200 OK` response from `POST /v1/events`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

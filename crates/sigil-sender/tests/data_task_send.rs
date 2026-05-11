@@ -1,7 +1,7 @@
 mod common;
 
-use andeda_sender::data_task::{send_one_batch, BatchOutcome, BatchSendCtx};
-use andeda_sender::wire::EventEntry;
+use sigil_sender::data_task::{send_one_batch, BatchOutcome, BatchSendCtx};
+use sigil_sender::wire::EventEntry;
 use uuid::Uuid;
 
 #[tokio::test]

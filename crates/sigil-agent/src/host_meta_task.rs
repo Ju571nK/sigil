@@ -3,7 +3,7 @@
 //! Spec §1.4 `host_id` persistence: on first start, generate a UUIDv4 and
 //! store it in `state.db`. On subsequent starts, read the existing value.
 
-use andeda_core::state::{HashCache, StateError};
+use sigil_core::state::{HashCache, StateError};
 use thiserror::Error;
 use tracing::info;
 use uuid::Uuid;

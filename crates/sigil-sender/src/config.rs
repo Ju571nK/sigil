@@ -103,13 +103,13 @@ mod tests {
             &p,
             r#"
 server_base_url: "https://andeda.example.com"
-client_cert_path: "/etc/andeda/client.crt"
-client_key_path: "/etc/andeda/client.key"
-server_ca_path: "/etc/andeda/server-ca.pem"
-events_dir: "/var/log/andeda/events"
-offset_path: "/var/lib/andeda/sender-offset.json"
-agent_control: "/var/run/andeda/control.sock"
-dead_letter_dir: "/var/log/andeda/dead-letter"
+client_cert_path: "/etc/sigil/client.crt"
+client_key_path: "/etc/sigil/client.key"
+server_ca_path: "/etc/sigil/server-ca.pem"
+events_dir: "/var/log/sigil/events"
+offset_path: "/var/lib/sigil/sender-offset.json"
+agent_control: "/var/run/sigil/control.sock"
+dead_letter_dir: "/var/log/sigil/dead-letter"
 "#,
         );
         let cfg = SenderConfig::load(&p).unwrap();

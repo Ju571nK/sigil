@@ -4,7 +4,7 @@
 //! into expired, and resets the transition when a new apply commits.
 
 use crate::state_task::CommittableEvent;
-use andeda_core::event::{
+use sigil_core::event::{
     Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
 use parking_lot::RwLock;

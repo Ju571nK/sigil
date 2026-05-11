@@ -1,6 +1,6 @@
 //! Producer integration tests.
 
-use andeda_spool::{Producer, ProducerConfig, ProducerError};
+use sigil_spool::{Producer, ProducerConfig, ProducerError};
 use std::fs;
 use tempfile::TempDir;
 

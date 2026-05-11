@@ -1,8 +1,8 @@
 mod common;
 
-use andeda_sender::batch_reader::read_next_batch;
-use andeda_sender::data_task::{apply_ack, send_one_batch, BatchOutcome, BatchSendCtx};
-use andeda_sender::state::SenderState;
+use sigil_sender::batch_reader::read_next_batch;
+use sigil_sender::data_task::{apply_ack, send_one_batch, BatchOutcome, BatchSendCtx};
+use sigil_sender::state::SenderState;
 use std::io::Write;
 use uuid::Uuid;
 

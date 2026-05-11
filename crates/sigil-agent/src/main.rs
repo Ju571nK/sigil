@@ -1,6 +1,6 @@
 //! ANDEDA agent — tokio runtime + system integration.
 
-use andeda_agent::{cli, doctor, runtime, show};
+use sigil_agent::{cli, doctor, runtime, show};
 use clap::Parser;
 
 fn main() -> anyhow::Result<()> {
@@ -37,26 +37,26 @@ fn main() -> anyhow::Result<()> {
 
 fn default_state_db_path() -> std::path::PathBuf {
     if cfg!(target_os = "macos") {
-        "/var/lib/andeda/state.db".into()
+        "/var/lib/sigil/state.db".into()
     } else {
         std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Andeda/state.db")
+            .join("Sigil/state.db")
     }
 }
 
 fn default_events_dir() -> std::path::PathBuf {
     if cfg!(target_os = "macos") {
-        "/var/log/andeda".into()
+        "/var/log/sigil".into()
     } else {
         std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Andeda/events")
+            .join("Sigil/events")
     }
 }
 
 fn default_control_socket() -> std::path::PathBuf {
-    "/var/run/andeda/control.sock".into()
+    "/var/run/sigil/control.sock".into()
 }
 
 fn default_control_pipe_name() -> String {
-    r"\\.\pipe\andeda-control".to_string()
+    r"\\.\pipe\sigil-control".to_string()
 }

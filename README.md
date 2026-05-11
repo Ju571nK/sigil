@@ -72,23 +72,23 @@ pass in a later release.
 
 **Processes**
 
-- `andeda-agent` — the host daemon (`andeda` binary). Owns the `tokio`
+- `sigil-agent` — the host daemon (`andeda` binary). Owns the `tokio`
   runtime, the `notify`-based filesystem watcher, the event pipeline, CLI
   commands, and platform glue. Writes JSONL posture events to the local
   spool.
-- `andeda-sender` — the uploader (`andeda-sender` binary). Reads JSONL
+- `sigil-sender` — the uploader (`sigil-sender` binary). Reads JSONL
   batches from the spool, ships them to a SIEM endpoint over HTTPS
   (rustls), and hands signed policy responses back to the agent over IPC.
 
 **Libraries**
 
-- `andeda-core` — pure domain library (event, policy, state, hashing, …).
+- `sigil-core` — pure domain library (event, policy, state, hashing, …).
   No OS, `tokio`, or filesystem-watcher dependencies. Consumed by both
   processes.
-- `andeda-spool` — JSONL=IPC primitive (`Producer` / `Consumer` /
+- `sigil-spool` — JSONL=IPC primitive (`Producer` / `Consumer` /
   `Checkpoint` / `Retention`) used at the agent → sender hop. Durable,
   crash-recoverable, domain-neutral.
-- `andeda-rules-basic` — compile-time-embedded baseline rulesets (macOS
+- `sigil-rules-basic` — compile-time-embedded baseline rulesets (macOS
   and Windows defaults). The OSS fallback when no operator policy is
   supplied; extended rule packs ship separately.
 
@@ -97,27 +97,27 @@ flowchart LR
     FS[("Filesystem<br/>policy targets")]
     SIEM[("Your SIEM<br/>endpoint")]
 
-    subgraph agent["andeda-agent (bin: andeda)"]
+    subgraph agent["sigil-agent (bin: andeda)"]
         direction TB
         a_pipe["watcher · debouncer<br/>normalizer · hasher<br/>sink_task · state_task"]
         a_ctrl["supervisor · policy_apply<br/>cli · doctor · show"]
     end
 
-    subgraph sender["andeda-sender (bin: andeda-sender)"]
+    subgraph sender["sigil-sender (bin: sigil-sender)"]
         direction TB
         s_pipe["batch_reader · manifest<br/>transport (HTTPS + rustls)"]
         s_ctrl["control_task · agent_ipc<br/>dead_letter · heartbeat"]
     end
 
-    subgraph spool["andeda-spool (JSONL=IPC)"]
+    subgraph spool["sigil-spool (JSONL=IPC)"]
         spoolmods["Producer · Consumer<br/>Checkpoint · Retention"]
     end
 
-    subgraph core["andeda-core (pure domain)"]
+    subgraph core["sigil-core (pure domain)"]
         coremods["event · policy · state<br/>host_id · host_meta · hashing<br/>debounce · ratelimit · sink · stats"]
     end
 
-    subgraph rules["andeda-rules-basic"]
+    subgraph rules["sigil-rules-basic"]
         rulesmods["compile-time YAML<br/>(macOS / Windows defaults)"]
     end
 
@@ -192,31 +192,31 @@ cargo build
 Run the agent:
 
 ```sh
-cargo run -p andeda-agent -- run
+cargo run -p sigil-agent -- run
 ```
 
 Inspect the effective configuration:
 
 ```sh
-cargo run -p andeda-agent -- show config
+cargo run -p sigil-agent -- show config
 ```
 
 Inspect expanded watch paths:
 
 ```sh
-cargo run -p andeda-agent -- show paths
+cargo run -p sigil-agent -- show paths
 ```
 
 Run diagnostics without starting the daemon:
 
 ```sh
-cargo run -p andeda-agent -- doctor
+cargo run -p sigil-agent -- doctor
 ```
 
 Print version information:
 
 ```sh
-cargo run -p andeda-agent -- version
+cargo run -p sigil-agent -- version
 ```
 
 ## Configuration
@@ -249,7 +249,7 @@ An example policy file is available at `config/policy.example.yaml`.
 You can override runtime paths from the command line:
 
 ```sh
-cargo run -p andeda-agent -- \
+cargo run -p sigil-agent -- \
   --policy config/policy.example.yaml \
   --state-db ./state.db \
   --events-dir ./events \
@@ -257,7 +257,7 @@ cargo run -p andeda-agent -- \
 ```
 
 Default production policy locations are platform-specific. The example policy
-can be adapted for `/etc/andeda/policy.yaml` on Unix-like systems or
+can be adapted for `/etc/sigil/policy.yaml` on Unix-like systems or
 `%ProgramData%\Andeda\policy.yaml` on Windows.
 
 ## Security

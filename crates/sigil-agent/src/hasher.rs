@@ -1,10 +1,10 @@
 //! Hasher pool task. Performs blake3 hashing on `spawn_blocking` workers.
 
 use crate::normalizer::NormalizedEvent;
-use andeda_core::debounce::PendingEvent;
-use andeda_core::event::{EvidenceQuality, FileChangeKind};
-use andeda_core::hashing::{hash_path, HashOutcome};
-use andeda_core::stats::Stats;
+use sigil_core::debounce::PendingEvent;
+use sigil_core::event::{EvidenceQuality, FileChangeKind};
+use sigil_core::hashing::{hash_path, HashOutcome};
+use sigil_core::stats::Stats;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;

@@ -44,7 +44,7 @@ impl TestAgentBuilder {
         let policy_file = td.path().join("policy.yaml");
         std::fs::write(&policy_file, &self.policy_yaml).unwrap();
         let control_socket = td.path().join("control.sock");
-        let control_pipe_name = format!(r"\\.\pipe\andeda-test-{}", uuid::Uuid::new_v4().simple());
+        let control_pipe_name = format!(r"\\.\pipe\sigil-test-{}", uuid::Uuid::new_v4().simple());
         let cfg = RuntimeConfig {
             policy_path: Some(policy_file.clone()),
             state_db_path: state_db.clone(),

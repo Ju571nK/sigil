@@ -1,6 +1,6 @@
-use andeda_core::event::*;
-use andeda_core::sink::jsonl::JsonlSink;
-use andeda_core::sink::EventSink;
+use sigil_core::event::*;
+use sigil_core::sink::jsonl::JsonlSink;
+use sigil_core::sink::EventSink;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use time::macros::datetime;

@@ -5,9 +5,9 @@
 //! - per-target token-bucket rate limiting
 
 use crate::watcher::RawFsEvent;
-use andeda_core::event::FileChangeKind;
-use andeda_core::policy::{glob::CompiledGlob, EffectivePolicy, Tier};
-use andeda_core::ratelimit::{DropReport, RateLimiter};
+use sigil_core::event::FileChangeKind;
+use sigil_core::policy::{glob::CompiledGlob, EffectivePolicy, Tier};
+use sigil_core::ratelimit::{DropReport, RateLimiter};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;

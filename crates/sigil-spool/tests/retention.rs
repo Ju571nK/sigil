@@ -1,6 +1,6 @@
 //! Retention integration tests.
 
-use andeda_spool::{DurableOffset, Producer, ProducerConfig, Retention, RetentionConfig};
+use sigil_spool::{DurableOffset, Producer, ProducerConfig, Retention, RetentionConfig};
 use std::fs;
 use tempfile::TempDir;
 use time::Duration;

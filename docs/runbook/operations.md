@@ -4,12 +4,12 @@
 
 | Item             | macOS                              | Windows                              |
 |------------------|------------------------------------|--------------------------------------|
-| Binary           | /usr/local/bin/andeda              | %PROGRAMFILES%\Andeda\andeda.exe     |
-| Policy           | /etc/andeda/policy.yaml            | %ProgramData%\Andeda\policy.yaml     |
-| Events           | /var/log/andeda/                   | %ProgramData%\Andeda\events\         |
-| State            | /var/lib/andeda/state.db           | %ProgramData%\Andeda\state.db        |
-| Service id       | com.andeda.agent (launchd label)   | Andeda (Windows Service name)        |
-| Control IPC      | /var/run/andeda/control.sock       | \\.\pipe\andeda-control              |
+| Binary           | /usr/local/bin/sigil              | %PROGRAMFILES%\Sigil\sigil.exe     |
+| Policy           | /etc/sigil/policy.yaml            | %ProgramData%\Andeda\policy.yaml     |
+| Events           | /var/log/sigil/                   | %ProgramData%\Andeda\events\         |
+| State            | /var/lib/sigil/state.db           | %ProgramData%\Andeda\state.db        |
+| Service id       | com.sigil.agent (launchd label)   | Andeda (Windows Service name)        |
+| Control IPC      | /var/run/sigil/control.sock       | \\.\pipe\sigil-control              |
 
 ## Signal handling
 
@@ -21,4 +21,4 @@
 
 - JSONL events: as configured above. SIEM consumes.
 - Diag log: `tracing` to stderr (captured by launchd / Windows Event Log).
-  Configure level via `ANDEDA_LOG=debug,andeda_core=info`.
+  Configure level via `SIGIL_LOG=debug,sigil_core=info`.

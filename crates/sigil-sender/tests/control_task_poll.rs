@@ -1,7 +1,7 @@
 mod common;
 
-use andeda_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
-use andeda_sender::control_task::{poll_policy, PollOutcome};
+use sigil_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
+use sigil_sender::control_task::{poll_policy, PollOutcome};
 use time::macros::datetime;
 
 fn sample_response(etag: &str) -> SignedPolicyResponse {
@@ -61,7 +61,7 @@ async fn loop_fires_once_then_shuts_down() {
     let cancel = tokio_util::sync::CancellationToken::new();
     let cancel_c = cancel.clone();
     let handle = tokio::spawn(async move {
-        andeda_sender::control_task::run(andeda_sender::control_task::ControlLoopCtx {
+        sigil_sender::control_task::run(sigil_sender::control_task::ControlLoopCtx {
             client,
             server_base_url: format!("http://{addr}"),
             host_id: "h".into(),
@@ -78,7 +78,7 @@ async fn loop_fires_once_then_shuts_down() {
         .unwrap();
     assert!(matches!(
         outcome,
-        andeda_sender::control_task::PollOutcome::NewPolicy { .. }
+        sigil_sender::control_task::PollOutcome::NewPolicy { .. }
     ));
     cancel.cancel();
     handle.await.unwrap();

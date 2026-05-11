@@ -1,6 +1,6 @@
-use andeda_sender::cli::{Cli, Command};
-use andeda_sender::config::SenderConfig;
-use andeda_sender::runtime::{run, RuntimeCtx};
+use sigil_sender::cli::{Cli, Command};
+use sigil_sender::config::SenderConfig;
+use sigil_sender::runtime::{run, RuntimeCtx};
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
@@ -9,11 +9,11 @@ use tokio_util::sync::CancellationToken;
 fn default_config_path() -> PathBuf {
     #[cfg(unix)]
     {
-        PathBuf::from("/etc/andeda/sender.yaml")
+        PathBuf::from("/etc/sigil/sender.yaml")
     }
     #[cfg(windows)]
     {
-        PathBuf::from(r"C:\ProgramData\Andeda\sender.yaml")
+        PathBuf::from(r"C:\ProgramData\Sigil\sender.yaml")
     }
 }
 
@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
         Command::Start => {
             // NOTE: control plane only today (policy poll + apply_policy IPC).
             // Data plane (read JSONL spool → POST /v1/events → ack) lands in
-            // Plan B follow-up tickets B11.x; see crates/andeda-sender/src/runtime.rs.
+            // Plan B follow-up tickets B11.x; see crates/sigil-sender/src/runtime.rs.
             let cfg = SenderConfig::load(&config_path)?;
             let cancel = CancellationToken::new();
             let cancel_c = cancel.clone();
@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
             });
             run(RuntimeCtx {
                 config: cfg,
-                host_id: std::env::var("ANDEDA_HOST_ID").unwrap_or_else(|_| "unknown".into()),
+                host_id: std::env::var("SIGIL_HOST_ID").unwrap_or_else(|_| "unknown".into()),
                 agent_version: env!("CARGO_PKG_VERSION").to_string(),
                 sender_version: env!("CARGO_PKG_VERSION").to_string(),
                 shutdown: cancel,

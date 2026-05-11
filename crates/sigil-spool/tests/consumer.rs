@@ -1,6 +1,6 @@
 //! Consumer + Checkpoint integration tests.
 
-use andeda_spool::{Checkpoint, Consumer, DurableOffset, Producer, ProducerConfig};
+use sigil_spool::{Checkpoint, Consumer, DurableOffset, Producer, ProducerConfig};
 use std::time::Duration;
 use tempfile::TempDir;
 

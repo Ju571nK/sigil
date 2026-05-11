@@ -1,7 +1,7 @@
 //! Integration test: agent startup produces a host_id and reuses it.
 
-use andeda_agent::host_meta_task::ensure_host_id;
-use andeda_core::state::HashCache;
+use sigil_agent::host_meta_task::ensure_host_id;
+use sigil_core::state::HashCache;
 use tempfile::tempdir;
 
 #[test]

@@ -1,4 +1,4 @@
-# Example user-override policy. Drop into /etc/andeda/policy.yaml or
+# Example user-override policy. Drop into /etc/sigil/policy.yaml or
 # %ProgramData%\Andeda\policy.yaml.
 version: 1
 host_id_strategy: machine_id

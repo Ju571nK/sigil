@@ -3,9 +3,9 @@
 //! Phase 1 supports a single command: `{"cmd":"stats"}` returning the current
 //! Heartbeat-equivalent payload as JSON.
 
-use andeda_core::policy::signed_envelope::SignedPolicyResponse;
-use andeda_core::stats::{Stats, StatsSnapshot};
-use andeda_core::PolicySignatureInvalidReason;
+use sigil_core::policy::signed_envelope::SignedPolicyResponse;
+use sigil_core::stats::{Stats, StatsSnapshot};
+use sigil_core::PolicySignatureInvalidReason;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
@@ -20,7 +20,7 @@ pub enum Request {
     /// Existing Phase 1 command — unchanged on the wire.
     #[serde(rename = "stats")]
     Stats,
-    /// Plan B `andeda-sender` hands a verified envelope here for application.
+    /// Plan B `sigil-sender` hands a verified envelope here for application.
     ApplyPolicy {
         /// The full server response — agent re-verifies independently.
         response: SignedPolicyResponse,
@@ -238,7 +238,7 @@ pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use andeda_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
+    use sigil_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
     use time::macros::datetime;
 
     fn sample_response() -> SignedPolicyResponse {
@@ -304,7 +304,7 @@ mod tests {
             ok: false,
             stats: None,
             apply_policy: Some(ApplyPolicyResult::Rejected {
-                reason: andeda_core::PolicySignatureInvalidReason::Expired,
+                reason: sigil_core::PolicySignatureInvalidReason::Expired,
             }),
             policy_status: None,
             error: None,

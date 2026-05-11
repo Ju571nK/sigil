@@ -5,7 +5,7 @@ ANDEDA itself does not enforce these rules — they live in the customer's SIEM.
 ## Splunk inputs.conf
 
 ```
-[monitor:///var/log/andeda/events-*.jsonl]
+[monitor:///var/log/sigil/events-*.jsonl]
 sourcetype = andeda:event:json
 disabled   = false
 ```
@@ -15,7 +15,7 @@ disabled   = false
 ```yaml
 logs:
   - type: file
-    path: /var/log/andeda/events-*.jsonl
+    path: /var/log/sigil/events-*.jsonl
     service: andeda
     source: andeda
 ```

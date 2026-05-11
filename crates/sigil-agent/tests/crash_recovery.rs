@@ -1,6 +1,6 @@
 //! Validates spec 1.4 invariant: state.db lags JSONL by at most one event under crash.
 
-use andeda_core::state::HashCache;
+use sigil_core::state::HashCache;
 use std::path::Path;
 use tempfile::TempDir;
 

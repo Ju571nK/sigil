@@ -191,13 +191,13 @@ pub fn merge(
 
 /// Built-in defaults for the current OS, parsed from a compile-time-embedded YAML.
 ///
-/// Source data lives in the `andeda-rules-basic` crate so the OSS baseline
+/// Source data lives in the `sigil-rules-basic` crate so the OSS baseline
 /// ruleset can evolve independently. Extended/commercial rule packs ship
 /// as **signed policy bundles** (Plan B) delivered over the Phase 2
 /// transport — they are NOT linked into the OSS binary at build time.
 /// See `LICENSING.md` for the rationale.
 pub fn defaults() -> Result<PolicyDocument, PolicyError> {
-    match andeda_rules_basic::defaults_for_current_os() {
+    match sigil_rules_basic::defaults_for_current_os() {
         Some(yaml) => parse(yaml),
         None => Ok(PolicyDocument {
             // Linux build-only: baseline is empty.

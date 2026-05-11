@@ -1,9 +1,9 @@
 //! Integration: a drift between two startups produces exactly one
 //! `HostIdFingerprintDrift` event.
 
-use andeda_agent::host_meta_task::{ensure_fingerprint, FingerprintOutcome};
-use andeda_agent::platform::hw_fingerprint::HardwareFingerprint;
-use andeda_core::state::HashCache;
+use sigil_agent::host_meta_task::{ensure_fingerprint, FingerprintOutcome};
+use sigil_agent::platform::hw_fingerprint::HardwareFingerprint;
+use sigil_core::state::HashCache;
 use tempfile::tempdir;
 
 struct Mock(String, String, String);

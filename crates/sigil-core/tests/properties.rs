@@ -1,8 +1,8 @@
 //! Six properties covering the spec's invariants.
 
-use andeda_core::debounce::Debouncer;
-use andeda_core::event::{Event, FileChangeKind};
-use andeda_core::policy::{merge, HostIdStrategy, Platform, PolicyDocument, Tier, WatchTarget};
+use sigil_core::debounce::Debouncer;
+use sigil_core::event::{Event, FileChangeKind};
+use sigil_core::policy::{merge, HostIdStrategy, Platform, PolicyDocument, Tier, WatchTarget};
 use proptest::prelude::*;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -98,22 +98,22 @@ proptest! {
         host_id in "[A-Za-z0-9-]{3,30}"
     ) {
         let ev = Event {
-            schema_version: andeda_core::event::SCHEMA_VERSION,
+            schema_version: sigil_core::event::SCHEMA_VERSION,
             event_id: uuid::Uuid::now_v7(),
             ts: time::OffsetDateTime::now_utc(),
             host_id: host_id.clone(),
-            agent_version: andeda_core::event::AGENT_VERSION.to_string(),
-            severity: andeda_core::event::Severity::Warn,
-            source: andeda_core::event::SourceKind::FileSystem,
-            subject: andeda_core::event::Subject::Path { value: PathBuf::from("/p") },
-            evidence: andeda_core::event::Evidence::FileChange {
+            agent_version: sigil_core::event::AGENT_VERSION.to_string(),
+            severity: sigil_core::event::Severity::Warn,
+            source: sigil_core::event::SourceKind::FileSystem,
+            subject: sigil_core::event::Subject::Path { value: PathBuf::from("/p") },
+            evidence: sigil_core::event::Evidence::FileChange {
                 change_kind: FileChangeKind::Modified,
                 before_hash: Some("a".into()),
                 after_hash: Some("b".into()),
                 recheck_hash: None,
                 rename_from: None,
                 size_after: Some(1),
-                evidence_quality: andeda_core::event::EvidenceQuality::Definitive,
+                evidence_quality: sigil_core::event::EvidenceQuality::Definitive,
             },
             target_id: Some("t".into()),
         };
@@ -126,7 +126,7 @@ proptest! {
     fn rate_limiter_never_grants_more_than_capacity_at_t0(
         n in 0u32..1000
     ) {
-        use andeda_core::ratelimit::{RateLimiter, BUCKET_CAPACITY};
+        use sigil_core::ratelimit::{RateLimiter, BUCKET_CAPACITY};
         let mut r = RateLimiter::new();
         let mut allowed = 0u32;
         for _ in 0..n {
@@ -145,7 +145,7 @@ proptest! {
         prop_assume!(first != second);
         let td = tempfile::TempDir::new().unwrap();
         let dbp = td.path().join("state.db");
-        let cache = andeda_core::state::HashCache::open(&dbp).unwrap();
+        let cache = sigil_core::state::HashCache::open(&dbp).unwrap();
         cache.put(std::path::Path::new("/x"), &first, 1, "t", 0).unwrap();
         let got = cache.get(std::path::Path::new("/x")).unwrap();
         prop_assert_eq!(got.as_deref(), Some(first.as_str()));

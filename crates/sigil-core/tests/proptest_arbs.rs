@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use andeda_core::policy::{Override, Platform, Tier, WatchTarget};
+use sigil_core::policy::{Override, Platform, Tier, WatchTarget};
 use proptest::collection::vec;
 use proptest::prelude::*;
 

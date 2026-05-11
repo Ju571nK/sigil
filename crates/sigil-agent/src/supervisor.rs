@@ -2,7 +2,7 @@
 //! shutdown via a `CancellationToken`, catches panics, emits AgentDying.
 
 use crate::state_task::CommittableEvent;
-use andeda_core::event::{
+use sigil_core::event::{
     AgentDyingReason, Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
 use time::OffsetDateTime;

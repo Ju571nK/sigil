@@ -1,4 +1,4 @@
-use andeda_core::ratelimit::{RateLimiter, REPORT_INTERVAL};
+use sigil_core::ratelimit::{RateLimiter, REPORT_INTERVAL};
 use std::path::PathBuf;
 
 #[test]

@@ -1,7 +1,7 @@
 //! Policy-signing pubkey keystore.
 //!
 //! Spec §3.8.2 "Pubkey distribution and rotation": the file is a small
-//! JSON document at `/etc/andeda/policy-signing-pubkeys.pem` (the `.pem`
+//! JSON document at `/etc/sigil/policy-signing-pubkeys.pem` (the `.pem`
 //! suffix is preserved for operator familiarity but the contents are JSON
 //! with embedded base64 ed25519 pubkeys).
 

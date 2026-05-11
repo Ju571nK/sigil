@@ -7,8 +7,8 @@
 //! it returns an empty user list, `FdaState::Granted`, and a fresh UUID host_id.
 
 use super::{FdaState, Platform};
-use andeda_core::host_id::HostIdResolver;
-use andeda_core::policy::expand::{UserContext, UserEnumerator};
+use sigil_core::host_id::HostIdResolver;
+use sigil_core::policy::expand::{UserContext, UserEnumerator};
 use uuid::Uuid;
 
 pub struct StubPlatform;

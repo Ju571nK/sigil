@@ -1,10 +1,10 @@
 //! Sink task. Owns the `JsonlSink`; calls `commit_baseline` after each write.
 
 use crate::state_task::{commit_baseline, CommittableEvent};
-use andeda_core::sink::jsonl::JsonlSink;
-use andeda_core::sink::EventSink;
-use andeda_core::state::HashCache;
-use andeda_core::stats::Stats;
+use sigil_core::sink::jsonl::JsonlSink;
+use sigil_core::sink::EventSink;
+use sigil_core::state::HashCache;
+use sigil_core::stats::Stats;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,8 +42,8 @@ pub async fn run(
     let _ = sink.shutdown();
 }
 
-fn evidence_kind_str(e: &andeda_core::event::Evidence) -> &'static str {
-    use andeda_core::event::Evidence::*;
+fn evidence_kind_str(e: &sigil_core::event::Evidence) -> &'static str {
+    use sigil_core::event::Evidence::*;
     match e {
         FileChange { .. } => "file_change",
         Heartbeat { .. } => "heartbeat",

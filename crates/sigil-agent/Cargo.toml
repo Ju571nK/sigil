@@ -1,5 +1,5 @@
 [package]
-name = "andeda-agent"
+name = "sigil-agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,15 +7,15 @@ license.workspace = true
 authors.workspace = true
 
 [lib]
-name = "andeda_agent"
+name = "sigil_agent"
 path = "src/lib.rs"
 
 [[bin]]
-name = "andeda"
+name = "sigil"
 path = "src/main.rs"
 
 [dependencies]
-andeda-core = { path = "../andeda-core" }
+sigil-core = { path = "../sigil-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

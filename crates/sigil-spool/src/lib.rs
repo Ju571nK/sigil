@@ -1,4 +1,4 @@
-//! `andeda-spool` — shared JSONL = IPC primitive used at every Phase 2 hop.
+//! `sigil-spool` — shared JSONL = IPC primitive used at every Phase 2 hop.
 //!
 //! See spec §3.8.1 "Shared invariants of the JSONL=IPC pattern" for the
 //! durability and recovery contract this crate enforces.

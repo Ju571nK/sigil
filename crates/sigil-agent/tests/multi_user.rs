@@ -1,4 +1,4 @@
-use andeda_core::policy::expand::{expand_per_user, UserContext, VarLookup};
+use sigil_core::policy::expand::{expand_per_user, UserContext, VarLookup};
 use std::path::PathBuf;
 
 struct EmptyVars;

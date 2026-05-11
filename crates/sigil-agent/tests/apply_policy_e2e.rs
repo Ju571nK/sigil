@@ -1,12 +1,12 @@
 //! e2e: `apply_policy` → atomic write → state advance → event → expiry-aware.
 
-use andeda_agent::policy_apply::{apply, ApplyContext, ApplyOutcome};
-use andeda_agent::policy_expiry_task::{evaluate_for_test, ExpiryTaskCtx};
-use andeda_core::event::Evidence;
-use andeda_core::policy::canonical::to_canonical_bytes;
-use andeda_core::policy::pubkeys::{Keystore, KeystoreEntry};
-use andeda_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
-use andeda_core::state::HashCache;
+use sigil_agent::policy_apply::{apply, ApplyContext, ApplyOutcome};
+use sigil_agent::policy_expiry_task::{evaluate_for_test, ExpiryTaskCtx};
+use sigil_core::event::Evidence;
+use sigil_core::policy::canonical::to_canonical_bytes;
+use sigil_core::policy::pubkeys::{Keystore, KeystoreEntry};
+use sigil_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
+use sigil_core::state::HashCache;
 use ed25519_dalek::{Signer, SigningKey};
 use parking_lot::{Mutex, RwLock};
 use rand_core::RngCore;

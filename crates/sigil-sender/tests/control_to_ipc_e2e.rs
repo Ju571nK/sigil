@@ -1,8 +1,8 @@
 #![cfg(unix)]
 mod common;
 
-use andeda_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
-use andeda_sender::control_task::{ControlLoopCtx, PollOutcome};
+use sigil_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
+use sigil_sender::control_task::{ControlLoopCtx, PollOutcome};
 use serde_json::json;
 use time::macros::datetime;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -60,7 +60,7 @@ async fn control_loop_emits_new_policy_then_ipc_handoff_succeeds() {
     let client = reqwest::Client::new();
     let server_base = format!("http://{addr}");
     let ctl = tokio::spawn(async move {
-        andeda_sender::control_task::run(ControlLoopCtx {
+        sigil_sender::control_task::run(ControlLoopCtx {
             client,
             server_base_url: server_base,
             host_id: "h".into(),
@@ -79,7 +79,7 @@ async fn control_loop_emits_new_policy_then_ipc_handoff_succeeds() {
         PollOutcome::NewPolicy { response, .. } => response,
         other => panic!("expected NewPolicy, got {other:?}"),
     };
-    let agent_resp = andeda_sender::agent_ipc::apply_policy(&socket, &response)
+    let agent_resp = sigil_sender::agent_ipc::apply_policy(&socket, &response)
         .await
         .unwrap();
     assert!(agent_resp.ok);

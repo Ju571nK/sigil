@@ -1,12 +1,12 @@
-//! Clap subcommands for the andeda-sender binary.
+//! Clap subcommands for the sigil-sender binary.
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "andeda-sender", version, about = "ANDEDA Phase 2 sender")]
+#[command(name = "sigil-sender", version, about = "ANDEDA Phase 2 sender")]
 pub struct Cli {
-    /// Path to sender.yaml (defaults: /etc/andeda/sender.yaml on unix,
+    /// Path to sender.yaml (defaults: /etc/sigil/sender.yaml on unix,
     /// %ProgramData%\Andeda\sender.yaml on Windows).
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
@@ -37,14 +37,14 @@ mod tests {
 
     #[test]
     fn parses_start() {
-        let cli = Cli::try_parse_from(["andeda-sender", "start"]).unwrap();
+        let cli = Cli::try_parse_from(["sigil-sender", "start"]).unwrap();
         assert!(matches!(cli.command, Command::Start));
     }
 
     #[test]
     fn parses_doctor_with_global_config() {
         let cli =
-            Cli::try_parse_from(["andeda-sender", "--config", "/tmp/s.yaml", "doctor"]).unwrap();
+            Cli::try_parse_from(["sigil-sender", "--config", "/tmp/s.yaml", "doctor"]).unwrap();
         assert_eq!(
             cli.config.as_deref().map(|p| p.to_str().unwrap()),
             Some("/tmp/s.yaml")
@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn parses_dry_run_with_url() {
         let cli = Cli::try_parse_from([
-            "andeda-sender",
+            "sigil-sender",
             "dry-run",
             "--url",
             "https://localhost:9443",

@@ -2,13 +2,13 @@
 
 use crate::cli::ShowWhat;
 use crate::platform::ActivePlatform;
-use andeda_core::policy::expand::{expand_per_user, EnvLookup};
-use andeda_core::policy::{current_platform, defaults, merge};
+use sigil_core::policy::expand::{expand_per_user, EnvLookup};
+use sigil_core::policy::{current_platform, defaults, merge};
 use std::path::PathBuf;
 
 pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i32> {
     let user_doc = match policy_override.as_ref() {
-        Some(p) => Some(andeda_core::policy::parse(&std::fs::read_to_string(p)?)?),
+        Some(p) => Some(sigil_core::policy::parse(&std::fs::read_to_string(p)?)?),
         None => None,
     };
     let effective = merge(defaults()?, user_doc, current_platform())?;
@@ -19,7 +19,7 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
         }
         ShowWhat::Paths => {
             let plat = ActivePlatform::new();
-            let users = andeda_core::policy::expand::UserEnumerator::list(&plat);
+            let users = sigil_core::policy::expand::UserEnumerator::list(&plat);
             let env = EnvLookup;
             for t in &effective.targets {
                 println!("# {} ({:?})", t.id, t.tier);

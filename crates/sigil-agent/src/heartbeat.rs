@@ -1,11 +1,11 @@
 //! Heartbeat task: emits an Event every 60s, plus one on shutdown with is_final=true.
 
 use crate::state_task::CommittableEvent;
-use andeda_core::event::{
+use sigil_core::event::{
     Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
-use andeda_core::state::HashCache;
-use andeda_core::stats::Stats;
+use sigil_core::state::HashCache;
+use sigil_core::stats::Stats;
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -109,7 +109,7 @@ pub(crate) async fn emit(
 #[cfg(test)]
 mod field_tests {
     use super::*;
-    use andeda_core::state::HashCache;
+    use sigil_core::state::HashCache;
     use parking_lot::{Mutex, RwLock};
     use tempfile::tempdir;
 
@@ -121,7 +121,7 @@ mod field_tests {
         let cache = Arc::new(Mutex::new(cache));
         let expired = Arc::new(RwLock::new(true));
         let jsonl_above = Arc::new(RwLock::new(false));
-        let stats = andeda_core::stats::Stats::shared();
+        let stats = sigil_core::stats::Stats::shared();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
 
         emit(
@@ -160,7 +160,7 @@ mod field_tests {
         ));
         let expired = Arc::new(RwLock::new(false));
         let jsonl_above = Arc::new(RwLock::new(true));
-        let stats = andeda_core::stats::Stats::shared();
+        let stats = sigil_core::stats::Stats::shared();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
 
         emit(

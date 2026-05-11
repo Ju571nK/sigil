@@ -4,11 +4,11 @@
 //! 3. After sink confirms write (returns Ok), update state.db.
 
 use crate::hasher::HashedEvent;
-use andeda_core::event::{
+use sigil_core::event::{
     Event, Evidence, FileChangeKind, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
-use andeda_core::state::HashCache;
-use andeda_core::stats::Stats;
+use sigil_core::state::HashCache;
+use sigil_core::stats::Stats;
 use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;

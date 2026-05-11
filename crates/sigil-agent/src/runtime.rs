@@ -11,12 +11,12 @@ use crate::{
     supervisor::Supervisor,
     watcher,
 };
-use andeda_core::policy::expand::{expand_per_user, EnvLookup, UserEnumerator};
-use andeda_core::policy::pubkeys::Keystore;
-use andeda_core::policy::{current_platform, defaults, merge, Tier};
-use andeda_core::sink::jsonl::JsonlSink;
-use andeda_core::state::HashCache;
-use andeda_core::stats::Stats;
+use sigil_core::policy::expand::{expand_per_user, EnvLookup, UserEnumerator};
+use sigil_core::policy::pubkeys::Keystore;
+use sigil_core::policy::{current_platform, defaults, merge, Tier};
+use sigil_core::sink::jsonl::JsonlSink;
+use sigil_core::state::HashCache;
+use sigil_core::stats::Stats;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ pub struct RuntimeConfig {
 pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("ANDEDA_LOG")
+            tracing_subscriber::EnvFilter::try_from_env("SIGIL_LOG")
                 .unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
@@ -111,7 +111,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // 1. Load + merge policy.
     let user_doc = match cfg.policy_path.as_ref() {
-        Some(p) if p.exists() => Some(andeda_core::policy::parse(&std::fs::read_to_string(p)?)?),
+        Some(p) if p.exists() => Some(sigil_core::policy::parse(&std::fs::read_to_string(p)?)?),
         _ => None,
     };
     let effective = merge(defaults()?, user_doc, current_platform())?;
@@ -148,10 +148,10 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // 5. Bootstrap channels and tasks.
     let (tx_norm, rx_norm) = mpsc::channel::<NormalizedEvent>(512);
-    let (tx_pending, rx_pending) = mpsc::channel::<andeda_core::debounce::PendingEvent>(512);
+    let (tx_pending, rx_pending) = mpsc::channel::<sigil_core::debounce::PendingEvent>(512);
     let (tx_hashed, rx_hashed) = mpsc::channel::<HashedEvent>(512);
     let (tx_sink, rx_sink) = mpsc::channel::<CommittableEvent>(256);
-    let (tx_dropped, mut rx_dropped) = mpsc::channel::<andeda_core::ratelimit::DropReport>(64);
+    let (tx_dropped, mut rx_dropped) = mpsc::channel::<sigil_core::ratelimit::DropReport>(64);
 
     let stats = Stats::shared();
 
@@ -171,7 +171,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 tracing::debug!("hw_fingerprint unchanged");
             }
             crate::host_meta_task::FingerprintOutcome::Drift { prev, new } => {
-                use andeda_core::event::{
+                use sigil_core::event::{
                     Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
                 };
                 let event = Event {
@@ -207,7 +207,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // (held above until tx_sink existed). Best-effort: if the channel is full,
     // the heartbeat's `last_applied_policy_version` will still surface it.
     if let Some(version) = pending_reconcile {
-        use andeda_core::event::{
+        use sigil_core::event::{
             Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
         };
         let event = Event {
@@ -458,11 +458,11 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 }
 
 fn perform_warmup(
-    eff: &andeda_core::policy::EffectivePolicy,
+    eff: &sigil_core::policy::EffectivePolicy,
     expanded: &HashMap<String, Vec<PathBuf>>,
     cache: &Arc<Mutex<HashCache>>,
 ) -> anyhow::Result<()> {
-    use andeda_core::hashing::{hash_path, HashOutcome};
+    use sigil_core::hashing::{hash_path, HashOutcome};
     for t in &eff.targets {
         if !matches!(t.tier, Tier::Critical) {
             continue;
@@ -487,11 +487,11 @@ fn perform_warmup(
 }
 
 async fn emit_permission_missing(
-    eff: &andeda_core::policy::EffectivePolicy,
+    eff: &sigil_core::policy::EffectivePolicy,
     tx_sink: &mpsc::Sender<CommittableEvent>,
     host_id: &str,
 ) {
-    use andeda_core::event::{
+    use sigil_core::event::{
         Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
     };
     for t in &eff.targets {
@@ -524,9 +524,9 @@ async fn emit_permission_missing(
 
 fn rate_limit_to_event(
     host_id: &str,
-    report: &andeda_core::ratelimit::DropReport,
+    report: &sigil_core::ratelimit::DropReport,
 ) -> CommittableEvent {
-    use andeda_core::event::{
+    use sigil_core::event::{
         Event, Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
     };
     let event = Event {
@@ -558,7 +558,7 @@ impl TargetLookup for NoopLookup {
     fn find_for_path(
         &self,
         _path: &std::path::Path,
-        _kind: andeda_core::event::FileChangeKind,
+        _kind: sigil_core::event::FileChangeKind,
     ) -> Option<NormalizedEvent> {
         None
     }
@@ -568,15 +568,15 @@ impl TargetLookup for NoopLookup {
 fn keystore_path() -> PathBuf {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        PathBuf::from("/etc/andeda/policy-signing-pubkeys.pem")
+        PathBuf::from("/etc/sigil/policy-signing-pubkeys.pem")
     }
     #[cfg(target_os = "windows")]
     {
-        PathBuf::from(r"C:\ProgramData\Andeda\policy-signing-pubkeys.pem")
+        PathBuf::from(r"C:\ProgramData\Sigil\policy-signing-pubkeys.pem")
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        PathBuf::from("/etc/andeda/policy-signing-pubkeys.pem")
+        PathBuf::from("/etc/sigil/policy-signing-pubkeys.pem")
     }
 }
 
@@ -585,15 +585,15 @@ fn keystore_path() -> PathBuf {
 fn default_policy_yaml_path() -> PathBuf {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        PathBuf::from("/etc/andeda/policy.yaml")
+        PathBuf::from("/etc/sigil/policy.yaml")
     }
     #[cfg(target_os = "windows")]
     {
-        PathBuf::from(r"C:\ProgramData\Andeda\policy.yaml")
+        PathBuf::from(r"C:\ProgramData\Sigil\policy.yaml")
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        PathBuf::from("/etc/andeda/policy.yaml")
+        PathBuf::from("/etc/sigil/policy.yaml")
     }
 }
 

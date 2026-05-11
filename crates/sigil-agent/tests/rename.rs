@@ -1,5 +1,5 @@
-use andeda_core::debounce::Debouncer;
-use andeda_core::event::FileChangeKind;
+use sigil_core::debounce::Debouncer;
+use sigil_core::event::FileChangeKind;
 use std::path::PathBuf;
 
 #[test]

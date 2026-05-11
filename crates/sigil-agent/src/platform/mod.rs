@@ -1,8 +1,8 @@
 //! Cross-platform trait surface used by the runtime. The implementing module
 //! is selected at compile time below.
 
-use andeda_core::host_id::HostIdResolver;
-use andeda_core::policy::expand::UserEnumerator;
+use sigil_core::host_id::HostIdResolver;
+use sigil_core::policy::expand::UserEnumerator;
 
 pub trait Platform: HostIdResolver + UserEnumerator + Send + Sync {
     /// Probe whether Full Disk Access (or equivalent) is granted.

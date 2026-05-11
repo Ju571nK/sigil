@@ -1,5 +1,5 @@
 [package]
-name = "andeda-core"
+name = "sigil-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-andeda-rules-basic = { path = "../andeda-rules-basic" }
+sigil-rules-basic = { path = "../sigil-rules-basic" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

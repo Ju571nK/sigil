@@ -1,9 +1,9 @@
 //! e2e: jsonl_gc_task soft-floor / hard-ceiling behaviors.
 
-use andeda_agent::gc_config::GcConfig;
-use andeda_agent::jsonl_gc_task::{tick_for_test, GcTaskCtx};
-use andeda_agent::sender_offset::SenderOffset;
-use andeda_core::event::Evidence;
+use sigil_agent::gc_config::GcConfig;
+use sigil_agent::jsonl_gc_task::{tick_for_test, GcTaskCtx};
+use sigil_agent::sender_offset::SenderOffset;
+use sigil_core::event::Evidence;
 use parking_lot::RwLock;
 use std::path::Path;
 use std::sync::Arc;
@@ -36,7 +36,7 @@ fn build_ctx(
     cfg: GcConfig,
 ) -> (
     GcTaskCtx,
-    mpsc::Receiver<andeda_agent::state_task::CommittableEvent>,
+    mpsc::Receiver<sigil_agent::state_task::CommittableEvent>,
     Arc<RwLock<bool>>,
 ) {
     let (tx, rx) = mpsc::channel(8);

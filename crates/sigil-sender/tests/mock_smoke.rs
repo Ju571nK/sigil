@@ -1,6 +1,6 @@
 mod common;
 
-use andeda_sender::wire::{Envelope, EventEntry, EventsRequest};
+use sigil_sender::wire::{Envelope, EventEntry, EventsRequest};
 use time::macros::datetime;
 use uuid::Uuid;
 

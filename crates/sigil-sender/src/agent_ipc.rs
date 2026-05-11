@@ -1,4 +1,4 @@
-//! IPC client: connects to andeda-agent's control socket/pipe and
+//! IPC client: connects to sigil-agent's control socket/pipe and
 //! invokes `apply_policy`.
 
 use crate::wire::SignedPolicyResponse;

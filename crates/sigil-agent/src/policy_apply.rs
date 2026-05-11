@@ -6,15 +6,15 @@
 //!   3. On Err with reason: emit PolicySignatureInvalid → reject ack.
 //!   4. On Err::Internal: log + 5xx-equivalent (re-tries OK).
 
-use andeda_core::event::{
+use sigil_core::event::{
     Event, Evidence, PolicySignatureInvalidReason, Severity, SourceKind, Subject, AGENT_VERSION,
     SCHEMA_VERSION,
 };
-use andeda_core::policy::{
+use sigil_core::policy::{
     atomic_write, pubkeys::Keystore, signed_envelope::SignedPolicyResponse, verify_envelope,
     AtomicWriteError, VerifyError,
 };
-use andeda_core::state::HashCache;
+use sigil_core::state::HashCache;
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -187,9 +187,9 @@ async fn emit_reloaded(ctx: &ApplyContext, version: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use andeda_core::policy::canonical::to_canonical_bytes;
-    use andeda_core::policy::pubkeys::KeystoreEntry;
-    use andeda_core::policy::signed_envelope::SignedEnvelope;
+    use sigil_core::policy::canonical::to_canonical_bytes;
+    use sigil_core::policy::pubkeys::KeystoreEntry;
+    use sigil_core::policy::signed_envelope::SignedEnvelope;
     use ed25519_dalek::{Signer, SigningKey};
     use rand_core::RngCore;
     use tempfile::tempdir;

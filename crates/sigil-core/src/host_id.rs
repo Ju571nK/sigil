@@ -1,7 +1,7 @@
 //! HostIdStrategy resolution.
 //!
 //! Strategy parsing/validation lives here; OS-specific resolution lives in
-//! `andeda-agent::platform::*`. This crate provides a trait that the agent
+//! `sigil-agent::platform::*`. This crate provides a trait that the agent
 //! implements per OS.
 
 use crate::policy::HostIdStrategy;

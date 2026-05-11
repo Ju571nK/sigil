@@ -4,7 +4,7 @@
 //! offset advance fsync. Failure to write here logs once and proceeds
 //! (the host audit is a debugging aid, not source-of-truth).
 
-use andeda_core::event::Event;
+use sigil_core::event::Event;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -60,7 +60,7 @@ pub fn append(dir: &Path, event: &Event) -> Result<(), DeadLetterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use andeda_core::event::{
+    use sigil_core::event::{
         Evidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
     };
     use tempfile::tempdir;

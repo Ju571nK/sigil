@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
-use andeda_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
-use andeda_sender::agent_ipc::{apply_policy, ApplyPolicyResult};
+use sigil_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
+use sigil_sender::agent_ipc::{apply_policy, ApplyPolicyResult};
 use serde_json::json;
 use time::macros::datetime;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

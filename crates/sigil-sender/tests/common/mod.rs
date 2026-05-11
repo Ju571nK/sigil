@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-use andeda_sender::wire::{EventsAccepted, EventsRequest};
+use sigil_sender::wire::{EventsAccepted, EventsRequest};
 
 /// Per-test mock state.
 pub struct MockState {
@@ -20,7 +20,7 @@ pub struct MockState {
     pub next_status: u16,          // override for next response (default 200)
     pub next_body: Option<String>, // override body
     pub policy_etag: String,
-    pub policy_response: Option<andeda_sender::wire::SignedPolicyResponse>,
+    pub policy_response: Option<sigil_sender::wire::SignedPolicyResponse>,
 }
 
 impl Default for MockState {

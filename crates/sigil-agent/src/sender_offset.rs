@@ -1,5 +1,5 @@
 //! Reader for `sender-offset.json` — the on-disk record of how far the
-//! Plan B `andeda-sender` has consumed in the agent's `events/` directory.
+//! Plan B `sigil-sender` has consumed in the agent's `events/` directory.
 //!
 //! Schema (spec §3.9):
 //! ```json

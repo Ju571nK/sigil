@@ -1,5 +1,5 @@
 [package]
-name = "andeda-spool"
+name = "sigil-spool"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

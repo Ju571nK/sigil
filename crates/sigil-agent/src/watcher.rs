@@ -1,6 +1,6 @@
 //! `notify` integration. Bridges OS-thread callbacks to a tokio mpsc.
 
-use andeda_core::event::FileChangeKind;
+use sigil_core::event::FileChangeKind;
 use notify::{
     event::{EventKind as NEvent, ModifyKind, RenameMode},
     Config, Event, RecommendedWatcher, RecursiveMode, Watcher,

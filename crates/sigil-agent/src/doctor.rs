@@ -1,8 +1,8 @@
 //! `andeda doctor` — startup diagnostics, prints a formatted report.
 
 use crate::platform::{ActivePlatform, FdaState, Platform};
-use andeda_core::policy::expand::{expand_per_user, EnvLookup};
-use andeda_core::policy::{current_platform, defaults, merge};
+use sigil_core::policy::expand::{expand_per_user, EnvLookup};
+use sigil_core::policy::{current_platform, defaults, merge};
 use std::path::PathBuf;
 
 pub fn run(policy_override: Option<PathBuf>) -> i32 {
@@ -15,7 +15,7 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
 
     let user_doc = match policy_override.as_ref() {
         Some(p) => match std::fs::read_to_string(p) {
-            Ok(yaml) => match andeda_core::policy::parse(&yaml) {
+            Ok(yaml) => match sigil_core::policy::parse(&yaml) {
                 Ok(d) => Some(d),
                 Err(e) => {
                     println!("[ERROR] policy parse failed: {e}");
@@ -51,7 +51,7 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
     let count_critical = effective
         .targets
         .iter()
-        .filter(|t| matches!(t.tier, andeda_core::policy::Tier::Critical))
+        .filter(|t| matches!(t.tier, sigil_core::policy::Tier::Critical))
         .count();
     let count_standard = effective.targets.len() - count_critical;
     println!(
@@ -61,7 +61,7 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
         count_standard,
     );
 
-    let users = andeda_core::policy::expand::UserEnumerator::list(&plat);
+    let users = sigil_core::policy::expand::UserEnumerator::list(&plat);
     println!("[OK]   enumerated users: {}", users.len());
 
     let env = EnvLookup;
@@ -94,7 +94,7 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
 
     // Phase 2: show persisted host_id from state.db.
     let state_db_path = default_state_db_path();
-    match andeda_core::state::HashCache::open(&state_db_path) {
+    match sigil_core::state::HashCache::open(&state_db_path) {
         Ok(cache) => match cache.host_meta_get() {
             Ok(meta) => {
                 let host_id_display = meta
@@ -150,16 +150,16 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
 fn default_state_db_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("/var/lib/andeda/state.db")
+        PathBuf::from("/var/lib/sigil/state.db")
     }
     #[cfg(target_os = "linux")]
     {
-        PathBuf::from("/var/lib/andeda/state.db")
+        PathBuf::from("/var/lib/sigil/state.db")
     }
     #[cfg(target_os = "windows")]
     {
         std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Andeda/state.db")
+            .join("Sigil/state.db")
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {

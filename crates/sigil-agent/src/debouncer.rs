@@ -1,8 +1,8 @@
-//! Debouncer task. Drives `andeda_core::debounce::Debouncer` with tokio time.
+//! Debouncer task. Drives `sigil_core::debounce::Debouncer` with tokio time.
 
 use crate::normalizer::NormalizedEvent;
-use andeda_core::debounce::{Debouncer, PendingEvent};
-use andeda_core::policy::Tier;
+use sigil_core::debounce::{Debouncer, PendingEvent};
+use sigil_core::policy::Tier;
 use std::time::Duration;
 use tokio::sync::mpsc;
 

@@ -7,16 +7,16 @@ Five scenarios that automation cannot cover.
 1. Install ANDEDA without granting FDA. Run `andeda doctor` — expect `[WARN]
    Full Disk Access: NOT granted`.
 2. Run the daemon. Confirm a `permission_missing` event appears in
-   `/var/log/andeda/events-*.jsonl`.
+   `/var/log/sigil/events-*.jsonl`.
 3. Open System Settings → Privacy & Security → Full Disk Access. Add
-   `/usr/local/bin/andeda`.
-4. Send SIGHUP: `sudo launchctl kickstart -k system/com.andeda.agent`.
+   `/usr/local/bin/sigil`.
+4. Send SIGHUP: `sudo launchctl kickstart -k system/com.sigil.agent`.
 5. Confirm next heartbeat's `events_by_kind` no longer contains
    `permission_missing`.
 
 ## 2. Windows Service registration
 
-1. `sc create Andeda binPath= "C:\Program Files\Andeda\andeda.exe run" start= auto`
+1. `sc create Andeda binPath= "C:\Program Files\Sigil\sigil.exe run" start= auto`
 2. `sc start Andeda` — confirm Event Viewer shows successful start.
 3. Modify a watched config file; confirm event in `%ProgramData%\Andeda\events`.
 4. `sc stop Andeda` — confirm graceful shutdown (final heartbeat with
