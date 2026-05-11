@@ -34,3 +34,31 @@ jobs:
         run: cargo test --workspace
       - name: release build
         run: cargo build --release --workspace
+
+  # RHEL-family validation. GitHub has no hosted Rocky runner, so run inside
+  # the rockylinux:9 container — this exercises the RHEL build path (glibc
+  # 2.34, dnf-installed toolchain) that the ubuntu-22.04 leg above does not.
+  rocky9:
+    name: rockylinux:9 / stable
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    steps:
+      - name: install build deps
+        run: dnf -y install git gcc perl
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rocky9
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: build
+        run: cargo build --workspace
+      - name: test (workspace)
+        run: cargo test --workspace
+      - name: release build
+        run: cargo build --release --workspace
