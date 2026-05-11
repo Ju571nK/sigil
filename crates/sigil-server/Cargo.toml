@@ -1,0 +1,40 @@
+[package]
+name = "sigil-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OSS reference policy/event server for Sigil (POST /v1/events, GET /v1/policy)."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "sigil-server"
+path = "src/main.rs"
+
+[dependencies]
+sigil-core = { path = "../sigil-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+time = { workspace = true }
+uuid = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true, features = ["query"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tower = { workspace = true }
+http = { workspace = true }
+reqwest = { workspace = true }

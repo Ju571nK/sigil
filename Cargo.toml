@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sigil-core", "crates/sigil-agent", "crates/sigil-spool", "crates/sigil-rules-basic", "crates/sigil-sender", "crates/sigil-signer"]
+members = ["crates/sigil-core", "crates/sigil-agent", "crates/sigil-spool", "crates/sigil-rules-basic", "crates/sigil-sender", "crates/sigil-signer", "crates/sigil-server"]
 resolver = "2"
 
 [workspace.package]
