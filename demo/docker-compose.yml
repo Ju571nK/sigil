@@ -1,0 +1,85 @@
+# Sigil end-to-end demo.
+#
+# A file change under ./watched flows:
+#   sigil (agent)  ->  JSONL spool  ->  sigil-sender  --mTLS-->  sigil-server
+# and the operator-signed policy flows back the other way:
+#   sigil-server  -->  sigil-sender  -->  sigil   (verified via the 5-check chain, then applied)
+#
+# See demo/README.md.
+
+name: sigil-demo
+
+x-sigil-image: &sigil-image
+  build:
+    context: ..
+    dockerfile: demo/Dockerfile
+  image: sigil-demo:latest
+
+services:
+  # One-shot: generate the demo PKI + signing key, sign the policy, write configs.
+  init:
+    <<: *sigil-image
+    command: ["init.sh"]
+    restart: "no"
+    volumes:
+      - ./policy.demo.yaml:/seed/policy.yaml:ro
+      - etc-sigil:/etc/sigil
+      - server-config:/etc/sigil-server
+
+  sigil-server:
+    <<: *sigil-image
+    command: ["sigil-server", "serve", "--config", "/etc/sigil-server/server.yaml"]
+    environment:
+      RUST_LOG: "sigil_server=info"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - server-config:/etc/sigil-server
+      - server-events:/var/lib/sigil-server/events
+    ports:
+      # Optional: reach the API from the host. It's mTLS, so curl needs the client cert:
+      #   curl --cacert <vol>/ca.crt --cert <vol>/client.crt --key <vol>/client.key \
+      #        "https://localhost:8443/v1/policy?host_id=$(docker compose exec -T sigil-server ls /var/lib/sigil-server/events)"
+      - "8443:8443"
+
+  sigil:
+    <<: *sigil-image
+    command: ["sigil", "run", "--policy", "/etc/sigil/policy.yaml", "--state-db", "/var/lib/sigil/state.db", "--events-dir", "/var/log/sigil"]
+    environment:
+      SIGIL_LOG: "info"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - ./watched:/watched              # <-- edit files in ./watched on the host to trigger events
+      - etc-sigil:/etc/sigil
+      - var-lib-sigil:/var/lib/sigil
+      - var-log-sigil:/var/log/sigil
+      - var-run-sigil:/var/run/sigil
+
+  sigil-sender:
+    <<: *sigil-image
+    command: ["sender-entrypoint.sh"]
+    environment:
+      RUST_LOG: "sigil_sender=info"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      sigil-server:
+        condition: service_started
+      sigil:
+        condition: service_started
+    volumes:
+      - etc-sigil:/etc/sigil
+      - var-lib-sigil:/var/lib/sigil
+      - var-log-sigil:/var/log/sigil
+      - var-run-sigil:/var/run/sigil
+
+volumes:
+  etc-sigil:
+  server-config:
+  server-events:
+  var-lib-sigil:
+  var-log-sigil:
+  var-run-sigil:
