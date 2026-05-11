@@ -1,0 +1,31 @@
+[package]
+name = "sigil-signer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Operator CLI for signing Sigil policy bundles (keygen / sign / verify / inspect)."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "sigil-sign"
+path = "src/main.rs"
+
+[dependencies]
+sigil-core = { path = "../sigil-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+time = { workspace = true }
+ed25519-dalek = { workspace = true }
+data-encoding = { workspace = true }
+blake3 = { workspace = true }
+rand_core = { version = "0.6", features = ["std"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
