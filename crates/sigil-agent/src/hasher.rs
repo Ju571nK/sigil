@@ -32,10 +32,13 @@ pub async fn run(
         let elapsed_us = started.elapsed().as_micros() as u64;
         stats.record_hash_us(elapsed_us);
 
-        let norm = match target_lookup.find_for_path(&pending.path, pending.kind) {
+        let mut norm = match target_lookup.find_for_path(&pending.path, pending.kind) {
             Some(n) => n,
             None => continue,
         };
+        // The lookup re-derives target/tier from the path; the rename pairing
+        // (done once in the normalizer) rides downstream on the PendingEvent.
+        norm.rename_from = pending.rename_from.clone();
 
         let (after_hash, size_after, mut quality) = match outcome {
             Ok(Ok(HashOutcome::Hashed { hex, size })) => {
@@ -78,9 +81,10 @@ pub async fn run(
     }
 }
 
-/// Bridge that lets the hasher recover the canonical NormalizedEvent for a path.
-/// In practice, the debouncer state map carries this; for the wiring task we
-/// provide a trait that returns the matched target.
+/// Recovers a `PendingEvent`'s target/tier metadata from its (canonical) path.
+/// The runtime implements this by re-matching against the same compiled globs
+/// the normalizer uses (see `GlobTargetLookup`). The rename pairing is *not*
+/// reconstructed here — it travels separately on `PendingEvent::rename_from`.
 pub trait TargetLookup {
     fn find_for_path(
         &self,

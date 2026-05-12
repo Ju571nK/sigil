@@ -1,10 +1,10 @@
-//! Stub platform for non-macOS/Windows builds (Phase 1 build-only — Linux etc.).
+//! Fallback `Platform` for build targets without a real implementation.
 //!
-//! Spec section 6 declares Linux build-only for Phase 1. This stub satisfies the
-//! `Platform` trait so the workspace compiles on CI Linux runners. It is not
-//! exercised at runtime because the runtime is gated to macOS/Windows in
-//! deployment artifacts; if the daemon is ever launched on an unsupported OS
-//! it returns an empty user list, `FdaState::Granted`, and a fresh UUID host_id.
+//! macOS, Windows, and Linux each have their own module; this stub is gated to
+//! everything else (`not(any(macos, windows, linux))`) so the workspace still
+//! compiles on, e.g., a BSD. It is best-effort: an empty user list,
+//! `FdaState::Granted`, a fresh UUID host_id, and whatever a few Linux-style
+//! files (`/etc/machine-id`, `/proc/cpuinfo`) happen to yield (often nothing).
 
 use super::{FdaState, Platform};
 use sigil_core::host_id::HostIdResolver;
@@ -62,7 +62,7 @@ impl HardwareFingerprint for StubPlatform {
             .to_string()
     }
     fn stable_mac(&self) -> String {
-        // Phase 2 Linux is build-only; runtime is Phase 2+. Empty.
+        // No portable way to do this here; the real platform modules implement it.
         String::new()
     }
     fn cpu_brand(&self) -> String {
