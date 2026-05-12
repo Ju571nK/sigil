@@ -235,9 +235,7 @@ mod tests {
         fs::remove_file(&p).unwrap();
         let mut saw_remove = false;
         for _ in 0..10 {
-            if let Ok(Some(ev)) =
-                tokio::time::timeout(Duration::from_secs(1), rx.recv()).await
-            {
+            if let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
                 if ev.kind == FileChangeKind::Removed {
                     saw_remove = true;
                     break;
@@ -267,8 +265,7 @@ mod tests {
         let mut saw_change = false;
         for i in 0..40 {
             fs::write(&p, vec![b'x'; i + 2]).unwrap();
-            if let Ok(Some(ev)) =
-                tokio::time::timeout(Duration::from_millis(300), rx.recv()).await
+            if let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await
             {
                 if matches!(ev.kind, FileChangeKind::Modified | FileChangeKind::Created) {
                     saw_change = true;

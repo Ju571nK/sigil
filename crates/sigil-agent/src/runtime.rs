@@ -119,32 +119,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     let effective = merge(defaults()?, user_doc, current_platform())?;
     // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
 
-    // 2. Expand paths per user.
-    let users = UserEnumerator::list(&plat);
-    let env = EnvLookup;
-    let mut expanded_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
-    let mut watch_roots: Vec<(PathBuf, bool)> = Vec::new();
-    for t in &effective.targets {
-        let mut paths = Vec::new();
-        for tmpl in &t.paths {
-            for p in expand_per_user(tmpl, &users, &env).into_iter().flatten() {
-                // Resolve a symlinked directory prefix (macOS `/var` → `/private/var`,
-                // etc.) so globs / warmup keys / watch roots all line up with the
-                // canonical event paths the normalizer produces.
-                let p = normalizer::canonicalize_glob_prefix(&p);
-                let parent = if t.recursive {
-                    p.clone()
-                } else {
-                    p.parent().map(PathBuf::from).unwrap_or_else(|| p.clone())
-                };
-                if parent.exists() {
-                    watch_roots.push((parent, t.recursive));
-                }
-                paths.push(p);
-            }
-        }
-        expanded_paths.insert(t.id.clone(), paths);
-    }
+    // 2. Expand paths per user → watch paths + watch roots.
+    let (expanded_paths, watch_roots) = expand_targets(&effective, &plat);
 
     // 3. Perform critical-tier warmup (state.db already opened above).
     perform_warmup(&effective, &expanded_paths, &cache)?;
@@ -485,7 +461,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     Ok(exit_code)
 }
 
-fn perform_warmup(
+pub(crate) fn perform_warmup(
     eff: &sigil_core::policy::EffectivePolicy,
     expanded: &HashMap<String, Vec<PathBuf>>,
     cache: &Arc<Mutex<HashCache>>,
@@ -512,6 +488,44 @@ fn perform_warmup(
         }
     }
     Ok(())
+}
+
+/// Expand a policy's per-user path templates into concrete watch paths and the
+/// set of (canonical) watch roots to register. Shared by `run` (startup) and
+/// `policy_reload_task` (live reload).
+#[allow(clippy::type_complexity)]
+pub(crate) fn expand_targets(
+    eff: &sigil_core::policy::EffectivePolicy,
+    plat: &ActivePlatform,
+) -> (HashMap<String, Vec<PathBuf>>, Vec<(PathBuf, bool)>) {
+    let users = UserEnumerator::list(plat);
+    let env = EnvLookup;
+    let mut expanded_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let mut watch_roots: Vec<(PathBuf, bool)> = Vec::new();
+    for t in &eff.targets {
+        let mut paths = Vec::new();
+        for tmpl in &t.paths {
+            for p in expand_per_user(tmpl, &users, &env).into_iter().flatten() {
+                // Resolve a symlinked directory prefix (macOS `/var` → `/private/var`,
+                // etc.) so globs / warmup keys / watch roots all line up with the
+                // canonical event paths the normalizer produces.
+                let p = normalizer::canonicalize_glob_prefix(&p);
+                let parent = if t.recursive {
+                    p.clone()
+                } else {
+                    p.parent().map(PathBuf::from).unwrap_or_else(|| p.clone())
+                };
+                if parent.exists() {
+                    watch_roots.push((parent, t.recursive));
+                }
+                paths.push(p);
+            }
+        }
+        expanded_paths.insert(t.id.clone(), paths);
+    }
+    watch_roots.sort();
+    watch_roots.dedup();
+    (expanded_paths, watch_roots)
 }
 
 async fn emit_permission_missing(
