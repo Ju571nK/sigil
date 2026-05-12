@@ -60,17 +60,16 @@ gaps in the existing agent integration suite are also fair game.
   and `sigil-sender` has a client (`crates/sigil-sender/src/agent_ipc.rs`) to
   model — wire `ShowWhat::Stats` in `crates/sigil-agent/src/show.rs` to connect,
   send it, and print the `StatsSnapshot`.
-- **Run the agent-runtime tests on Linux/Windows CI.** The integration tests
-  that boot the whole agent via `TestAgentBuilder` (`basic_events`,
-  `critical_tier`, `large_file`, `shutdown`) are currently `#[cfg_attr(not(
-  target_os = "macos"), ignore)]` — they pass on macOS but hit rough edges
-  elsewhere: on Windows `std::fs::canonicalize` returns a `\\?\` verbatim path
-  that `globset` mis-parses (and `policy_for_paths` writes paths into a
-  double-quoted YAML scalar, so backslashes break parsing — single-quote them);
-  on Linux CI the runtime appears to stop right after the hardware-fingerprint
-  step before opening the control socket (needs investigation — `SIGIL_LOG`
-  bumped to `debug` in CI will show where `spawn_watcher` lands). Get them green
-  on all three and drop the `cfg_attr`.
+- **Run the agent-runtime tests on Windows CI.** The integration tests that
+  boot the whole agent via `TestAgentBuilder` (`basic_events`, `critical_tier`,
+  `large_file`, `shutdown`) run on macOS and Linux but are
+  `#[cfg_attr(target_os = "windows", ignore)]`: on Windows, `runtime::run`
+  stops right after the hardware-fingerprint step, before the control listener
+  comes up. The tolerant `spawn_watcher` (a single bad watch root no longer
+  kills the agent) didn't change it, so it isn't a per-root error — suspect
+  `RecommendedWatcher::new` (the `ReadDirectoryChangesW` backend) or a hang in
+  it. Reproduce with `SIGIL_LOG=debug cargo test -p sigil-agent --test
+  basic_events` on Windows, fix, and drop the `cfg_attr`.
 
 ## License of Contributions
 
