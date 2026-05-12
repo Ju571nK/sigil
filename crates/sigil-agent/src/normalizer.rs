@@ -3,6 +3,13 @@
 //! - glob filtering against active WatchTargets
 //! - rename pairing within a 200 ms window
 //! - per-target token-bucket rate limiting
+//!
+//! Known limitation: event paths are canonicalized (symlinks resolved) but
+//! policy paths/globs are not, so a policy path under a symlinked prefix won't
+//! match. On macOS that means `/var/...`, `/tmp/...`, `/etc/...` (all symlinks
+//! to `/private/...`) silently fail — write the `/private/...` form instead.
+//! Linux and Windows are unaffected. Proper fix (canonicalize the literal
+//! prefix of each glob) is a tracked `TODO(community)`.
 
 use crate::watcher::RawFsEvent;
 use sigil_core::event::FileChangeKind;

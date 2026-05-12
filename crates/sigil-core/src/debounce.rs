@@ -33,6 +33,10 @@ pub struct PendingEvent {
     pub last_seen_ms: LogicalMs,
     pub coalesced_count: u32,
     pub critical: bool,
+    /// For `Renamed` events: the prior path. This module is path/kind only and
+    /// always leaves it `None`; the agent's debouncer task pairs it in from the
+    /// normalizer's output before handing the event downstream.
+    pub rename_from: Option<PathBuf>,
 }
 
 impl PendingEvent {
@@ -79,6 +83,7 @@ impl Debouncer {
                 last_seen_ms: now_ms,
                 coalesced_count: 1,
                 critical,
+                rename_from: None,
             });
         }
         let key = (path.clone(), kind);
@@ -98,6 +103,7 @@ impl Debouncer {
                         last_seen_ms: now_ms,
                         coalesced_count: 1,
                         critical,
+                        rename_from: None,
                     },
                 );
                 None

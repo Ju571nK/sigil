@@ -45,6 +45,22 @@ fingerprint. Several refinements are deliberately left open and marked
 Linux runtime tests run in CI on `ubuntu-22.04`, so platform-specific test
 gaps in the existing agent integration suite are also fair game.
 
+## Good first contributions — agent
+
+- **Canonicalize policy paths.** The normalizer canonicalizes event paths
+  (`dunce::canonicalize`) but compiles globs from the raw policy paths, so a
+  policy path under a symlinked prefix never matches — on macOS that means
+  `/var/...`, `/tmp/...`, `/etc/...` (symlinks to `/private/...`) silently fail.
+  The fix is to canonicalize the literal prefix (everything before the first
+  glob metacharacter) of each path when building globs / watch roots, in
+  `crates/sigil-agent/src/runtime.rs` and `normalizer::compile_targets`.
+- **`sigil show stats` over IPC.** It currently prints "read the next heartbeat
+  from the JSONL" instead of querying the running daemon. The control protocol
+  already has the `{"cmd":"stats"}` request (`crates/sigil-agent/src/control.rs`)
+  and `sigil-sender` has a client (`crates/sigil-sender/src/agent_ipc.rs`) to
+  model — wire `ShowWhat::Stats` in `crates/sigil-agent/src/show.rs` to connect,
+  send it, and print the `StatsSnapshot`.
+
 ## License of Contributions
 
 Unless you clearly state otherwise, any contribution intentionally submitted to
