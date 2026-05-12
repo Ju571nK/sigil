@@ -3,6 +3,10 @@ use common::{policy_for_paths, policy_path, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "agent-runtime test: not yet hardened for Windows"
+)]
 async fn it_critical_tier_emits_recheck() {
     let dir = tempfile::tempdir().unwrap();
     let target = policy_path(dir.path()).join("config.json");
