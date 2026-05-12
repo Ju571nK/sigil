@@ -258,7 +258,13 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         "runtime: filesystem watcher started"
     );
 
-    let targets = Arc::new(normalizer::compile_targets(&effective, &expanded_paths));
+    // The pipeline reads its matcher set from this watch channel; the
+    // policy-reload task (wired in below) publishes new sets on `targets_tx`.
+    #[allow(unused_variables)]
+    let (targets_tx, targets_rx) = watch::channel(Arc::new(normalizer::compile_targets(
+        &effective,
+        &expanded_paths,
+    )));
     let mut sup = Supervisor::new();
     let cancel = sup.shutdown.clone();
     tracing::info!("runtime: spawning pipeline tasks");
@@ -268,9 +274,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         tokio::spawn({
             let tx_norm = tx_norm.clone();
             let tx_dropped = tx_dropped.clone();
-            let targets = targets.clone();
+            let targets_rx = targets_rx.clone();
             async move {
-                normalizer::run(targets, raw_rx, tx_norm, tx_dropped).await;
+                normalizer::run(targets_rx, raw_rx, tx_norm, tx_dropped).await;
             }
         }),
     );
@@ -290,7 +296,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             // the (already-canonical) path against the same compiled globs the
             // normalizer used.
             let lookup: Arc<dyn TargetLookup + Send + Sync> = Arc::new(GlobTargetLookup {
-                targets: targets.clone(),
+                targets_rx: targets_rx.clone(),
             });
             async move {
                 crate::hasher::run(rx_pending, tx_hashed, lookup, stats).await;
@@ -596,7 +602,7 @@ fn rate_limit_to_event(
 }
 
 struct GlobTargetLookup {
-    targets: Arc<Vec<normalizer::CompiledTarget>>,
+    targets_rx: watch::Receiver<Arc<Vec<normalizer::CompiledTarget>>>,
 }
 impl TargetLookup for GlobTargetLookup {
     fn find_for_path(
@@ -604,7 +610,8 @@ impl TargetLookup for GlobTargetLookup {
         path: &std::path::Path,
         kind: sigil_core::event::FileChangeKind,
     ) -> Option<NormalizedEvent> {
-        normalizer::lookup(&self.targets, path, kind)
+        let targets: Arc<Vec<normalizer::CompiledTarget>> = self.targets_rx.borrow().clone();
+        normalizer::lookup(&targets, path, kind)
     }
 }
 

@@ -155,7 +155,7 @@ struct PendingFrom {
 }
 
 pub async fn run(
-    targets: Arc<Vec<CompiledTarget>>,
+    targets_rx: tokio::sync::watch::Receiver<Arc<Vec<CompiledTarget>>>,
     mut rx_raw: mpsc::Receiver<RawFsEvent>,
     tx_norm: mpsc::Sender<NormalizedEvent>,
     tx_dropped: mpsc::Sender<DropReport>,
@@ -171,6 +171,9 @@ pub async fn run(
             maybe_event = rx_raw.recv() => {
                 let Some(raw) = maybe_event else { break; };
                 let canonical = dunce::canonicalize(&raw.path).unwrap_or(raw.path.clone());
+                // Snapshot the active matcher set for this event (cheap Arc clone).
+                // Live policy reload publishes new sets on `targets_rx`.
+                let targets = targets_rx.borrow().clone();
                 tracing::debug!(
                     raw_path = %raw.path.display(),
                     canonical = %canonical.display(),
