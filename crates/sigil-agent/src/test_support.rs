@@ -17,6 +17,9 @@ pub struct TestAgent {
 
 pub struct TestAgentBuilder {
     policy_yaml: String,
+    /// JSON bytes of a policy-signing keystore the agent should load. `None` →
+    /// no keystore (Phase 1 mode; `apply_policy` rejects every envelope).
+    keystore_json: Option<Vec<u8>>,
 }
 
 impl Default for TestAgentBuilder {
@@ -29,11 +32,20 @@ impl TestAgentBuilder {
     pub fn new() -> Self {
         Self {
             policy_yaml: String::new(),
+            keystore_json: None,
         }
     }
 
     pub fn policy(mut self, yaml: &str) -> Self {
         self.policy_yaml = yaml.to_string();
+        self
+    }
+
+    /// Give the agent a policy-signing keystore (JSON, as produced by
+    /// `serde_json::to_vec(&sigil_core::policy::pubkeys::Keystore { .. })`), so
+    /// `apply_policy` requests signed by a matching key are accepted.
+    pub fn keystore_json(mut self, json: Vec<u8>) -> Self {
+        self.keystore_json = Some(json);
         self
     }
 
@@ -45,6 +57,11 @@ impl TestAgentBuilder {
         std::fs::write(&policy_file, &self.policy_yaml).unwrap();
         let control_socket = td.path().join("control.sock");
         let control_pipe_name = format!(r"\\.\pipe\sigil-test-{}", uuid::Uuid::new_v4().simple());
+        let keystore_path = self.keystore_json.as_ref().map(|json| {
+            let p = td.path().join("policy-signing-pubkeys.pem");
+            std::fs::write(&p, json).unwrap();
+            p
+        });
         let cfg = RuntimeConfig {
             policy_path: Some(policy_file.clone()),
             state_db_path: state_db.clone(),
@@ -52,6 +69,7 @@ impl TestAgentBuilder {
             control_socket: control_socket.clone(),
             control_pipe_name: control_pipe_name.clone(),
             poll_watcher: false,
+            keystore_path,
         };
         let join = tokio::spawn(async move {
             let _ = runtime::run(cfg).await;
@@ -120,5 +138,32 @@ impl TestAgent {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         None
+    }
+
+    /// Send an `apply_policy` request over the agent's control socket; returns
+    /// the raw JSON response line. (Unix only — the control IPC is a UDS there;
+    /// the Windows named-pipe client path isn't needed by any test yet.)
+    #[cfg(unix)]
+    pub async fn apply_policy(
+        &self,
+        resp: &sigil_core::policy::signed_envelope::SignedPolicyResponse,
+    ) -> String {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixStream;
+        let req = serde_json::json!({
+            "cmd": "apply_policy",
+            "response": serde_json::to_value(resp).expect("serialize SignedPolicyResponse"),
+        });
+        let mut bytes = serde_json::to_vec(&req).unwrap();
+        bytes.push(b'\n');
+        let stream = UnixStream::connect(&self.control_socket)
+            .await
+            .expect("connect control socket");
+        let (rd, mut wr) = stream.into_split();
+        wr.write_all(&bytes).await.unwrap();
+        wr.shutdown().await.ok();
+        let mut line = String::new();
+        BufReader::new(rd).read_line(&mut line).await.unwrap();
+        line
     }
 }

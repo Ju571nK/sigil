@@ -33,6 +33,8 @@ pub struct RuntimeConfig {
     pub control_pipe_name: String,
     /// Force a polling watcher instead of the OS-native backend (`--poll`).
     pub poll_watcher: bool,
+    /// Override the policy-signing keystore path (tests). `None` → `keystore_path()`.
+    pub keystore_path: Option<PathBuf>,
 }
 
 pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
@@ -63,16 +65,17 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Phase 2: load the policy-signing keystore. Optional — if missing, the
     // agent runs in Phase 1 mode (no inbound apply_policy can succeed).
-    let keystore = match Keystore::load_from_file(keystore_path()) {
-        Ok(k) => Arc::new(k),
-        Err(e) => {
-            tracing::warn!(
-                error = ?e,
-                "policy-signing keystore unavailable; apply_policy will reject all envelopes"
-            );
-            Arc::new(Keystore { pubkeys: vec![] })
-        }
-    };
+    let keystore =
+        match Keystore::load_from_file(cfg.keystore_path.clone().unwrap_or_else(keystore_path)) {
+            Ok(k) => Arc::new(k),
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "policy-signing keystore unavailable; apply_policy will reject all envelopes"
+                );
+                Arc::new(Keystore { pubkeys: vec![] })
+            }
+        };
 
     // Phase 2: shared state for IPC + expiry monitor + heartbeat.
     let policy_expired_active = Arc::new(parking_lot::RwLock::new(false));
