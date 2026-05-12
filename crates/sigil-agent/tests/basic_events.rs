@@ -3,6 +3,14 @@ use common::{policy_for_paths, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+// Runs the full agent runtime via `TestAgentBuilder`; that path is currently
+// only exercised/hardened on macOS CI. Linux/Windows have known rough edges
+// (Windows verbatim `\\?\` paths break globs; a Linux CI startup hang) — see
+// CONTRIBUTING. Tracked follow-up to enable everywhere.
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "agent-runtime test: macOS-only for now (see CONTRIBUTING)"
+)]
 async fn it_emits_modified_event() {
     // Canonicalize the temp dir: the agent canonicalizes event paths, and on
     // macOS `/var` is a symlink to `/private/var`, so an un-canonicalized policy

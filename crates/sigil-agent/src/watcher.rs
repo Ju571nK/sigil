@@ -87,23 +87,39 @@ pub fn spawn_watcher(
         }
     };
 
-    let watch_all = |w: &mut dyn Watcher, roots: &[(PathBuf, bool)]| -> Result<(), WatcherError> {
+    // A failure on one root (gone missing, permission, `max_user_watches`) must
+    // not bring the whole agent down — log it and keep the rest. (Construction
+    // of the watcher itself is still fatal.)
+    let watch_all = |w: &mut dyn Watcher, roots: &[(PathBuf, bool)]| {
+        let mut ok = 0usize;
         for (root, recursive) in roots {
-            tracing::debug!(root = %root.display(), recursive, "registering watch root");
-            w.watch(root, recursive_mode(*recursive))?;
+            match w.watch(root, recursive_mode(*recursive)) {
+                Ok(()) => {
+                    ok += 1;
+                    tracing::debug!(root = %root.display(), recursive, "watching root");
+                }
+                Err(e) => tracing::warn!(
+                    root = %root.display(),
+                    recursive,
+                    error = %e,
+                    "failed to watch root; continuing without it"
+                ),
+            }
         }
-        Ok(())
+        if ok == 0 && !roots.is_empty() {
+            tracing::warn!("no watch roots could be registered; file-change events disabled");
+        }
     };
 
     let (backend, backend_name): (BackendWatcher, &'static str) = match poll_interval {
         Some(interval) => {
             let mut w = PollWatcher::new(on_event, Config::default().with_poll_interval(interval))?;
-            watch_all(&mut w, &roots)?;
+            watch_all(&mut w, &roots);
             (BackendWatcher::Poll(w), "polling")
         }
         None => {
             let mut w = RecommendedWatcher::new(on_event, Config::default())?;
-            watch_all(&mut w, &roots)?;
+            watch_all(&mut w, &roots);
             (BackendWatcher::Native(w), os_backend_name())
         }
     };
