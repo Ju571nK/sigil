@@ -270,14 +270,13 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         roots = watch_roots.len(),
         "runtime: spawning filesystem watcher"
     );
-    let watcher_handle = watcher::spawn_watcher(
+    let (raw_rx, watcher_handle) = watcher::spawn_watcher(
         watch_roots.clone(),
         runtime_handle.clone(),
         1024,
         poll_interval,
     )?;
     let backend_name = watcher_handle.backend_name;
-    let raw_rx = watcher_handle.rx;
     tracing::info!(
         backend = backend_name,
         "runtime: filesystem watcher started"

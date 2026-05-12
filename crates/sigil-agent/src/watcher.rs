@@ -26,22 +26,42 @@ pub struct RawFsEvent {
     pub rename_id: Option<u64>, // notify reports a tracker id we surface for pairing
 }
 
-/// Spawns the OS-thread watcher and returns a tokio receiver for raw events.
-/// `roots` is the list of (path, recursive) pairs to watch.
+/// Holds the live OS watcher (keeping its thread alive) and lets callers
+/// add/remove watch roots after construction.
 pub struct WatcherHandle {
-    pub rx: mpsc::Receiver<RawFsEvent>,
     pub backend_name: &'static str,
-    // Held only to keep the watcher (and its OS thread) alive for the
-    // lifetime of the handle.
-    _watcher: BackendWatcher,
+    watcher: BackendWatcher,
 }
 
-// Variants carry the live watcher only so its OS thread stays alive until the
-// `WatcherHandle` is dropped; the value itself is never read.
-#[allow(dead_code)]
 enum BackendWatcher {
     Native(RecommendedWatcher),
     Poll(PollWatcher),
+}
+
+impl BackendWatcher {
+    fn as_watcher_mut(&mut self) -> &mut dyn Watcher {
+        match self {
+            BackendWatcher::Native(w) => w,
+            BackendWatcher::Poll(w) => w,
+        }
+    }
+}
+
+impl WatcherHandle {
+    /// Register a watch root on the live watcher.
+    pub fn watch(&mut self, root: &std::path::Path, recursive: bool) -> notify::Result<()> {
+        let mode = if recursive {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        self.watcher.as_watcher_mut().watch(root, mode)
+    }
+
+    /// Stop watching a root.
+    pub fn unwatch(&mut self, root: &std::path::Path) -> notify::Result<()> {
+        self.watcher.as_watcher_mut().unwatch(root)
+    }
 }
 
 /// Spawn the filesystem watcher.
@@ -55,7 +75,7 @@ pub fn spawn_watcher(
     runtime_handle: tokio::runtime::Handle,
     capacity: usize,
     poll_interval: Option<Duration>,
-) -> Result<WatcherHandle, WatcherError> {
+) -> Result<(mpsc::Receiver<RawFsEvent>, WatcherHandle), WatcherError> {
     let (tx, rx) = mpsc::channel::<RawFsEvent>(capacity);
     let tx = Arc::new(tx);
     let handle_for_cb = runtime_handle.clone();
@@ -124,11 +144,13 @@ pub fn spawn_watcher(
         }
     };
 
-    Ok(WatcherHandle {
+    Ok((
         rx,
-        backend_name,
-        _watcher: backend,
-    })
+        WatcherHandle {
+            backend_name,
+            watcher: backend,
+        },
+    ))
 }
 
 fn os_backend_name() -> &'static str {
@@ -179,7 +201,7 @@ mod tests {
     async fn detects_create_in_watched_dir() {
         let td = TempDir::new().unwrap();
         let handle = tokio::runtime::Handle::current();
-        let mut watcher =
+        let (mut rx, _watcher) =
             spawn_watcher(vec![(td.path().to_path_buf(), false)], handle, 16, None).unwrap();
 
         // Give the watcher a moment to register on macOS FSEvents.
@@ -191,7 +213,7 @@ mod tests {
         f.sync_all().unwrap();
         drop(f);
 
-        let event = tokio::time::timeout(Duration::from_secs(3), watcher.rx.recv())
+        let event = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
@@ -207,14 +229,14 @@ mod tests {
         let p = td.path().join("victim.json");
         File::create(&p).unwrap().write_all(b"x").unwrap();
         let handle = tokio::runtime::Handle::current();
-        let mut watcher =
+        let (mut rx, _watcher) =
             spawn_watcher(vec![(td.path().to_path_buf(), false)], handle, 16, None).unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         fs::remove_file(&p).unwrap();
         let mut saw_remove = false;
         for _ in 0..10 {
             if let Ok(Some(ev)) =
-                tokio::time::timeout(Duration::from_secs(1), watcher.rx.recv()).await
+                tokio::time::timeout(Duration::from_secs(1), rx.recv()).await
             {
                 if ev.kind == FileChangeKind::Removed {
                     saw_remove = true;
@@ -231,7 +253,7 @@ mod tests {
         let p = td.path().join("watched.json");
         fs::write(&p, b"a").unwrap();
         let handle = tokio::runtime::Handle::current();
-        let mut watcher = spawn_watcher(
+        let (mut rx, watcher) = spawn_watcher(
             vec![(td.path().to_path_buf(), false)],
             handle,
             64,
@@ -246,7 +268,7 @@ mod tests {
         for i in 0..40 {
             fs::write(&p, vec![b'x'; i + 2]).unwrap();
             if let Ok(Some(ev)) =
-                tokio::time::timeout(Duration::from_millis(300), watcher.rx.recv()).await
+                tokio::time::timeout(Duration::from_millis(300), rx.recv()).await
             {
                 if matches!(ev.kind, FileChangeKind::Modified | FileChangeKind::Created) {
                     saw_change = true;
