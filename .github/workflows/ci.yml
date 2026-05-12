@@ -62,3 +62,24 @@ jobs:
         run: cargo test --workspace
       - name: release build
         run: cargo build --release --workspace
+      - name: build .rpm
+        run: |
+          cargo install cargo-generate-rpm --locked
+          packaging/build.sh rpm
+      - name: inspect & install-test .rpm
+        run: |
+          set -eux
+          rpm=$(echo target/generate-rpm/*.rpm)
+          rpm -qpi "$rpm"
+          rpm -qpl "$rpm"
+          rpm -qp --scripts "$rpm"
+          rpm -qpl "$rpm" | grep -qx /usr/bin/sigil
+          rpm -qpl "$rpm" | grep -qx /usr/lib/systemd/system/sigil.service
+          # Install for real, run the binary, then remove. (`systemctl` calls in
+          # the scriptlets are `|| :`-guarded, so they're harmless in a container.)
+          rpm -i "$rpm"
+          /usr/bin/sigil version
+          test -f /etc/sigil/policy.yaml.example
+          test -f /usr/lib/systemd/system/sigil.service
+          rpm -e sigil
+          test ! -e /usr/bin/sigil

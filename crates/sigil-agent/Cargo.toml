@@ -5,6 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+description = "Hash-anchored file-posture event agent for SIEMs"
 
 [lib]
 name = "sigil_agent"
@@ -43,3 +45,68 @@ data-encoding = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
 serde_json = { workspace = true }
+
+# -- OS packages -------------------------------------------------------------
+# Build both with `packaging/build.sh` (needs `cargo install cargo-deb
+# cargo-generate-rpm`). Source paths below are relative to THIS file's
+# directory (crates/sigil-agent/), so the build script runs the packagers
+# from here. See packaging/README.md.
+
+# .deb (Debian/Ubuntu) — `cargo deb --no-build`
+[package.metadata.deb]
+name = "sigil"
+maintainer = "Sigil contributors <sigil@users.noreply.github.com>"
+section = "admin"
+priority = "optional"
+depends = "libc6"
+# cargo-deb only emits the systemd maintainer scripts when this is set; the
+# files in packaging/debian/ are skeletons whose #DEBHELPER# token cargo-deb
+# substitutes with the systemd integration snippet.
+maintainer-scripts = "../../packaging/debian"
+extended-description = """\
+Sigil is an enterprise device-assurance agent. It watches the files named by a \
+signed policy (MCP allowlists, agent credentials, shadow-AI binaries, …), hashes \
+them on change, and writes hash-anchored posture events to JSONL for ingestion by \
+a SIEM. Ships a systemd unit (disabled by default — enable with \
+`systemctl enable --now sigil`)."""
+assets = [
+    ["../../target/release/sigil", "usr/bin/", "755"],
+    ["../../config/policy.example.yaml", "etc/sigil/policy.yaml.example", "644"],
+    ["../../README.md", "usr/share/doc/sigil/README.md", "644"],
+    ["../../LICENSE", "usr/share/doc/sigil/LICENSE", "644"],
+]
+
+# cargo-deb picks up sigil.service from `unit-scripts`, installs it to
+# /lib/systemd/system/, and generates the postinst/prerm. Unit stays disabled.
+[package.metadata.deb.systemd-units]
+unit-scripts = "../../packaging/systemd"
+unit-name = "sigil"
+enable = false
+start = false
+
+# .rpm (RHEL/Rocky/Fedora) — `cargo generate-rpm`
+[package.metadata.generate-rpm]
+name = "sigil"
+summary = "Watches policy-defined files and emits hash-anchored posture events for your SIEM"
+assets = [
+    { source = "../../target/release/sigil", dest = "/usr/bin/sigil", mode = "0755" },
+    { source = "../../packaging/systemd/sigil.service", dest = "/usr/lib/systemd/system/sigil.service", mode = "0644" },
+    { source = "../../config/policy.example.yaml", dest = "/etc/sigil/policy.yaml.example", mode = "0644" },
+    { source = "../../README.md", dest = "/usr/share/doc/sigil/README.md", mode = "0644", doc = true },
+    { source = "../../LICENSE", dest = "/usr/share/doc/sigil/LICENSE", mode = "0644", doc = true },
+]
+# No hard runtime deps beyond glibc, which is always present; leave Requires empty.
+post_install_script = """\
+systemctl daemon-reload >/dev/null 2>&1 || :
+"""
+pre_uninstall_script = """\
+if [ "$1" = 0 ] ; then
+    systemctl --no-reload disable --now sigil.service >/dev/null 2>&1 || :
+fi
+"""
+post_uninstall_script = """\
+systemctl daemon-reload >/dev/null 2>&1 || :
+if [ "$1" -ge 1 ] ; then
+    systemctl try-restart sigil.service >/dev/null 2>&1 || :
+fi
+"""
