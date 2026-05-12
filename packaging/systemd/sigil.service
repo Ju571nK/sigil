@@ -1,7 +1,9 @@
 # Sigil agent — systemd unit (Linux).
 #
-# Install:
-#   sudo install -m 0755 target/release/sigil /usr/local/bin/sigil
+# Installed automatically by the .deb / .rpm packages (see packaging/README.md)
+# to /usr/lib/systemd/system/sigil.service alongside /usr/bin/sigil. To install
+# by hand from a source build instead:
+#   sudo install -m 0755 target/release/sigil /usr/bin/sigil
 #   sudo install -m 0644 packaging/systemd/sigil.service /etc/systemd/system/sigil.service
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now sigil
@@ -26,7 +28,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/sigil run
+ExecStart=/usr/bin/sigil run
 Restart=on-failure
 RestartSec=5
 User=root

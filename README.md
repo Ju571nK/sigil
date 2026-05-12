@@ -186,6 +186,21 @@ For development builds, run:
 cargo build
 ```
 
+### Linux packages (`.deb` / `.rpm`)
+
+The agent is also packaged for Debian/Ubuntu and RHEL/Rocky/Fedora — it
+installs `/usr/bin/sigil` plus a (disabled-by-default) systemd unit:
+
+```sh
+cargo install cargo-deb cargo-generate-rpm   # one-time
+packaging/build.sh                            # → target/debian/*.deb, target/generate-rpm/*.rpm
+
+sudo dnf install ./target/generate-rpm/sigil-0.1.0-1.x86_64.rpm   # or: apt install ./target/debian/sigil_0.1.0-1_amd64.deb
+sudo systemctl enable --now sigil
+```
+
+See [`packaging/README.md`](packaging/README.md) for details.
+
 ## Usage
 
 Run the agent:
