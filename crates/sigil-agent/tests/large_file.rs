@@ -1,5 +1,5 @@
 mod common;
-use common::{policy_for_paths, policy_path, TestAgentBuilder};
+use common::{policy_for_paths, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -9,7 +9,7 @@ use std::time::Duration;
 )]
 async fn it_large_file_emits_incomplete() {
     let dir = tempfile::tempdir().unwrap();
-    let target = policy_path(dir.path()).join("big.bin");
+    let target = dir.path().join("big.bin");
     let policy = policy_for_paths(&[target.to_str().unwrap()], "standard");
     let agent = TestAgentBuilder::new().policy(&policy).start().await;
 

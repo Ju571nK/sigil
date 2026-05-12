@@ -64,9 +64,7 @@ pub fn canonicalize_glob_prefix(pattern: &Path) -> PathBuf {
         // `dir`, with its `ancestor` prefix replaced by the canonical form,
         // then the verbatim leaf and glob tail re-attached. `dir` ends with a
         // separator; `dir_rest` is "" (ancestor == dir) or starts with one.
-        let dir_rest = dir
-            .strip_prefix(&*ancestor.to_string_lossy())
-            .unwrap_or("");
+        let dir_rest = dir.strip_prefix(&*ancestor.to_string_lossy()).unwrap_or("");
         let mut out = canon.into_os_string();
         if !dir_rest.is_empty() && !ends_with_sep(&out) && !dir_rest.starts_with(SEPS) {
             out.push(std::path::MAIN_SEPARATOR_STR);
