@@ -47,13 +47,6 @@ gaps in the existing agent integration suite are also fair game.
 
 ## Good first contributions — agent
 
-- **Canonicalize policy paths.** The normalizer canonicalizes event paths
-  (`dunce::canonicalize`) but compiles globs from the raw policy paths, so a
-  policy path under a symlinked prefix never matches — on macOS that means
-  `/var/...`, `/tmp/...`, `/etc/...` (symlinks to `/private/...`) silently fail.
-  The fix is to canonicalize the literal prefix (everything before the first
-  glob metacharacter) of each path when building globs / watch roots, in
-  `crates/sigil-agent/src/runtime.rs` and `normalizer::compile_targets`.
 - **Run the agent-runtime tests on Windows CI.** The integration tests that
   boot the whole agent via `TestAgentBuilder` (`basic_events`, `critical_tier`,
   `large_file`, `shutdown`) run on macOS and Linux but are

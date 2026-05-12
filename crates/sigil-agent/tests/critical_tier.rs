@@ -1,5 +1,5 @@
 mod common;
-use common::{policy_for_paths, policy_path, TestAgentBuilder};
+use common::{policy_for_paths, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -9,7 +9,7 @@ use std::time::Duration;
 )]
 async fn it_critical_tier_emits_recheck() {
     let dir = tempfile::tempdir().unwrap();
-    let target = policy_path(dir.path()).join("config.json");
+    let target = dir.path().join("config.json");
     std::fs::write(&target, b"v1").unwrap();
     let policy = policy_for_paths(&[target.to_str().unwrap()], "critical");
     let agent = TestAgentBuilder::new().policy(&policy).start().await;

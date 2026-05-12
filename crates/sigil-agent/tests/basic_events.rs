@@ -1,5 +1,5 @@
 mod common;
-use common::{policy_for_paths, policy_path, TestAgentBuilder};
+use common::{policy_for_paths, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -13,8 +13,9 @@ use std::time::Duration;
 )]
 async fn it_emits_modified_event() {
     let dir = tempfile::tempdir().unwrap();
-    let p =
-        policy_path(dir.path()).join(format!("sigil-it-{}.json", uuid::Uuid::new_v4().simple()));
+    let p = dir
+        .path()
+        .join(format!("sigil-it-{}.json", uuid::Uuid::new_v4().simple()));
     let policy = policy_for_paths(&[p.to_str().unwrap()], "standard");
     let agent = TestAgentBuilder::new().policy(&policy).start().await;
 

@@ -4,23 +4,81 @@
 //! - rename pairing within a 200 ms window
 //! - per-target token-bucket rate limiting
 //!
-//! Known limitation: event paths are canonicalized (symlinks resolved) but
-//! policy paths/globs are not, so a policy path under a symlinked prefix won't
-//! match. On macOS that means `/var/...`, `/tmp/...`, `/etc/...` (all symlinks
-//! to `/private/...`) silently fail — write the `/private/...` form instead.
-//! Linux and Windows are unaffected. Proper fix (canonicalize the literal
-//! prefix of each glob) is a tracked `TODO(community)`.
+//! Event paths are canonicalized (symlinks resolved); policy paths are
+//! canonicalized up to the first glob metacharacter when they're compiled into
+//! globs (see [`canonicalize_glob_prefix`]), so a watch path under a symlinked
+//! directory — on macOS `/var`, `/tmp`, `/etc` are symlinks to `/private/...` —
+//! still matches.
 
 use crate::watcher::RawFsEvent;
 use sigil_core::event::FileChangeKind;
 use sigil_core::policy::{glob::CompiledGlob, EffectivePolicy, Tier};
 use sigil_core::ratelimit::{DropReport, RateLimiter};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+
+const SEPS: [char; 2] = ['/', '\\'];
+
+fn ends_with_sep(s: &OsStr) -> bool {
+    s.to_string_lossy().ends_with(SEPS)
+}
+
+/// Canonicalize the literal directory prefix of a watch path — everything up to
+/// the first glob metacharacter — leaving the glob portion verbatim. This makes
+/// globs compiled from policy paths match the canonical event paths the
+/// normalizer produces: on macOS `/var/...`, `/tmp/...`, `/etc/...` are
+/// symlinks to `/private/...`, and `dunce::canonicalize` resolves event paths
+/// to that form. The longest *existing* directory ancestor is canonicalized, so
+/// it works even before the watched leaf exists; if no ancestor exists yet (or
+/// the path isn't absolute) the pattern is returned unchanged.
+pub fn canonicalize_glob_prefix(pattern: &Path) -> PathBuf {
+    let s = pattern.to_string_lossy();
+    let glob_at = s.find(['*', '?', '[', ']', '{', '}']);
+    let (head, glob_tail): (&str, &str) = match glob_at {
+        Some(i) => (&s[..i], &s[i..]),
+        None => (&s, ""),
+    };
+    // Split `head` into a directory path (which we can canonicalize) and a
+    // verbatim trailing fragment that may be only part of a filename
+    // (`events-` in `events-*.jsonl`, or `policy.yaml` when there's no glob).
+    let Some(last_sep) = head.rfind(SEPS) else {
+        return pattern.to_path_buf();
+    };
+    let (dir, leaf) = (&head[..=last_sep], &head[last_sep + 1..]);
+    let dir_path = Path::new(dir);
+    if !dir_path.is_absolute() {
+        return pattern.to_path_buf();
+    }
+    for ancestor in dir_path.ancestors() {
+        if ancestor.as_os_str().is_empty() {
+            break;
+        }
+        let Ok(canon) = dunce::canonicalize(ancestor) else {
+            continue;
+        };
+        // `dir`, with its `ancestor` prefix replaced by the canonical form,
+        // then the verbatim leaf and glob tail re-attached. `dir` ends with a
+        // separator; `dir_rest` is "" (ancestor == dir) or starts with one.
+        let dir_rest = dir.strip_prefix(&*ancestor.to_string_lossy()).unwrap_or("");
+        let mut out = canon.into_os_string();
+        if !dir_rest.is_empty() && !ends_with_sep(&out) && !dir_rest.starts_with(SEPS) {
+            out.push(std::path::MAIN_SEPARATOR_STR);
+        }
+        out.push(dir_rest);
+        if !ends_with_sep(&out) {
+            out.push(std::path::MAIN_SEPARATOR_STR);
+        }
+        out.push(leaf);
+        out.push(glob_tail);
+        return PathBuf::from(out);
+    }
+    pattern.to_path_buf()
+}
 
 pub const RENAME_PAIR_WINDOW: Duration = Duration::from_millis(200);
 
@@ -39,7 +97,9 @@ pub struct CompiledTarget {
     pub globs: Vec<CompiledGlob>,
 }
 
-/// Compile the effective policy's expanded paths into matchers.
+/// Compile the effective policy's expanded paths into matchers. Callers pass
+/// paths that have already been run through [`canonicalize_glob_prefix`] so the
+/// globs match the canonical event paths the normalizer produces.
 pub fn compile_targets(
     policy: &EffectivePolicy,
     expanded_paths: &HashMap<String, Vec<PathBuf>>,
@@ -209,4 +269,71 @@ fn monotonic_ms() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonicalize_glob_prefix;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn passthrough_for_relative_paths() {
+        let p = Path::new("relative/dir/file-*.json");
+        assert_eq!(canonicalize_glob_prefix(p), PathBuf::from(p));
+    }
+
+    #[test]
+    fn passthrough_when_nothing_exists_keeps_value() {
+        // On unix every ancestor up to "/" canonicalizes to itself, so the
+        // value is unchanged; on Windows the path isn't absolute (no drive
+        // letter) so it's returned as-is. Either way: no change.
+        let p = Path::new("/definitely/not/here/x-*.json");
+        assert_eq!(canonicalize_glob_prefix(p), PathBuf::from(p));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolves_symlinked_directory_prefix_keeping_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let canon_real = dunce::canonicalize(&real).unwrap();
+
+        // `*` glob: the `link` component resolves, `*/x.json` stays verbatim.
+        let got = canonicalize_glob_prefix(&link.join("*").join("x.json"));
+        assert_eq!(got, canon_real.join("*").join("x.json"));
+
+        // Partial-filename leaf: `events-` is part of the final component, so it
+        // must re-attach after the resolved dir and before the glob.
+        let pattern = format!("{}/events-*.jsonl", link.display());
+        let got = canonicalize_glob_prefix(Path::new(&pattern));
+        assert_eq!(
+            got,
+            PathBuf::from(format!("{}/events-*.jsonl", canon_real.display()))
+        );
+
+        // No glob at all: the directory prefix is still resolved.
+        let got = canonicalize_glob_prefix(&link.join("config.json"));
+        assert_eq!(got, canon_real.join("config.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolves_through_a_partially_missing_dir() {
+        // `link -> real`, but `real/nested` doesn't exist yet. The longest
+        // existing ancestor (`real`, via `link`) is what gets canonicalized;
+        // the missing `nested/` is kept verbatim.
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let canon_real = dunce::canonicalize(&real).unwrap();
+
+        let got = canonicalize_glob_prefix(&link.join("nested").join("y-*.txt"));
+        assert_eq!(got, canon_real.join("nested").join("y-*.txt"));
+    }
 }
