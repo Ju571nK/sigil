@@ -1,31 +1,15 @@
 mod common;
-use common::{policy_for_paths, TestAgentBuilder};
+use common::{policy_for_paths, policy_path, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-// Runs the full agent runtime via `TestAgentBuilder`; that path is currently
-// only exercised/hardened on macOS CI. Linux/Windows have known rough edges
-// (Windows verbatim `\\?\` paths break globs; a Linux CI startup hang) — see
-// CONTRIBUTING. Tracked follow-up to enable everywhere.
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "agent-runtime test: macOS-only for now (see CONTRIBUTING)"
-)]
 async fn it_emits_modified_event() {
-    // Canonicalize the temp dir: the agent canonicalizes event paths, and on
-    // macOS `/var` is a symlink to `/private/var`, so an un-canonicalized policy
-    // path wouldn't match.
-    let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
-    let watch_path_template = format!(
-        "{}/sigil-it-{}.json",
-        tmp.display(),
-        uuid::Uuid::new_v4().simple()
-    );
-    let policy = policy_for_paths(&[&watch_path_template], "standard");
+    let dir = tempfile::tempdir().unwrap();
+    let p =
+        policy_path(dir.path()).join(format!("sigil-it-{}.json", uuid::Uuid::new_v4().simple()));
+    let policy = policy_for_paths(&[p.to_str().unwrap()], "standard");
     let agent = TestAgentBuilder::new().policy(&policy).start().await;
 
-    let p = std::path::PathBuf::from(&watch_path_template);
-    let _ = std::fs::remove_file(&p);
     std::fs::write(&p, b"first").unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
     std::fs::write(&p, b"second").unwrap();
@@ -43,6 +27,5 @@ async fn it_emits_modified_event() {
         .expect("expected file_change event");
 
     assert_eq!(event["schema_version"], 1);
-    let _ = std::fs::remove_file(&p);
     agent.join.abort();
 }
