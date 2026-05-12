@@ -128,15 +128,19 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         let mut paths = Vec::new();
         for tmpl in &t.paths {
             for p in expand_per_user(tmpl, &users, &env).into_iter().flatten() {
-                paths.push(p.clone());
+                // Resolve a symlinked directory prefix (macOS `/var` → `/private/var`,
+                // etc.) so globs / warmup keys / watch roots all line up with the
+                // canonical event paths the normalizer produces.
+                let p = normalizer::canonicalize_glob_prefix(&p);
                 let parent = if t.recursive {
                     p.clone()
                 } else {
-                    p.parent().map(PathBuf::from).unwrap_or(p.clone())
+                    p.parent().map(PathBuf::from).unwrap_or_else(|| p.clone())
                 };
                 if parent.exists() {
                     watch_roots.push((parent, t.recursive));
                 }
+                paths.push(p);
             }
         }
         expanded_paths.insert(t.id.clone(), paths);
