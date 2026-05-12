@@ -1,6 +1,7 @@
 //! Sigil agent — tokio runtime + system integration.
 
 use clap::Parser;
+use sigil_agent::control::{default_control_pipe_name, default_control_socket};
 use sigil_agent::{cli, doctor, runtime, show};
 
 fn main() -> anyhow::Result<()> {
@@ -52,12 +53,4 @@ fn default_events_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
             .join("Sigil/events")
     }
-}
-
-fn default_control_socket() -> std::path::PathBuf {
-    "/var/run/sigil/control.sock".into()
-}
-
-fn default_control_pipe_name() -> String {
-    r"\\.\pipe\sigil-control".to_string()
 }
