@@ -1,18 +1,11 @@
 mod common;
-use common::{policy_for_paths, TestAgentBuilder};
+use common::{policy_for_paths, policy_path, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "agent-runtime test: macOS-only for now (see CONTRIBUTING)"
-)]
 async fn it_critical_tier_emits_recheck() {
     let dir = tempfile::tempdir().unwrap();
-    // Canonicalize: agent event paths are canonical; `/var` -> `/private/var` on macOS.
-    let target = std::fs::canonicalize(dir.path())
-        .unwrap()
-        .join("config.json");
+    let target = policy_path(dir.path()).join("config.json");
     std::fs::write(&target, b"v1").unwrap();
     let policy = policy_for_paths(&[target.to_str().unwrap()], "critical");
     let agent = TestAgentBuilder::new().policy(&policy).start().await;
