@@ -3,10 +3,6 @@ use common::{policy_for_paths, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "agent-runtime test: not yet hardened for Windows"
-)]
 async fn it_large_file_emits_incomplete() {
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("big.bin");
