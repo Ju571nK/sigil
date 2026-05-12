@@ -63,9 +63,6 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Phase 2: load the policy-signing keystore. Optional — if missing, the
     // agent runs in Phase 1 mode (no inbound apply_policy can succeed).
-    // Note: live watcher reload not implemented in Plan A — apply_policy
-    // writes policy.yaml + state.db, but the running watcher subgraph does
-    // NOT re-pick up the new file; restart the agent to refresh watch targets.
     let keystore = match Keystore::load_from_file(keystore_path()) {
         Ok(k) => Arc::new(k),
         Err(e) => {
@@ -259,8 +256,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     );
 
     // The pipeline reads its matcher set from this watch channel; the
-    // policy-reload task (wired in below) publishes new sets on `targets_tx`.
-    #[allow(unused_variables)]
+    // policy-reload task (spawned below) publishes new sets on `targets_tx`.
     let (targets_tx, targets_rx) = watch::channel(Arc::new(normalizer::compile_targets(
         &effective,
         &expanded_paths,
@@ -302,6 +298,24 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 crate::hasher::run(rx_pending, tx_hashed, lookup, stats).await;
             }
         }),
+    );
+
+    // Live policy reload: on a successful `apply_policy`, re-derive watch
+    // targets/roots from the new policy.yaml and apply them to the running
+    // pipeline + watcher (no restart). Owns the watcher handle + targets sender.
+    sup.track(
+        "policy_reload",
+        tokio::spawn(crate::policy_reload_task::run(
+            crate::policy_reload_task::ReloadCtx {
+                policy_yaml_path: policy_path_for_apply.clone(),
+                policy_version_rx: policy_version_tx.subscribe(),
+                targets_tx,
+                watcher: watcher_handle,
+                watched_roots: watch_roots,
+                cache: cache.clone(),
+                shutdown: cancel.clone(),
+            },
+        )),
     );
 
     sup.track(
