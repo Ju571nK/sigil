@@ -3,6 +3,10 @@ use common::{policy_for_paths, TestAgentBuilder};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "agent-runtime test: macOS-only for now (see CONTRIBUTING)"
+)]
 async fn it_graceful_shutdown_drains_queue() {
     let dir = tempfile::tempdir().unwrap();
     // Canonicalize: agent event paths are canonical; `/var` -> `/private/var` on macOS.
