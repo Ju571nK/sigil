@@ -33,6 +33,8 @@ pub struct RuntimeConfig {
     pub control_pipe_name: String,
     /// Force a polling watcher instead of the OS-native backend (`--poll`).
     pub poll_watcher: bool,
+    /// Override the policy-signing keystore path (tests). `None` → `keystore_path()`.
+    pub keystore_path: Option<PathBuf>,
 }
 
 pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
@@ -63,19 +65,17 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Phase 2: load the policy-signing keystore. Optional — if missing, the
     // agent runs in Phase 1 mode (no inbound apply_policy can succeed).
-    // Note: live watcher reload not implemented in Plan A — apply_policy
-    // writes policy.yaml + state.db, but the running watcher subgraph does
-    // NOT re-pick up the new file; restart the agent to refresh watch targets.
-    let keystore = match Keystore::load_from_file(keystore_path()) {
-        Ok(k) => Arc::new(k),
-        Err(e) => {
-            tracing::warn!(
-                error = ?e,
-                "policy-signing keystore unavailable; apply_policy will reject all envelopes"
-            );
-            Arc::new(Keystore { pubkeys: vec![] })
-        }
-    };
+    let keystore =
+        match Keystore::load_from_file(cfg.keystore_path.clone().unwrap_or_else(keystore_path)) {
+            Ok(k) => Arc::new(k),
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "policy-signing keystore unavailable; apply_policy will reject all envelopes"
+                );
+                Arc::new(Keystore { pubkeys: vec![] })
+            }
+        };
 
     // Phase 2: shared state for IPC + expiry monitor + heartbeat.
     let policy_expired_active = Arc::new(parking_lot::RwLock::new(false));
@@ -119,32 +119,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     let effective = merge(defaults()?, user_doc, current_platform())?;
     // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
 
-    // 2. Expand paths per user.
-    let users = UserEnumerator::list(&plat);
-    let env = EnvLookup;
-    let mut expanded_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
-    let mut watch_roots: Vec<(PathBuf, bool)> = Vec::new();
-    for t in &effective.targets {
-        let mut paths = Vec::new();
-        for tmpl in &t.paths {
-            for p in expand_per_user(tmpl, &users, &env).into_iter().flatten() {
-                // Resolve a symlinked directory prefix (macOS `/var` → `/private/var`,
-                // etc.) so globs / warmup keys / watch roots all line up with the
-                // canonical event paths the normalizer produces.
-                let p = normalizer::canonicalize_glob_prefix(&p);
-                let parent = if t.recursive {
-                    p.clone()
-                } else {
-                    p.parent().map(PathBuf::from).unwrap_or_else(|| p.clone())
-                };
-                if parent.exists() {
-                    watch_roots.push((parent, t.recursive));
-                }
-                paths.push(p);
-            }
-        }
-        expanded_paths.insert(t.id.clone(), paths);
-    }
+    // 2. Expand paths per user → watch paths + watch roots.
+    let (expanded_paths, watch_roots) = expand_targets(&effective, &plat);
 
     // 3. Perform critical-tier warmup (state.db already opened above).
     perform_warmup(&effective, &expanded_paths, &cache)?;
@@ -270,20 +246,24 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         roots = watch_roots.len(),
         "runtime: spawning filesystem watcher"
     );
-    let watcher_handle = watcher::spawn_watcher(
+    let (raw_rx, watcher_handle) = watcher::spawn_watcher(
         watch_roots.clone(),
         runtime_handle.clone(),
         1024,
         poll_interval,
     )?;
     let backend_name = watcher_handle.backend_name;
-    let raw_rx = watcher_handle.rx;
     tracing::info!(
         backend = backend_name,
         "runtime: filesystem watcher started"
     );
 
-    let targets = Arc::new(normalizer::compile_targets(&effective, &expanded_paths));
+    // The pipeline reads its matcher set from this watch channel; the
+    // policy-reload task (spawned below) publishes new sets on `targets_tx`.
+    let (targets_tx, targets_rx) = watch::channel(Arc::new(normalizer::compile_targets(
+        &effective,
+        &expanded_paths,
+    )));
     let mut sup = Supervisor::new();
     let cancel = sup.shutdown.clone();
     tracing::info!("runtime: spawning pipeline tasks");
@@ -293,9 +273,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         tokio::spawn({
             let tx_norm = tx_norm.clone();
             let tx_dropped = tx_dropped.clone();
-            let targets = targets.clone();
+            let targets_rx = targets_rx.clone();
             async move {
-                normalizer::run(targets, raw_rx, tx_norm, tx_dropped).await;
+                normalizer::run(targets_rx, raw_rx, tx_norm, tx_dropped).await;
             }
         }),
     );
@@ -315,12 +295,30 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             // the (already-canonical) path against the same compiled globs the
             // normalizer used.
             let lookup: Arc<dyn TargetLookup + Send + Sync> = Arc::new(GlobTargetLookup {
-                targets: targets.clone(),
+                targets_rx: targets_rx.clone(),
             });
             async move {
                 crate::hasher::run(rx_pending, tx_hashed, lookup, stats).await;
             }
         }),
+    );
+
+    // Live policy reload: on a successful `apply_policy`, re-derive watch
+    // targets/roots from the new policy.yaml and apply them to the running
+    // pipeline + watcher (no restart). Owns the watcher handle + targets sender.
+    sup.track(
+        "policy_reload",
+        tokio::spawn(crate::policy_reload_task::run(
+            crate::policy_reload_task::ReloadCtx {
+                policy_yaml_path: policy_path_for_apply.clone(),
+                policy_version_rx: policy_version_tx.subscribe(),
+                targets_tx,
+                watcher: watcher_handle,
+                watched_roots: watch_roots,
+                cache: cache.clone(),
+                shutdown: cancel.clone(),
+            },
+        )),
     );
 
     sup.track(
@@ -486,7 +484,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     Ok(exit_code)
 }
 
-fn perform_warmup(
+pub(crate) fn perform_warmup(
     eff: &sigil_core::policy::EffectivePolicy,
     expanded: &HashMap<String, Vec<PathBuf>>,
     cache: &Arc<Mutex<HashCache>>,
@@ -513,6 +511,44 @@ fn perform_warmup(
         }
     }
     Ok(())
+}
+
+/// Expand a policy's per-user path templates into concrete watch paths and the
+/// set of (canonical) watch roots to register. Shared by `run` (startup) and
+/// `policy_reload_task` (live reload).
+#[allow(clippy::type_complexity)]
+pub(crate) fn expand_targets(
+    eff: &sigil_core::policy::EffectivePolicy,
+    plat: &ActivePlatform,
+) -> (HashMap<String, Vec<PathBuf>>, Vec<(PathBuf, bool)>) {
+    let users = UserEnumerator::list(plat);
+    let env = EnvLookup;
+    let mut expanded_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let mut watch_roots: Vec<(PathBuf, bool)> = Vec::new();
+    for t in &eff.targets {
+        let mut paths = Vec::new();
+        for tmpl in &t.paths {
+            for p in expand_per_user(tmpl, &users, &env).into_iter().flatten() {
+                // Resolve a symlinked directory prefix (macOS `/var` → `/private/var`,
+                // etc.) so globs / warmup keys / watch roots all line up with the
+                // canonical event paths the normalizer produces.
+                let p = normalizer::canonicalize_glob_prefix(&p);
+                let parent = if t.recursive {
+                    p.clone()
+                } else {
+                    p.parent().map(PathBuf::from).unwrap_or_else(|| p.clone())
+                };
+                if parent.exists() {
+                    watch_roots.push((parent, t.recursive));
+                }
+                paths.push(p);
+            }
+        }
+        expanded_paths.insert(t.id.clone(), paths);
+    }
+    watch_roots.sort();
+    watch_roots.dedup();
+    (expanded_paths, watch_roots)
 }
 
 async fn emit_permission_missing(
@@ -583,7 +619,7 @@ fn rate_limit_to_event(
 }
 
 struct GlobTargetLookup {
-    targets: Arc<Vec<normalizer::CompiledTarget>>,
+    targets_rx: watch::Receiver<Arc<Vec<normalizer::CompiledTarget>>>,
 }
 impl TargetLookup for GlobTargetLookup {
     fn find_for_path(
@@ -591,7 +627,8 @@ impl TargetLookup for GlobTargetLookup {
         path: &std::path::Path,
         kind: sigil_core::event::FileChangeKind,
     ) -> Option<NormalizedEvent> {
-        normalizer::lookup(&self.targets, path, kind)
+        let targets: Arc<Vec<normalizer::CompiledTarget>> = self.targets_rx.borrow().clone();
+        normalizer::lookup(&targets, path, kind)
     }
 }
 

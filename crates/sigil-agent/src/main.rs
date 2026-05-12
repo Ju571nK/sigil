@@ -15,6 +15,7 @@ fn main() -> anyhow::Result<()> {
                 control_socket: default_control_socket(),
                 control_pipe_name: default_control_pipe_name(),
                 poll_watcher: cli.poll,
+                keystore_path: None,
             };
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
