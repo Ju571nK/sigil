@@ -14,6 +14,17 @@ use std::sync::Arc;
 
 use crate::policy_apply::{apply, ApplyContext, ApplyOutcome};
 
+/// Default control-socket path on Unix. `sigil run` binds it; `sigil show
+/// stats` and `sigil-sender` connect to it.
+pub fn default_control_socket() -> std::path::PathBuf {
+    "/var/run/sigil/control.sock".into()
+}
+
+/// Default control named-pipe name on Windows.
+pub fn default_control_pipe_name() -> String {
+    r"\\.\pipe\sigil-control".to_string()
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
