@@ -266,6 +266,10 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     } else {
         None
     };
+    tracing::info!(
+        roots = watch_roots.len(),
+        "runtime: spawning filesystem watcher"
+    );
     let watcher_handle = watcher::spawn_watcher(
         watch_roots.clone(),
         runtime_handle.clone(),
@@ -274,10 +278,15 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     )?;
     let backend_name = watcher_handle.backend_name;
     let raw_rx = watcher_handle.rx;
+    tracing::info!(
+        backend = backend_name,
+        "runtime: filesystem watcher started"
+    );
 
     let targets = Arc::new(normalizer::compile_targets(&effective, &expanded_paths));
     let mut sup = Supervisor::new();
     let cancel = sup.shutdown.clone();
+    tracing::info!("runtime: spawning pipeline tasks");
 
     sup.track(
         "normalizer",
@@ -471,6 +480,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         );
     }
 
+    tracing::info!("runtime: all tasks spawned; running");
     // Wait for shutdown.
     let exit_code = sup.run(host_id.clone(), tx_sink.clone()).await?;
     Ok(exit_code)

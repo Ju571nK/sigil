@@ -39,24 +39,9 @@ fingerprint. Several refinements are deliberately left open and marked
   whether the agent service is running. A check that handles systemd /
   OpenRC / runit would be useful (systemd unit ships in
   `packaging/systemd/sigil.service`).
-- **Packaging.** `.deb` / `.rpm` build recipes (only the systemd unit ships
-  today).
 
 Linux runtime tests run in CI on `ubuntu-22.04`, so platform-specific test
 gaps in the existing agent integration suite are also fair game.
-
-## Good first contributions — agent
-
-- **Run the agent-runtime tests on Windows CI.** The integration tests that
-  boot the whole agent via `TestAgentBuilder` (`basic_events`, `critical_tier`,
-  `large_file`, `shutdown`) run on macOS and Linux but are
-  `#[cfg_attr(target_os = "windows", ignore)]`: on Windows, `runtime::run`
-  stops right after the hardware-fingerprint step, before the control listener
-  comes up. The tolerant `spawn_watcher` (a single bad watch root no longer
-  kills the agent) didn't change it, so it isn't a per-root error — suspect
-  `RecommendedWatcher::new` (the `ReadDirectoryChangesW` backend) or a hang in
-  it. Reproduce with `SIGIL_LOG=debug cargo test -p sigil-agent --test
-  basic_events` on Windows, fix, and drop the `cfg_attr`.
 
 ## License of Contributions
 
