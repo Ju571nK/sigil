@@ -34,6 +34,8 @@ jobs:
         run: cargo test --workspace
       - name: release build
         run: cargo build --release --workspace
+      - name: hardened build (sigil-agent, --no-default-features)
+        run: cargo build -p sigil-agent --no-default-features
 
   # RHEL-family validation. GitHub has no hosted Rocky runner, so run inside
   # the rockylinux:9 container — this exercises the RHEL build path (glibc
@@ -62,6 +64,8 @@ jobs:
         run: cargo test --workspace
       - name: release build
         run: cargo build --release --workspace
+      - name: hardened build (sigil-agent, --no-default-features)
+        run: cargo build -p sigil-agent --no-default-features
       - name: build .rpm
         run: |
           cargo install cargo-generate-rpm --locked
