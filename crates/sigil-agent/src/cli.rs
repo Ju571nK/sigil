@@ -47,6 +47,10 @@ pub enum Command {
     },
     /// Print the version (also available via `--version`).
     Version,
+    /// Ask the running daemon to re-read the on-disk policy.yaml without going
+    /// through `apply_policy`. Useful after a hand-edit.
+    #[cfg(feature = "operator-cli")]
+    Reload,
 }
 
 #[derive(Subcommand, Debug)]
