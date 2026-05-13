@@ -299,6 +299,8 @@ mod tests {
         let payload = TargetsPayload { targets: vec![] };
         let mut buf = Vec::new();
         write_targets(&mut buf, &payload).unwrap();
-        assert!(String::from_utf8(buf).unwrap().contains("(no active targets)"));
+        assert!(String::from_utf8(buf)
+            .unwrap()
+            .contains("(no active targets)"));
     }
 }

@@ -117,9 +117,8 @@ pub struct ControlContext {
     /// Live snapshot of the active compiled-target set. Read by the `Targets`
     /// handler. Updated by `policy_reload_task` on each `apply_policy`.
     #[cfg(feature = "operator-cli")]
-    pub targets_rx: tokio::sync::watch::Receiver<
-        std::sync::Arc<Vec<crate::normalizer::CompiledTarget>>,
-    >,
+    pub targets_rx:
+        tokio::sync::watch::Receiver<std::sync::Arc<Vec<crate::normalizer::CompiledTarget>>>,
 }
 
 /// Shared dispatch logic. Returns the `Response` for a given `Request`.
