@@ -50,31 +50,22 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
 /// and print the snapshot. Returns exit code 1 (without erroring) if the
 /// daemon can't be reached — the common case being "it isn't running".
 fn show_stats() -> anyhow::Result<i32> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    #[cfg(unix)]
-    let (target, result) = {
-        let socket = crate::control::default_control_socket();
-        let r = rt.block_on(query_stats(&socket));
-        (socket.display().to_string(), r)
-    };
-    #[cfg(windows)]
-    let (target, result) = {
-        let pipe = crate::control::default_control_pipe_name();
-        let r = rt.block_on(query_stats(&pipe));
-        (pipe.clone(), r)
-    };
-
-    match result {
-        Ok(snap) => {
-            write_stats(&mut io::stdout().lock(), &snap)?;
-            Ok(0)
-        }
+    match crate::control_client::query(&crate::control::Request::Stats) {
+        Ok(resp) => match resp.stats {
+            Some(snap) => {
+                write_stats(&mut io::stdout().lock(), &snap)?;
+                Ok(0)
+            }
+            None => {
+                eprintln!(
+                    "sigil show stats: daemon returned no stats{}",
+                    resp.error.map(|e| format!(": {e}")).unwrap_or_default()
+                );
+                Ok(1)
+            }
+        },
         Err(e) => {
-            eprintln!("sigil show stats: cannot reach the sigil daemon at {target}: {e}");
-            eprintln!("Is `sigil run` running?");
+            eprintln!("sigil show stats: {e}");
             Ok(1)
         }
     }
@@ -97,51 +88,6 @@ fn write_stats(w: &mut impl Write, s: &StatsSnapshot) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(unix)]
-async fn query_stats(socket: &std::path::Path) -> anyhow::Result<StatsSnapshot> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::UnixStream;
-    let stream = UnixStream::connect(socket).await?;
-    let (rd, mut wr) = stream.into_split();
-    wr.write_all(stats_request_line().as_bytes()).await?;
-    wr.shutdown().await.ok();
-    let mut line = String::new();
-    BufReader::new(rd).read_line(&mut line).await?;
-    parse_stats_reply(&line)
-}
-
-#[cfg(windows)]
-async fn query_stats(pipe_name: &str) -> anyhow::Result<StatsSnapshot> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::windows::named_pipe::ClientOptions;
-    let mut client = ClientOptions::new().open(pipe_name)?;
-    client.write_all(stats_request_line().as_bytes()).await?;
-    client.flush().await?;
-    let mut line = String::new();
-    BufReader::new(&mut client).read_line(&mut line).await?;
-    parse_stats_reply(&line)
-}
-
-fn stats_request_line() -> String {
-    // `{"cmd":"stats"}` — the wire form of `control::Request::Stats`.
-    let mut s = serde_json::to_string(&crate::control::Request::Stats)
-        .expect("Request::Stats always serializes");
-    s.push('\n');
-    s
-}
-
-fn parse_stats_reply(line: &str) -> anyhow::Result<StatsSnapshot> {
-    let resp: crate::control::Response = serde_json::from_str(line.trim())?;
-    if let Some(stats) = resp.stats {
-        Ok(stats)
-    } else {
-        anyhow::bail!(
-            "daemon returned no stats{}",
-            resp.error.map(|e| format!(": {e}")).unwrap_or_default()
-        )
-    }
 }
 
 #[cfg(all(test, unix))]
@@ -185,50 +131,4 @@ mod tests {
         assert!(String::from_utf8(buf).unwrap().contains("(none yet)"));
     }
 
-    #[tokio::test]
-    async fn query_stats_round_trips_against_a_canned_server() {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("control.sock");
-        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-
-        // A one-shot server: read the request line, assert it's the stats cmd,
-        // reply with a canned Response.
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let (rd, mut wr) = stream.into_split();
-            let mut line = String::new();
-            BufReader::new(rd).read_line(&mut line).await.unwrap();
-            assert_eq!(line.trim(), r#"{"cmd":"stats"}"#);
-            let resp = crate::control::Response {
-                ok: true,
-                stats: Some(StatsSnapshot {
-                    events_emitted_total: 7,
-                    channel_stall_events_total: 1,
-                    events_by_kind: BTreeMap::new(),
-                    hash_p50_ms: 0,
-                    hash_p99_ms: 0,
-                }),
-                apply_policy: None,
-                policy_status: None,
-                targets: None,
-                error: None,
-            };
-            let mut bytes = serde_json::to_vec(&resp).unwrap();
-            bytes.push(b'\n');
-            wr.write_all(&bytes).await.unwrap();
-        });
-
-        let snap = query_stats(&socket).await.unwrap();
-        assert_eq!(snap.events_emitted_total, 7);
-        assert_eq!(snap.channel_stall_events_total, 1);
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn query_stats_errors_when_socket_absent() {
-        let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("nope.sock");
-        assert!(query_stats(&socket).await.is_err());
-    }
 }
