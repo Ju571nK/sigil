@@ -166,4 +166,25 @@ impl TestAgent {
         BufReader::new(rd).read_line(&mut line).await.unwrap();
         line
     }
+
+    /// Send an arbitrary control request as a JSON `Value` and return the
+    /// parsed JSON response. Used by operator-introspection tests to drive
+    /// `policy_status` / `targets` / `reload_policy` without going through the
+    /// typed `Request` enum. (Unix only — same reason as `apply_policy`.)
+    #[cfg(unix)]
+    pub async fn control(&self, req: &serde_json::Value) -> serde_json::Value {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixStream;
+        let mut bytes = serde_json::to_vec(req).unwrap();
+        bytes.push(b'\n');
+        let stream = UnixStream::connect(&self.control_socket)
+            .await
+            .expect("connect control socket");
+        let (rd, mut wr) = stream.into_split();
+        wr.write_all(&bytes).await.unwrap();
+        wr.shutdown().await.ok();
+        let mut line = String::new();
+        BufReader::new(rd).read_line(&mut line).await.unwrap();
+        serde_json::from_str(line.trim()).expect("response is valid JSON")
+    }
 }

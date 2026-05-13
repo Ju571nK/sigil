@@ -38,13 +38,17 @@ pub struct RuntimeConfig {
 }
 
 pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
-    tracing_subscriber::fmt()
+    // `try_init` instead of `init` so integration tests can spawn multiple
+    // agents in the same process without the second one panicking on the
+    // already-set global subscriber. In production main.rs only calls
+    // `run` once, so the duplicate-registration branch is test-only.
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("SIGIL_LOG")
                 .unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
-        .init();
+        .try_init();
 
     let plat = ActivePlatform::new();
     let started = Instant::now();
