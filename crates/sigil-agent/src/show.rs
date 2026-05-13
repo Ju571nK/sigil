@@ -211,6 +211,7 @@ mod tests {
                 }),
                 apply_policy: None,
                 policy_status: None,
+                targets: None,
                 error: None,
             };
             let mut bytes = serde_json::to_vec(&resp).unwrap();

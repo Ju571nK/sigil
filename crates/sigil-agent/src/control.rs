@@ -50,6 +50,8 @@ pub struct Response {
     pub apply_policy: Option<ApplyPolicyResult>,
     /// Present iff the request was `PolicyStatus`.
     pub policy_status: Option<PolicyStatusPayload>,
+    /// Present iff the request was `Targets` (Phase 2 operator introspection).
+    pub targets: Option<TargetsPayload>,
     pub error: Option<String>,
 }
 
@@ -80,6 +82,22 @@ pub struct PolicyStatusPayload {
     pub policy_expired_active: bool,
 }
 
+/// Summary of one active watch target — what the agent is currently watching
+/// post-policy-merge + post-canonicalization.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TargetSummary {
+    pub id: String,
+    pub tier: sigil_core::policy::Tier,
+    pub globs: Vec<String>,
+}
+
+/// Payload for the `targets` control-IPC response: the agent's currently-active
+/// compiled targets.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TargetsPayload {
+    pub targets: Vec<TargetSummary>,
+}
+
 /// Shared context bundle passed to both platform `serve` functions.
 pub struct ControlContext {
     pub stats: Arc<Stats>,
@@ -98,6 +116,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
             stats: Some(ctx.stats.snapshot()),
             apply_policy: None,
             policy_status: None,
+            targets: None,
             error: None,
         },
         Request::ApplyPolicy { response } => {
@@ -112,6 +131,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                         applied_policy_version,
                     }),
                     policy_status: None,
+                    targets: None,
                     error: None,
                 },
                 ApplyOutcome::Rejected { reason } => Response {
@@ -119,6 +139,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     stats: None,
                     apply_policy: Some(ApplyPolicyResult::Rejected { reason }),
                     policy_status: None,
+                    targets: None,
                     error: None,
                 },
                 ApplyOutcome::Internal { detail } => Response {
@@ -126,6 +147,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     stats: None,
                     apply_policy: None,
                     policy_status: None,
+                    targets: None,
                     error: Some(format!("internal: {detail}")),
                 },
             }
@@ -155,6 +177,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     active_envelope_valid_until: valid_until_str,
                     policy_expired_active: expired,
                 }),
+                targets: None,
                 error: None,
             }
         }
@@ -197,6 +220,7 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
                     stats: None,
                     apply_policy: None,
                     policy_status: None,
+                    targets: None,
                     error: Some(e.to_string()),
                 },
             };
@@ -235,6 +259,7 @@ pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result
                     stats: None,
                     apply_policy: None,
                     policy_status: None,
+                    targets: None,
                     error: Some(e.to_string()),
                 },
             };
@@ -302,6 +327,7 @@ mod tests {
                 applied_policy_version: 9,
             }),
             policy_status: None,
+            targets: None,
             error: None,
         };
         let s = serde_json::to_string(&r).unwrap();
@@ -318,9 +344,38 @@ mod tests {
                 reason: sigil_core::PolicySignatureInvalidReason::Expired,
             }),
             policy_status: None,
+            targets: None,
             error: None,
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("\"reason\":\"expired\""));
+    }
+
+    #[test]
+    fn response_with_targets_round_trips() {
+        let resp = Response {
+            ok: true,
+            stats: None,
+            apply_policy: None,
+            policy_status: None,
+            targets: Some(TargetsPayload {
+                targets: vec![TargetSummary {
+                    id: "tgt-1".into(),
+                    tier: sigil_core::policy::Tier::Critical,
+                    globs: vec!["/etc/foo.yaml".into(), "/var/log/bar/*.log".into()],
+                }],
+            }),
+            error: None,
+        };
+        let s = serde_json::to_string(&resp).unwrap();
+        assert!(s.contains("\"targets\""));
+        assert!(s.contains("\"tgt-1\""));
+        assert!(
+            s.contains("\"critical\""),
+            "Tier::Critical serializes lowercase, got: {s}"
+        );
+        let back: Response = serde_json::from_str(&s).unwrap();
+        assert!(back.targets.is_some());
+        assert_eq!(back.targets.as_ref().unwrap().targets[0].id, "tgt-1");
     }
 }
