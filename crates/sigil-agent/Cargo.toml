@@ -46,6 +46,13 @@ ed25519-dalek = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
 serde_json = { workspace = true }
 
+[features]
+default = ["operator-cli"]
+# Operator introspection CLI: `sigil show policy-status`, `sigil show targets`,
+# `sigil reload`. Default-on. Drop with `--no-default-features` for hardened
+# deploys that don't want the introspection surface compiled in.
+operator-cli = []
+
 # -- OS packages -------------------------------------------------------------
 # Build both with `packaging/build.sh` (needs `cargo install cargo-deb
 # cargo-generate-rpm`). Source paths below are relative to THIS file's
