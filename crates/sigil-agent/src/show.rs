@@ -1,6 +1,8 @@
 //! `sigil show ...` — print effective config, expanded paths, or live stats.
 
 use crate::cli::ShowWhat;
+#[cfg(feature = "operator-cli")]
+use crate::control::PolicyStatusPayload;
 use crate::platform::ActivePlatform;
 use sigil_core::policy::expand::{expand_per_user, EnvLookup};
 use sigil_core::policy::{current_platform, defaults, merge};
@@ -13,6 +15,10 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
     // touch the policy file, so handle it before the merge below.
     if let ShowWhat::Stats = what {
         return show_stats();
+    }
+    #[cfg(feature = "operator-cli")]
+    if let ShowWhat::PolicyStatus = what {
+        return show_policy_status();
     }
 
     let user_doc = match policy_override.as_ref() {
@@ -42,6 +48,8 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
             }
         }
         ShowWhat::Stats => unreachable!("handled above"),
+        #[cfg(feature = "operator-cli")]
+        ShowWhat::PolicyStatus => unreachable!("handled above"),
     }
     Ok(0)
 }
@@ -90,6 +98,49 @@ fn write_stats(w: &mut impl Write, s: &StatsSnapshot) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "operator-cli")]
+fn show_policy_status() -> anyhow::Result<i32> {
+    match crate::control_client::query(&crate::control::Request::PolicyStatus) {
+        Ok(resp) => match resp.policy_status {
+            Some(p) => {
+                write_policy_status(&mut io::stdout().lock(), &p)?;
+                Ok(0)
+            }
+            None => {
+                eprintln!(
+                    "sigil show policy-status: daemon returned no policy_status{}",
+                    resp.error.map(|e| format!(": {e}")).unwrap_or_default()
+                );
+                Ok(1)
+            }
+        },
+        Err(e) => {
+            eprintln!("sigil show policy-status: {e}");
+            Ok(1)
+        }
+    }
+}
+
+#[cfg(feature = "operator-cli")]
+fn write_policy_status(w: &mut impl Write, p: &PolicyStatusPayload) -> io::Result<()> {
+    writeln!(
+        w,
+        "last applied policy version : {}",
+        p.last_applied_policy_version
+    )?;
+    let valid_until = p
+        .active_envelope_valid_until
+        .as_deref()
+        .unwrap_or("(no envelope applied)");
+    writeln!(w, "active envelope valid until : {valid_until}")?;
+    writeln!(
+        w,
+        "policy expired              : {}",
+        if p.policy_expired_active { "yes" } else { "no" }
+    )?;
+    Ok(())
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -131,4 +182,34 @@ mod tests {
         assert!(String::from_utf8(buf).unwrap().contains("(none yet)"));
     }
 
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_policy_status_renders_active_envelope() {
+        let p = crate::control::PolicyStatusPayload {
+            last_applied_policy_version: 3,
+            active_envelope_valid_until: Some("2026-06-12T00:00:00Z".into()),
+            policy_expired_active: false,
+        };
+        let mut buf = Vec::new();
+        write_policy_status(&mut buf, &p).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("last applied policy version : 3"));
+        assert!(out.contains("active envelope valid until : 2026-06-12T00:00:00Z"));
+        assert!(out.contains("policy expired              : no"));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_policy_status_handles_no_envelope_and_expired() {
+        let p = crate::control::PolicyStatusPayload {
+            last_applied_policy_version: 0,
+            active_envelope_valid_until: None,
+            policy_expired_active: true,
+        };
+        let mut buf = Vec::new();
+        write_policy_status(&mut buf, &p).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("active envelope valid until : (no envelope applied)"));
+        assert!(out.contains("policy expired              : yes"));
+    }
 }

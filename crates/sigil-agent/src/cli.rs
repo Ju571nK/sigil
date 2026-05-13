@@ -57,4 +57,7 @@ pub enum ShowWhat {
     Paths,
     /// Query the running daemon for stats via control IPC.
     Stats,
+    /// Query the running daemon for the active policy version + envelope expiry.
+    #[cfg(feature = "operator-cli")]
+    PolicyStatus,
 }
