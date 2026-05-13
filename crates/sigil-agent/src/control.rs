@@ -40,6 +40,15 @@ pub enum Request {
     /// `last_applied_policy_version`, the active `valid_until`, and whether
     /// the active policy is currently expired.
     PolicyStatus,
+    /// Operator introspection: returns the agent's currently-active watch
+    /// targets and their compiled glob patterns.
+    #[cfg(feature = "operator-cli")]
+    Targets,
+    /// Operator action: re-read the policy file (after a hand-edit) without
+    /// verifying a signed envelope. Re-uses the existing live-reload pipeline
+    /// by nudging the policy-version watch channel.
+    #[cfg(feature = "operator-cli")]
+    ReloadPolicy,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -105,6 +114,12 @@ pub struct ControlContext {
     /// Used by `PolicyStatus` to read the active envelope's `valid_until`.
     /// Set by the `policy_expiry_task` (Task A6.4) on each successful apply.
     pub active_valid_until: Arc<RwLock<Option<time::OffsetDateTime>>>,
+    /// Live snapshot of the active compiled-target set. Read by the `Targets`
+    /// handler. Updated by `policy_reload_task` on each `apply_policy`.
+    #[cfg(feature = "operator-cli")]
+    pub targets_rx: tokio::sync::watch::Receiver<
+        std::sync::Arc<Vec<crate::normalizer::CompiledTarget>>,
+    >,
 }
 
 /// Shared dispatch logic. Returns the `Response` for a given `Request`.
@@ -177,6 +192,40 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     active_envelope_valid_until: valid_until_str,
                     policy_expired_active: expired,
                 }),
+                targets: None,
+                error: None,
+            }
+        }
+        #[cfg(feature = "operator-cli")]
+        Request::Targets => {
+            let snapshot = ctx.targets_rx.borrow().clone();
+            let summaries = snapshot
+                .iter()
+                .map(|t| TargetSummary {
+                    id: t.id.clone(),
+                    tier: t.tier,
+                    globs: t.globs.iter().map(|g| g.pattern().to_string()).collect(),
+                })
+                .collect();
+            Response {
+                ok: true,
+                stats: None,
+                apply_policy: None,
+                policy_status: None,
+                targets: Some(TargetsPayload { targets: summaries }),
+                error: None,
+            }
+        }
+        #[cfg(feature = "operator-cli")]
+        Request::ReloadPolicy => {
+            // send_modify always notifies receivers, even with no value change —
+            // policy_reload_task wakes and re-reads policy.yaml from disk.
+            ctx.apply_ctx.policy_version_tx.send_modify(|_| {});
+            Response {
+                ok: true,
+                stats: None,
+                apply_policy: None,
+                policy_status: None,
                 targets: None,
                 error: None,
             }
@@ -377,5 +426,25 @@ mod tests {
         let back: Response = serde_json::from_str(&s).unwrap();
         assert!(back.targets.is_some());
         assert_eq!(back.targets.as_ref().unwrap().targets[0].id, "tgt-1");
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn request_targets_round_trips() {
+        let req = Request::Targets;
+        let s = serde_json::to_string(&req).unwrap();
+        assert_eq!(s, r#"{"cmd":"targets"}"#);
+        let back: Request = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, Request::Targets));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn request_reload_policy_round_trips() {
+        let req = Request::ReloadPolicy;
+        let s = serde_json::to_string(&req).unwrap();
+        assert_eq!(s, r#"{"cmd":"reload_policy"}"#);
+        let back: Request = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, Request::ReloadPolicy));
     }
 }

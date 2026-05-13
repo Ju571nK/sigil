@@ -228,10 +228,18 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         policy_version_tx: policy_version_tx.clone(),
         active_valid_until: active_valid_until.clone(),
     });
+    // The pipeline reads its matcher set from this watch channel; the
+    // policy-reload task (spawned below) publishes new sets on `targets_tx`.
+    let (targets_tx, targets_rx) = watch::channel(Arc::new(normalizer::compile_targets(
+        &effective,
+        &expanded_paths,
+    )));
     let control_ctx = Arc::new(crate::control::ControlContext {
         stats: stats.clone(),
         apply_ctx: apply_ctx.clone(),
         active_valid_until: active_valid_until.clone(),
+        #[cfg(feature = "operator-cli")]
+        targets_rx: targets_rx.clone(),
     });
 
     // Watcher (notify → raw events → tx_norm via normalizer wrapper).
@@ -258,12 +266,6 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         "runtime: filesystem watcher started"
     );
 
-    // The pipeline reads its matcher set from this watch channel; the
-    // policy-reload task (spawned below) publishes new sets on `targets_tx`.
-    let (targets_tx, targets_rx) = watch::channel(Arc::new(normalizer::compile_targets(
-        &effective,
-        &expanded_paths,
-    )));
     let mut sup = Supervisor::new();
     let cancel = sup.shutdown.clone();
     tracing::info!("runtime: spawning pipeline tasks");
