@@ -2,6 +2,8 @@
 
 use clap::Parser;
 use sigil_agent::control::{default_control_pipe_name, default_control_socket};
+#[cfg(feature = "operator-cli")]
+use sigil_agent::control_client;
 use sigil_agent::{cli, doctor, runtime, show};
 
 fn main() -> anyhow::Result<()> {
@@ -34,8 +36,34 @@ fn main() -> anyhow::Result<()> {
         cli::Command::Version => {
             println!("sigil {}", env!("CARGO_PKG_VERSION"));
         }
+        #[cfg(feature = "operator-cli")]
+        cli::Command::Reload => {
+            let code = reload();
+            std::process::exit(code);
+        }
     }
     Ok(())
+}
+
+#[cfg(feature = "operator-cli")]
+fn reload() -> i32 {
+    match control_client::query(&sigil_agent::control::Request::ReloadPolicy) {
+        Ok(resp) if resp.ok => {
+            println!("reload requested — check `journalctl -u sigil` for the result");
+            0
+        }
+        Ok(resp) => {
+            eprintln!(
+                "sigil reload: daemon refused the request{}",
+                resp.error.map(|e| format!(": {e}")).unwrap_or_default()
+            );
+            1
+        }
+        Err(e) => {
+            eprintln!("sigil reload: {e}");
+            1
+        }
+    }
 }
 
 fn default_state_db_path() -> std::path::PathBuf {

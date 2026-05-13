@@ -47,6 +47,10 @@ pub enum Command {
     },
     /// Print the version (also available via `--version`).
     Version,
+    /// Ask the running daemon to re-read the on-disk policy.yaml without going
+    /// through `apply_policy`. Useful after a hand-edit.
+    #[cfg(feature = "operator-cli")]
+    Reload,
 }
 
 #[derive(Subcommand, Debug)]
@@ -57,4 +61,10 @@ pub enum ShowWhat {
     Paths,
     /// Query the running daemon for stats via control IPC.
     Stats,
+    /// Query the running daemon for the active policy version + envelope expiry.
+    #[cfg(feature = "operator-cli")]
+    PolicyStatus,
+    /// List the active watch targets and their compiled glob patterns.
+    #[cfg(feature = "operator-cli")]
+    Targets,
 }

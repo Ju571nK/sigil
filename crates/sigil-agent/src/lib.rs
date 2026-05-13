@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod control;
+pub mod control_client;
 pub mod debouncer;
 pub mod doctor;
 pub mod gc_config;

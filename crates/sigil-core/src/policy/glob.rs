@@ -22,6 +22,11 @@ impl CompiledGlob {
     pub fn is_match(&self, path: &Path) -> bool {
         self.0.is_match(path)
     }
+
+    /// The original pattern string the matcher was compiled from.
+    pub fn pattern(&self) -> &str {
+        self.0.glob().glob()
+    }
 }
 
 #[cfg(test)]
@@ -49,5 +54,11 @@ mod tests {
         let g = CompiledGlob::new("/Users/alice/.claude.json").unwrap();
         assert!(g.is_match(Path::new("/Users/alice/.claude.json")));
         assert!(!g.is_match(Path::new("/Users/alice/.claude.jsonx")));
+    }
+
+    #[test]
+    fn pattern_round_trips_the_input_string() {
+        let g = CompiledGlob::new("/Users/*/.claude/policy-*.json").unwrap();
+        assert_eq!(g.pattern(), "/Users/*/.claude/policy-*.json");
     }
 }
