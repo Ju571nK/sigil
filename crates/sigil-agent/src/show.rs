@@ -3,6 +3,8 @@
 use crate::cli::ShowWhat;
 #[cfg(feature = "operator-cli")]
 use crate::control::PolicyStatusPayload;
+#[cfg(feature = "operator-cli")]
+use crate::control::TargetsPayload;
 use crate::platform::ActivePlatform;
 use sigil_core::policy::expand::{expand_per_user, EnvLookup};
 use sigil_core::policy::{current_platform, defaults, merge};
@@ -19,6 +21,10 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
     #[cfg(feature = "operator-cli")]
     if let ShowWhat::PolicyStatus = what {
         return show_policy_status();
+    }
+    #[cfg(feature = "operator-cli")]
+    if let ShowWhat::Targets = what {
+        return show_targets();
     }
 
     let user_doc = match policy_override.as_ref() {
@@ -50,6 +56,8 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
         ShowWhat::Stats => unreachable!("handled above"),
         #[cfg(feature = "operator-cli")]
         ShowWhat::PolicyStatus => unreachable!("handled above"),
+        #[cfg(feature = "operator-cli")]
+        ShowWhat::Targets => unreachable!("handled above"),
     }
     Ok(0)
 }
@@ -141,6 +149,48 @@ fn write_policy_status(w: &mut impl Write, p: &PolicyStatusPayload) -> io::Resul
     Ok(())
 }
 
+#[cfg(feature = "operator-cli")]
+fn show_targets() -> anyhow::Result<i32> {
+    match crate::control_client::query(&crate::control::Request::Targets) {
+        Ok(resp) => match resp.targets {
+            Some(t) => {
+                write_targets(&mut io::stdout().lock(), &t)?;
+                Ok(0)
+            }
+            None => {
+                eprintln!(
+                    "sigil show targets: daemon returned no targets{}",
+                    resp.error.map(|e| format!(": {e}")).unwrap_or_default()
+                );
+                Ok(1)
+            }
+        },
+        Err(e) => {
+            eprintln!("sigil show targets: {e}");
+            Ok(1)
+        }
+    }
+}
+
+#[cfg(feature = "operator-cli")]
+fn write_targets(w: &mut impl Write, t: &TargetsPayload) -> io::Result<()> {
+    if t.targets.is_empty() {
+        writeln!(w, "(no active targets)")?;
+        return Ok(());
+    }
+    for target in &t.targets {
+        writeln!(w, "{} ({:?})", target.id, target.tier)?;
+        if target.globs.is_empty() {
+            writeln!(w, "  (no globs)")?;
+        } else {
+            for g in &target.globs {
+                writeln!(w, "  {g}")?;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -211,5 +261,44 @@ mod tests {
         let out = String::from_utf8(buf).unwrap();
         assert!(out.contains("active envelope valid until : (no envelope applied)"));
         assert!(out.contains("policy expired              : yes"));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_targets_renders_multiple_targets() {
+        use crate::control::{TargetSummary, TargetsPayload};
+        use sigil_core::policy::Tier;
+        let payload = TargetsPayload {
+            targets: vec![
+                TargetSummary {
+                    id: "etc-shadow".to_string(),
+                    tier: Tier::Critical,
+                    globs: vec!["/etc/shadow".to_string(), "/etc/gshadow".to_string()],
+                },
+                TargetSummary {
+                    id: "ssh-config".to_string(),
+                    tier: Tier::Standard,
+                    globs: vec!["/etc/ssh/sshd_config".to_string()],
+                },
+            ],
+        };
+        let mut buf = Vec::new();
+        write_targets(&mut buf, &payload).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("etc-shadow (Critical)"));
+        assert!(out.contains("  /etc/shadow"));
+        assert!(out.contains("  /etc/gshadow"));
+        assert!(out.contains("ssh-config (Standard)"));
+        assert!(out.contains("  /etc/ssh/sshd_config"));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_targets_handles_empty_list() {
+        use crate::control::TargetsPayload;
+        let payload = TargetsPayload { targets: vec![] };
+        let mut buf = Vec::new();
+        write_targets(&mut buf, &payload).unwrap();
+        assert!(String::from_utf8(buf).unwrap().contains("(no active targets)"));
     }
 }

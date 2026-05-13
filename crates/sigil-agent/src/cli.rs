@@ -60,4 +60,7 @@ pub enum ShowWhat {
     /// Query the running daemon for the active policy version + envelope expiry.
     #[cfg(feature = "operator-cli")]
     PolicyStatus,
+    /// List the active watch targets and their compiled glob patterns.
+    #[cfg(feature = "operator-cli")]
+    Targets,
 }

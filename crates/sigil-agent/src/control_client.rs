@@ -119,4 +119,47 @@ mod tests {
         let socket = dir.path().join("nope.sock");
         assert!(query_unix(&socket, &Request::Stats).await.is_err());
     }
+
+    #[cfg(feature = "operator-cli")]
+    #[tokio::test]
+    async fn query_unix_round_trips_targets_against_a_canned_server() {
+        use crate::control::{TargetSummary, TargetsPayload};
+        use sigil_core::policy::Tier;
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (rd, mut wr) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(rd).read_line(&mut line).await.unwrap();
+            assert_eq!(line.trim(), r#"{"cmd":"targets"}"#);
+            let resp = Response {
+                ok: true,
+                stats: None,
+                apply_policy: None,
+                policy_status: None,
+                targets: Some(TargetsPayload {
+                    targets: vec![TargetSummary {
+                        id: "etc-shadow".to_string(),
+                        tier: Tier::Critical,
+                        globs: vec!["/etc/shadow".to_string()],
+                    }],
+                }),
+                error: None,
+            };
+            let mut bytes = serde_json::to_vec(&resp).unwrap();
+            bytes.push(b'\n');
+            wr.write_all(&bytes).await.unwrap();
+        });
+
+        let resp = query_unix(&socket, &Request::Targets).await.unwrap();
+        let payload = resp.targets.unwrap();
+        assert_eq!(payload.targets.len(), 1);
+        assert_eq!(payload.targets[0].id, "etc-shadow");
+        assert_eq!(payload.targets[0].tier, Tier::Critical);
+        assert_eq!(payload.targets[0].globs, vec!["/etc/shadow".to_string()]);
+        server.await.unwrap();
+    }
 }
