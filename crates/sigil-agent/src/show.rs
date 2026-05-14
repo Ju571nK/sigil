@@ -274,18 +274,92 @@ fn show_events(
     run_follow(events_dir, &segment, &backlog, pretty)
 }
 
-/// Follow-mode stub. The next commit replaces this body with the real
-/// polling loop; the stub exists so the snapshot path compiles and is
-/// independently testable in this intermediate commit.
+/// 200 ms-polled follower over `events_dir`. Starts reading `initial_segment`
+/// from the byte offset just past the backlog, and rotates to a new segment
+/// when `latest_segment` changes. Exits cleanly on Ctrl-C.
 #[cfg(feature = "operator-cli")]
 fn run_follow(
-    _events_dir: &std::path::Path,
-    _initial_segment: &std::path::Path,
-    _backlog: &[String],
-    _pretty: bool,
+    events_dir: &std::path::Path,
+    initial_segment: &std::path::Path,
+    backlog: &[String],
+    pretty: bool,
 ) -> anyhow::Result<i32> {
-    eprintln!("sigil show events --follow: not implemented in this build");
-    Ok(2)
+    use std::io::{Read, Seek, SeekFrom};
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let events_dir = events_dir.to_path_buf();
+    let mut current = initial_segment.to_path_buf();
+    // Start at the byte offset of EOF as of the snapshot read: read the file's
+    // current length, since `read_last_n_lines` already drained it.
+    let mut offset: u64 = std::fs::metadata(&current).map(|m| m.len()).unwrap_or(0);
+    let _ = backlog; // backlog already printed in snapshot phase
+    rt.block_on(async move {
+        let mut leftover: Vec<u8> = Vec::new();
+        loop {
+            // Cooperative cancellation: race the poll tick against ctrl_c.
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => return Ok::<i32, anyhow::Error>(0),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
+            }
+            // Detect segment rotation.
+            if let Some(latest) = latest_segment(&events_dir) {
+                if latest != current {
+                    current = latest;
+                    offset = 0;
+                    leftover.clear();
+                }
+            }
+            // Read newly-appended bytes from `current` starting at `offset`.
+            let mut file = match std::fs::File::open(&current) {
+                Ok(f) => f,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            let len = file.metadata()?.len();
+            if len < offset {
+                // File truncated/rotated under us — restart from 0.
+                offset = 0;
+                leftover.clear();
+            }
+            if len == offset {
+                continue;
+            }
+            file.seek(SeekFrom::Start(offset))?;
+            let mut chunk = Vec::new();
+            file.read_to_end(&mut chunk)?;
+            offset = len;
+            // Split on '\n' boundaries; carry any partial trailing line over to
+            // the next tick.
+            let mut buf = std::mem::take(&mut leftover);
+            buf.extend_from_slice(&chunk);
+            let mut start = 0usize;
+            {
+                // Stdout writes are sync; acceptable in a current_thread runtime
+                // since they return immediately (kernel buffers the bytes).
+                let stdout = std::io::stdout();
+                let mut out = stdout.lock();
+                for (i, b) in buf.iter().enumerate() {
+                    if *b == b'\n' {
+                        let line_bytes = &buf[start..i];
+                        let line = String::from_utf8_lossy(line_bytes).into_owned();
+                        let rendered = if pretty {
+                            format_pretty(&line)
+                        } else {
+                            line
+                        };
+                        use std::io::Write;
+                        out.write_all(rendered.as_bytes())?;
+                        out.write_all(b"\n")?;
+                        start = i + 1;
+                    }
+                }
+            }
+            if start < buf.len() {
+                leftover = buf[start..].to_vec();
+            }
+        }
+    })
 }
 
 /// Read the last `n` lines from `path`. Returns an empty `Vec` if the file is
