@@ -5,25 +5,27 @@ use sigil_core::policy::expand::{expand_per_user, EnvLookup};
 use sigil_core::policy::{current_platform, defaults, merge};
 use std::path::PathBuf;
 
-/// Result of a single doctor check: `(level, message)`. Free type so the new
+/// Result of a single doctor check: `(level, message)`. Free type so the
 /// Linux helpers don't have to thread `warn_count`/`error_count` themselves —
-/// the main `run()` aggregates from the returned `Level`.
+/// the main `run()` aggregates from the returned `Level`. Linux-only because
+/// every consumer (`check_selinux`, `check_control_socket_perms`,
+/// `check_systemd_unit`, `check_events_dir_perms`) is Linux-only.
+#[cfg(target_os = "linux")]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CheckLevel {
     Ok,
-    // `Info` is only constructed on Linux (check_control_socket_perms and
-    // check_systemd_unit), so suppress dead_code on the other platforms.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Info,
     Warn,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct CheckResult {
     pub(crate) level: CheckLevel,
     pub(crate) message: String,
 }
 
+#[cfg(target_os = "linux")]
 impl CheckResult {
     pub(crate) fn ok(msg: impl Into<String>) -> Self {
         Self {
@@ -31,9 +33,6 @@ impl CheckResult {
             message: msg.into(),
         }
     }
-    // `info` is only called on Linux (by check_control_socket_perms and
-    // check_systemd_unit); suppress dead_code on the other platforms.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn info(msg: impl Into<String>) -> Self {
         Self {
             level: CheckLevel::Info,
@@ -246,7 +245,7 @@ fn default_state_db_path() -> PathBuf {
 /// present. Each line is `name:passwd:gid:userlist`; we tolerate comment and
 /// malformed lines by skipping them. Free function (takes a path) so unit
 /// tests can use a tempfile.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg(target_os = "linux")]
 fn read_group_gid_from(path: &std::path::Path, name: &str) -> Option<u32> {
     let text = std::fs::read_to_string(path).ok()?;
     for line in text.lines() {
@@ -270,7 +269,7 @@ fn read_group_gid_from(path: &std::path::Path, name: &str) -> Option<u32> {
 
 /// Check `/sys/fs/selinux/enforce`: `1` → enforcing (WARN with audit2allow
 /// hint), `0` → permissive (OK), missing file → disabled (OK).
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg(target_os = "linux")]
 fn check_selinux(enforce_path: &std::path::Path) -> CheckResult {
     match std::fs::read_to_string(enforce_path) {
         Ok(s) => match s.trim() {
@@ -292,7 +291,7 @@ fn check_selinux(enforce_path: &std::path::Path) -> CheckResult {
 /// Check that the control socket exists and is owned by `root:sigil` with mode
 /// `0o660`. Returns `Info` (not Warn) when the socket is missing because that
 /// just means the daemon isn't running — not a config error.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg(target_os = "linux")]
 fn check_control_socket_perms(
     socket_path: &std::path::Path,
     group_file: &std::path::Path,
@@ -347,7 +346,7 @@ fn check_control_socket_perms(
 /// - `wants_link`: typically
 ///   `/etc/systemd/system/multi-user.target.wants/sigil.service`. Presence
 ///   (symlink or plain file) → unit enabled.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg(target_os = "linux")]
 fn check_systemd_unit(
     run_systemd_system_dir: &std::path::Path,
     unit_file: &std::path::Path,
@@ -395,7 +394,7 @@ fn check_systemd_unit(
 /// agent writes as `sigil`; operators read via `sigil show events`, so we
 /// accept `0o750` (group-read for sigil) or `0o755` (world-read). World-write
 /// is always a WARN.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg(target_os = "linux")]
 fn check_events_dir_perms(
     events_dir: &std::path::Path,
     group_file: &std::path::Path,
@@ -660,8 +659,12 @@ mod linux_tests {
         let mut perm = std::fs::metadata(&ev).unwrap().permissions();
         perm.set_mode(0o750);
         std::fs::set_permissions(&ev, perm).unwrap();
+        // Empty group file → `read_group_gid_from` returns None → the gid
+        // ownership check inside `check_events_dir_perms` is skipped. We can't
+        // chown the tempdir to a real `sigil` gid in a unit test, so this
+        // isolates the mode check.
         let group_file = dir.path().join("group");
-        std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
+        std::fs::write(&group_file, "").unwrap();
         let r = check_events_dir_perms(&ev, &group_file);
         assert_eq!(r.level, CheckLevel::Ok);
         assert!(r.message.contains("0750"), "{:?}", r);
