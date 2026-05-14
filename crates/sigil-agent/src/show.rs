@@ -242,6 +242,120 @@ fn read_last_n_lines(path: &std::path::Path, n: usize) -> std::io::Result<Vec<St
     Ok(buf.into_iter().collect())
 }
 
+/// Map an `Evidence` variant to (kind_string, one-line summary) for the
+/// `--pretty` renderer. `kind_string` matches the serde tag of the variant.
+#[cfg(feature = "operator-cli")]
+#[allow(dead_code)]
+fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
+    use sigil_core::event::Evidence;
+    match e {
+        Evidence::FileChange { after_hash, .. } => {
+            let s = match after_hash {
+                Some(h) if h.len() >= 12 => {
+                    format!("blake3={}...{}", &h[..8], &h[h.len() - 4..])
+                }
+                Some(h) => format!("blake3={h}"),
+                None => "blake3=(none)".to_string(),
+            };
+            ("file_change", s)
+        }
+        Evidence::Heartbeat {
+            last_applied_policy_version,
+            ..
+        } => (
+            "heartbeat",
+            format!("policy_version={last_applied_policy_version}"),
+        ),
+        Evidence::ChannelStall {
+            block_events_in_window,
+            ..
+        } => ("channel_stall", format!("drops={block_events_in_window}")),
+        Evidence::PermissionMissing { resource, .. } => {
+            ("permission_missing", format!("resource={resource}"))
+        }
+        Evidence::WatcherDegraded { from, to, .. } => {
+            ("watcher_degraded", format!("{from}->{to}"))
+        }
+        Evidence::AgentDying { reason, .. } => ("agent_dying", format!("{reason:?}")),
+        Evidence::RateLimitExceeded {
+            count_dropped_in_window,
+            ..
+        } => (
+            "rate_limit_exceeded",
+            format!("dropped={count_dropped_in_window}"),
+        ),
+        Evidence::HostIdFingerprintDrift { .. } => {
+            ("host_id_fingerprint_drift", String::new())
+        }
+        Evidence::AgentJsonlForceGc {
+            segments_deleted, ..
+        } => (
+            "agent_jsonl_force_gc",
+            format!("deleted={segments_deleted}"),
+        ),
+        Evidence::SenderSkippedSegment { count, .. } => {
+            ("sender_skipped_segment", format!("count={count}"))
+        }
+        Evidence::PolicySignatureInvalid { reason, .. } => {
+            ("policy_signature_invalid", format!("reason={reason:?}"))
+        }
+        Evidence::PolicyReloaded { policy_version } => (
+            "policy_reloaded",
+            format!("policy_version={policy_version}"),
+        ),
+        Evidence::PolicyExpiredActive { policy_version, .. } => (
+            "policy_expired_active",
+            format!("policy_version={policy_version}"),
+        ),
+        Evidence::HostIdConflict { observed_status } => {
+            ("host_id_conflict", format!("status={observed_status}"))
+        }
+        Evidence::AgentTooOld {
+            observed_status, ..
+        } => ("agent_too_old", format!("status={observed_status}")),
+        Evidence::CertExpired { .. } => ("cert_expired", String::new()),
+        Evidence::TlsFailure { reason } => ("tls_failure", format!("reason={reason}")),
+        Evidence::EventUnprocessableLocal { .. } => {
+            ("event_unprocessable_local", String::new())
+        }
+        Evidence::ServerProtocolViolation { .. } => {
+            ("server_protocol_violation", String::new())
+        }
+        Evidence::SenderLagCritical { lag_events, .. } => {
+            ("sender_lag_critical", format!("events={lag_events}"))
+        }
+    }
+}
+
+/// Render one JSONL line as a tab-separated one-liner: `<ts>\t<severity>\t<subject>\t<kind>\t<summary>`.
+/// Unparseable lines pass through with a `! parse error:` marker plus the first
+/// 80 chars of the offending line.
+#[cfg(feature = "operator-cli")]
+#[allow(dead_code)]
+fn format_pretty(line: &str) -> String {
+    let event: sigil_core::event::Event = match serde_json::from_str(line) {
+        Ok(e) => e,
+        Err(e) => {
+            let preview: String = line.chars().take(80).collect();
+            return format!("! parse error: {e}: {preview}");
+        }
+    };
+    let ts = event
+        .ts
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "<bad-ts>".to_string());
+    let severity = match event.severity {
+        sigil_core::event::Severity::Info => "info",
+        sigil_core::event::Severity::Warn => "warn",
+    };
+    let subject = match &event.subject {
+        sigil_core::event::Subject::Path { value } => value.display().to_string(),
+        sigil_core::event::Subject::Self_ => "<self>".to_string(),
+    };
+    let (kind, summary) = evidence_summary(&event.evidence);
+    format!("{ts}\t{severity}\t{subject}\t{kind}\t{summary}")
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -423,5 +537,115 @@ mod tests {
         std::fs::write(&p, "a\nb\n").unwrap();
         let out = read_last_n_lines(&p, 0).unwrap();
         assert!(out.is_empty());
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn format_pretty_renders_file_change_with_blake3_summary() {
+        use sigil_core::event::{
+            Evidence, EvidenceQuality, Event, FileChangeKind, Severity, SourceKind, Subject,
+            SCHEMA_VERSION,
+        };
+        use std::path::PathBuf;
+        use time::OffsetDateTime;
+        let ev = Event {
+            schema_version: SCHEMA_VERSION,
+            event_id: uuid::Uuid::nil(),
+            ts: OffsetDateTime::from_unix_timestamp(1747218181).unwrap(),
+            host_id: "h".into(),
+            agent_version: "0".into(),
+            severity: Severity::Warn,
+            source: SourceKind::FileSystem,
+            subject: Subject::Path {
+                value: PathBuf::from("/etc/shadow"),
+            },
+            evidence: Evidence::FileChange {
+                change_kind: FileChangeKind::Modified,
+                before_hash: None,
+                after_hash: Some(
+                    "ab12345678901234567890123456789012345678901234567890123456cdef1234".into(),
+                ),
+                recheck_hash: None,
+                rename_from: None,
+                size_after: Some(42),
+                evidence_quality: EvidenceQuality::Definitive,
+            },
+            target_id: Some("etc-shadow".into()),
+        };
+        let line = serde_json::to_string(&ev).unwrap();
+        let out = format_pretty(&line);
+        // Tab-separated, 5 columns.
+        let cols: Vec<&str> = out.split('\t').collect();
+        assert_eq!(cols.len(), 5, "expected 5 tab-separated columns: {out}");
+        assert_eq!(cols[1], "warn");
+        assert_eq!(cols[2], "/etc/shadow");
+        assert_eq!(cols[3], "file_change");
+        assert_eq!(cols[4], "blake3=ab123456...1234");
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn format_pretty_renders_heartbeat_with_policy_version() {
+        use sigil_core::event::{
+            Evidence, Event, Severity, SourceKind, Subject, SCHEMA_VERSION,
+        };
+        use std::collections::BTreeMap;
+        use time::OffsetDateTime;
+        let ev = Event {
+            schema_version: SCHEMA_VERSION,
+            event_id: uuid::Uuid::nil(),
+            ts: OffsetDateTime::from_unix_timestamp(1747218181).unwrap(),
+            host_id: "h".into(),
+            agent_version: "0".into(),
+            severity: Severity::Info,
+            source: SourceKind::Agent,
+            subject: Subject::Self_,
+            evidence: Evidence::Heartbeat {
+                uptime_s: 0,
+                is_final: false,
+                channel_stall_events_total: 0,
+                events_emitted_total: 0,
+                events_by_kind: BTreeMap::new(),
+                hash_p50_ms: 0,
+                hash_p99_ms: 0,
+                watcher_backend: "fsevents".into(),
+                state_db_size_bytes: 0,
+                last_log_rotation_ts: None,
+                last_applied_policy_version: 7,
+                policy_expired_active: false,
+                jsonl_above_soft_floor: false,
+            },
+            target_id: None,
+        };
+        let line = serde_json::to_string(&ev).unwrap();
+        let out = format_pretty(&line);
+        let cols: Vec<&str> = out.split('\t').collect();
+        assert_eq!(cols.len(), 5);
+        assert_eq!(cols[1], "info");
+        assert_eq!(cols[2], "<self>");
+        assert_eq!(cols[3], "heartbeat");
+        assert_eq!(cols[4], "policy_version=7");
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn format_pretty_passes_through_unparseable_lines_with_marker() {
+        let out = format_pretty("{not json");
+        assert!(
+            out.starts_with("! parse error:"),
+            "expected parse error marker, got: {out}"
+        );
+        assert!(out.contains("{not json"));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn format_pretty_truncates_long_unparseable_preview_to_80() {
+        let long = "X".repeat(200);
+        let out = format_pretty(&long);
+        assert!(out.starts_with("! parse error:"));
+        // 80-char preview boundary somewhere in the output.
+        let preview_chunk_count = out.matches('X').count();
+        assert_eq!(preview_chunk_count, 80, "preview should be truncated to 80 X's, got {preview_chunk_count}");
     }
 }
