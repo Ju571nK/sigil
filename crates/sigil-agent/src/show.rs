@@ -240,13 +240,8 @@ fn default_events_dir() -> PathBuf {
     }
 }
 
-/// Snapshot or follow the agent's JSONL events.
-///
-/// - `tail` is the count of trailing lines to print before exiting (snapshot
-///   mode) or before starting to follow (follow mode).
-/// - `follow = true` enables 200 ms polling for new lines; Ctrl-C exits cleanly.
-/// - `pretty = true` deserializes each line as an `Event` and prints a
-///   tab-separated one-liner; `false` prints raw JSONL.
+/// Snapshot or follow the agent's JSONL events. Wrapper around the
+/// writer-parameterized `show_events_to` that targets stdout.
 #[cfg(feature = "operator-cli")]
 fn show_events(
     events_dir: &std::path::Path,
@@ -254,24 +249,47 @@ fn show_events(
     follow: bool,
     pretty: bool,
 ) -> anyhow::Result<i32> {
+    show_events_to(events_dir, tail, follow, pretty, &mut io::stdout().lock())
+}
+
+/// Core implementation. `w` lets tests capture output into a `Vec<u8>`.
+#[cfg(feature = "operator-cli")]
+fn show_events_to<W: Write>(
+    events_dir: &std::path::Path,
+    tail: usize,
+    follow: bool,
+    pretty: bool,
+    w: &mut W,
+) -> anyhow::Result<i32> {
     let Some(segment) = latest_segment(events_dir) else {
-        println!("(no events yet)");
+        writeln!(w, "(no events yet)")?;
         return Ok(0);
     };
     let backlog = read_last_n_lines(&segment, tail)?;
-    let mut stdout = io::stdout().lock();
     for line in &backlog {
         if pretty {
-            writeln!(stdout, "{}", format_pretty(line))?;
+            writeln!(w, "{}", format_pretty(line))?;
         } else {
-            writeln!(stdout, "{line}")?;
+            writeln!(w, "{line}")?;
         }
     }
     if !follow {
         return Ok(0);
     }
-    drop(stdout);
     run_follow(events_dir, &segment, &backlog, pretty)
+}
+
+/// Snapshot-mode entry point for integration tests. Public under the
+/// `operator-cli` feature so `tests/show_events_e2e.rs` can call into it
+/// without spawning the binary. Not part of the user-facing CLI surface.
+#[cfg(feature = "operator-cli")]
+pub fn show_events_for_test<W: Write>(
+    events_dir: &std::path::Path,
+    tail: usize,
+    pretty: bool,
+    w: &mut W,
+) -> anyhow::Result<i32> {
+    show_events_to(events_dir, tail, false, pretty, w)
 }
 
 /// 200 ms-polled follower over `events_dir`. Starts reading `initial_segment`
