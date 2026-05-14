@@ -361,11 +361,7 @@ fn run_follow(
                     if *b == b'\n' {
                         let line_bytes = &buf[start..i];
                         let line = String::from_utf8_lossy(line_bytes).into_owned();
-                        let rendered = if pretty {
-                            format_pretty(&line)
-                        } else {
-                            line
-                        };
+                        let rendered = if pretty { format_pretty(&line) } else { line };
                         use std::io::Write;
                         out.write_all(rendered.as_bytes())?;
                         out.write_all(b"\n")?;
@@ -438,9 +434,7 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
         Evidence::PermissionMissing { resource, .. } => {
             ("permission_missing", format!("resource={resource}"))
         }
-        Evidence::WatcherDegraded { from, to, .. } => {
-            ("watcher_degraded", format!("{from}->{to}"))
-        }
+        Evidence::WatcherDegraded { from, to, .. } => ("watcher_degraded", format!("{from}->{to}")),
         Evidence::AgentDying { reason, .. } => ("agent_dying", format!("{reason:?}")),
         Evidence::RateLimitExceeded {
             count_dropped_in_window,
@@ -449,9 +443,7 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
             "rate_limit_exceeded",
             format!("dropped={count_dropped_in_window}"),
         ),
-        Evidence::HostIdFingerprintDrift { .. } => {
-            ("host_id_fingerprint_drift", String::new())
-        }
+        Evidence::HostIdFingerprintDrift { .. } => ("host_id_fingerprint_drift", String::new()),
         Evidence::AgentJsonlForceGc {
             segments_deleted, ..
         } => (
@@ -480,12 +472,8 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
         } => ("agent_too_old", format!("status={observed_status}")),
         Evidence::CertExpired { .. } => ("cert_expired", String::new()),
         Evidence::TlsFailure { reason } => ("tls_failure", format!("reason={reason}")),
-        Evidence::EventUnprocessableLocal { .. } => {
-            ("event_unprocessable_local", String::new())
-        }
-        Evidence::ServerProtocolViolation { .. } => {
-            ("server_protocol_violation", String::new())
-        }
+        Evidence::EventUnprocessableLocal { .. } => ("event_unprocessable_local", String::new()),
+        Evidence::ServerProtocolViolation { .. } => ("server_protocol_violation", String::new()),
         Evidence::SenderLagCritical { lag_events, .. } => {
             ("sender_lag_critical", format!("events={lag_events}"))
         }
@@ -633,12 +621,14 @@ mod tests {
             .contains("(no active targets)"));
     }
 
+    #[cfg(feature = "operator-cli")]
     #[test]
     fn latest_segment_returns_none_for_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
         assert!(latest_segment(dir.path()).is_none());
     }
 
+    #[cfg(feature = "operator-cli")]
     #[test]
     fn latest_segment_picks_lexicographically_largest_jsonl() {
         let dir = tempfile::tempdir().unwrap();
@@ -655,6 +645,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "operator-cli")]
     #[test]
     fn latest_segment_returns_none_when_dir_missing() {
         let dir = tempfile::tempdir().unwrap();
@@ -662,6 +653,7 @@ mod tests {
         assert!(latest_segment(&missing).is_none());
     }
 
+    #[cfg(feature = "operator-cli")]
     #[test]
     fn read_last_n_lines_returns_empty_for_missing_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -670,6 +662,7 @@ mod tests {
         assert!(out.is_empty());
     }
 
+    #[cfg(feature = "operator-cli")]
     #[test]
     fn read_last_n_lines_returns_at_most_n() {
         let dir = tempfile::tempdir().unwrap();
@@ -685,6 +678,7 @@ mod tests {
         assert_eq!(out[4], "line-49");
     }
 
+    #[cfg(feature = "operator-cli")]
     #[test]
     fn read_last_n_lines_handles_no_trailing_newline() {
         let dir = tempfile::tempdir().unwrap();
@@ -694,6 +688,7 @@ mod tests {
         assert_eq!(out, vec!["a", "b", "c"]);
     }
 
+    #[cfg(feature = "operator-cli")]
     #[test]
     fn read_last_n_lines_n_zero_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
@@ -707,7 +702,7 @@ mod tests {
     #[test]
     fn format_pretty_renders_file_change_with_blake3_summary() {
         use sigil_core::event::{
-            Evidence, EvidenceQuality, Event, FileChangeKind, Severity, SourceKind, Subject,
+            Event, Evidence, EvidenceQuality, FileChangeKind, Severity, SourceKind, Subject,
             SCHEMA_VERSION,
         };
         use std::path::PathBuf;
@@ -750,9 +745,7 @@ mod tests {
     #[cfg(feature = "operator-cli")]
     #[test]
     fn format_pretty_renders_heartbeat_with_policy_version() {
-        use sigil_core::event::{
-            Evidence, Event, Severity, SourceKind, Subject, SCHEMA_VERSION,
-        };
+        use sigil_core::event::{Event, Evidence, Severity, SourceKind, Subject, SCHEMA_VERSION};
         use std::collections::BTreeMap;
         use time::OffsetDateTime;
         let ev = Event {
@@ -810,6 +803,9 @@ mod tests {
         assert!(out.starts_with("! parse error:"));
         // 80-char preview boundary somewhere in the output.
         let preview_chunk_count = out.matches('X').count();
-        assert_eq!(preview_chunk_count, 80, "preview should be truncated to 80 X's, got {preview_chunk_count}");
+        assert_eq!(
+            preview_chunk_count, 80,
+            "preview should be truncated to 80 X's, got {preview_chunk_count}"
+        );
     }
 }

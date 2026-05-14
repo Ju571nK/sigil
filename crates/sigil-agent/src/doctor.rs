@@ -187,9 +187,7 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
                 std::path::Path::new("/run/systemd/system"),
                 std::path::Path::new("/usr/lib/systemd/system/sigil.service"),
                 std::path::Path::new("/sys/fs/cgroup/system.slice/sigil.service/cgroup.procs"),
-                std::path::Path::new(
-                    "/etc/systemd/system/multi-user.target.wants/sigil.service",
-                ),
+                std::path::Path::new("/etc/systemd/system/multi-user.target.wants/sigil.service"),
             ),
             check_events_dir_perms(
                 std::path::Path::new("/var/log/sigil"),
@@ -326,9 +324,7 @@ fn check_control_socket_perms(
     let actual_gid = meta.gid();
     let actual_mode = meta.mode() & 0o777;
     if actual_uid == 0 && actual_gid == expected_gid && actual_mode == 0o660 {
-        return CheckResult::ok(format!(
-            "control socket: root:sigil({expected_gid}) 0660"
-        ));
+        return CheckResult::ok(format!("control socket: root:sigil({expected_gid}) 0660"));
     }
     CheckResult::warn(format!(
         "control socket perms: uid={actual_uid} gid={actual_gid} mode={actual_mode:o}; \
@@ -371,7 +367,12 @@ fn check_systemd_unit(
         ));
     }
     let active = std::fs::read_to_string(cgroup_procs)
-        .map(|s| s.lines().next().map(|l| !l.trim().is_empty()).unwrap_or(false))
+        .map(|s| {
+            s.lines()
+                .next()
+                .map(|l| !l.trim().is_empty())
+                .unwrap_or(false)
+        })
         .unwrap_or(false);
     // `try_exists` follows symlinks; symlink_metadata covers dangling-link case
     // (still treated as "enabled" — the symlink itself being there is what
@@ -403,10 +404,7 @@ fn check_events_dir_perms(
     let meta = match std::fs::metadata(events_dir) {
         Ok(m) => m,
         Err(_) => {
-            return CheckResult::warn(format!(
-                "events dir: not found at {}",
-                events_dir.display()
-            ));
+            return CheckResult::warn(format!("events dir: not found at {}", events_dir.display()));
         }
     };
     if !meta.is_dir() {
@@ -475,11 +473,7 @@ mod linux_tests {
     fn read_group_gid_skips_malformed_and_comment_lines() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("group");
-        std::fs::write(
-            &p,
-            "# comment\nsigil:x:notanumber:\nsigil:x:42:\n",
-        )
-        .unwrap();
+        std::fs::write(&p, "# comment\nsigil:x:notanumber:\nsigil:x:42:\n").unwrap();
         // Skips the malformed entry and accepts the second `sigil:` line.
         assert_eq!(read_group_gid_from(&p, "sigil"), Some(42));
     }
