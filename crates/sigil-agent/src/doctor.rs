@@ -302,6 +302,60 @@ fn check_control_socket_perms(
     ))
 }
 
+/// Determine whether sigil's systemd unit is installed + active + enabled
+/// without shelling out to `systemctl` (no D-Bus required, works in container
+/// and chroot environments).
+///
+/// Inputs:
+/// - `run_systemd_system_dir`: typically `/run/systemd/system`. Presence → host
+///   is running systemd.
+/// - `unit_file`: typically `/usr/lib/systemd/system/sigil.service`. Presence
+///   → unit installed.
+/// - `cgroup_procs`: typically
+///   `/sys/fs/cgroup/system.slice/sigil.service/cgroup.procs`. Existing + a
+///   non-empty first line → unit active.
+/// - `wants_link`: typically
+///   `/etc/systemd/system/multi-user.target.wants/sigil.service`. Presence
+///   (symlink or plain file) → unit enabled.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn check_systemd_unit(
+    run_systemd_system_dir: &std::path::Path,
+    unit_file: &std::path::Path,
+    cgroup_procs: &std::path::Path,
+    wants_link: &std::path::Path,
+) -> CheckResult {
+    if !run_systemd_system_dir.exists() {
+        return CheckResult::info(format!(
+            "systemd: not detected at {} (skipping unit checks)",
+            run_systemd_system_dir.display()
+        ));
+    }
+    if !unit_file.exists() {
+        return CheckResult::warn(format!(
+            "systemd unit: sigil.service not installed (expected at {})",
+            unit_file.display()
+        ));
+    }
+    let active = std::fs::read_to_string(cgroup_procs)
+        .map(|s| s.lines().next().map(|l| !l.trim().is_empty()).unwrap_or(false))
+        .unwrap_or(false);
+    // `try_exists` follows symlinks; symlink_metadata covers dangling-link case
+    // (still treated as "enabled" — the symlink itself being there is what
+    // `systemctl enable` produces).
+    let enabled = wants_link.exists() || std::fs::symlink_metadata(wants_link).is_ok();
+    let active_word = if active { "active" } else { "inactive" };
+    let enabled_word = if enabled { "enabled" } else { "disabled" };
+    let level = if active && enabled {
+        CheckLevel::Ok
+    } else {
+        CheckLevel::Warn
+    };
+    CheckResult {
+        level,
+        message: format!("systemd unit: {active_word}, {enabled_word}"),
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::*;
@@ -420,5 +474,69 @@ mod linux_tests {
         // assert on the bare octal digits.
         assert!(r.message.contains("666"), "{:?}", r);
         assert!(r.message.contains("expected"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_systemd_unit_skips_when_run_systemd_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        // run_systemd does NOT exist
+        let r = check_systemd_unit(
+            &dir.path().join("run-systemd-system"),
+            &dir.path().join("lib/systemd/system/sigil.service"),
+            &dir.path().join("cgroup-procs"),
+            &dir.path().join("etc-wants/sigil.service"),
+        );
+        assert_eq!(r.level, CheckLevel::Info);
+        assert!(r.message.contains("not detected"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_systemd_unit_warns_when_unit_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let run_systemd = dir.path().join("run-systemd-system");
+        std::fs::create_dir_all(&run_systemd).unwrap();
+        let r = check_systemd_unit(
+            &run_systemd,
+            &dir.path().join("lib/systemd/system/sigil.service"),
+            &dir.path().join("cgroup-procs"),
+            &dir.path().join("etc-wants/sigil.service"),
+        );
+        assert_eq!(r.level, CheckLevel::Warn);
+        assert!(r.message.contains("not installed"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_systemd_unit_reports_active_enabled_when_all_signals_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let run_systemd = dir.path().join("run-systemd-system");
+        std::fs::create_dir_all(&run_systemd).unwrap();
+        let unit_file = dir.path().join("sigil.service");
+        std::fs::write(&unit_file, b"[Unit]\nDescription=sigil\n").unwrap();
+        let cgroup_procs = dir.path().join("cgroup.procs");
+        std::fs::write(&cgroup_procs, b"12345\n").unwrap();
+        let wants_link = dir.path().join("wants/sigil.service");
+        std::fs::create_dir_all(dir.path().join("wants")).unwrap();
+        // Plain file is fine for the existence-only check.
+        std::fs::write(&wants_link, b"").unwrap();
+        let r = check_systemd_unit(&run_systemd, &unit_file, &cgroup_procs, &wants_link);
+        assert_eq!(r.level, CheckLevel::Ok);
+        assert!(r.message.contains("active"), "{:?}", r);
+        assert!(r.message.contains("enabled"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_systemd_unit_warns_when_cgroup_procs_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let run_systemd = dir.path().join("run-systemd-system");
+        std::fs::create_dir_all(&run_systemd).unwrap();
+        let unit_file = dir.path().join("sigil.service");
+        std::fs::write(&unit_file, b"").unwrap();
+        let cgroup_procs = dir.path().join("cgroup.procs");
+        std::fs::write(&cgroup_procs, b"").unwrap();
+        let wants_link = dir.path().join("wants-not-there");
+        let r = check_systemd_unit(&run_systemd, &unit_file, &cgroup_procs, &wants_link);
+        assert_eq!(r.level, CheckLevel::Warn);
+        assert!(r.message.contains("inactive"), "{:?}", r);
+        assert!(r.message.contains("disabled"), "{:?}", r);
     }
 }
