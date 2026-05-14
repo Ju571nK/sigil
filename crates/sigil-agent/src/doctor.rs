@@ -257,6 +257,51 @@ fn check_selinux(enforce_path: &std::path::Path) -> CheckResult {
     }
 }
 
+/// Check that the control socket exists and is owned by `root:sigil` with mode
+/// `0o660`. Returns `Info` (not Warn) when the socket is missing because that
+/// just means the daemon isn't running — not a config error.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn check_control_socket_perms(
+    socket_path: &std::path::Path,
+    group_file: &std::path::Path,
+) -> CheckResult {
+    use std::os::unix::fs::MetadataExt;
+    let meta = match std::fs::metadata(socket_path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return CheckResult::info(format!(
+                "control socket: not present at {} (daemon not running?)",
+                socket_path.display()
+            ));
+        }
+        Err(e) => {
+            return CheckResult::warn(format!(
+                "control socket: stat failed at {}: {e}",
+                socket_path.display()
+            ));
+        }
+    };
+    let Some(expected_gid) = read_group_gid_from(group_file, "sigil") else {
+        return CheckResult::warn(format!(
+            "control socket: 'sigil' group not found in {} — \
+             daemon cannot drop privs to the right gid",
+            group_file.display()
+        ));
+    };
+    let actual_uid = meta.uid();
+    let actual_gid = meta.gid();
+    let actual_mode = meta.mode() & 0o777;
+    if actual_uid == 0 && actual_gid == expected_gid && actual_mode == 0o660 {
+        return CheckResult::ok(format!(
+            "control socket: root:sigil({expected_gid}) 0660"
+        ));
+    }
+    CheckResult::warn(format!(
+        "control socket perms: uid={actual_uid} gid={actual_gid} mode={actual_mode:o}; \
+         expected uid=0 gid={expected_gid} mode=660"
+    ))
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::*;
@@ -333,5 +378,47 @@ mod linux_tests {
             "expected audit2allow hint, got {:?}",
             r
         );
+    }
+
+    #[test]
+    fn check_control_socket_perms_returns_info_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("control.sock");
+        let group_file = dir.path().join("group");
+        std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
+        let r = check_control_socket_perms(&p, &group_file);
+        assert_eq!(r.level, CheckLevel::Info);
+        assert!(r.message.contains("not present"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_control_socket_perms_warns_when_group_missing_from_etc_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("control.sock");
+        std::fs::write(&p, b"").unwrap();
+        let group_file = dir.path().join("group");
+        std::fs::write(&group_file, "root:x:0:\n").unwrap();
+        let r = check_control_socket_perms(&p, &group_file);
+        assert_eq!(r.level, CheckLevel::Warn);
+        assert!(r.message.contains("'sigil' group"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_control_socket_perms_warns_when_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("control.sock");
+        std::fs::write(&p, b"").unwrap();
+        let mut perm = std::fs::metadata(&p).unwrap().permissions();
+        perm.set_mode(0o666);
+        std::fs::set_permissions(&p, perm).unwrap();
+        let group_file = dir.path().join("group");
+        std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
+        let r = check_control_socket_perms(&p, &group_file);
+        assert_eq!(r.level, CheckLevel::Warn);
+        // Implementation formats actual mode with `{:o}` (no leading 0), so
+        // assert on the bare octal digits.
+        assert!(r.message.contains("666"), "{:?}", r);
+        assert!(r.message.contains("expected"), "{:?}", r);
     }
 }
