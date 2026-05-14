@@ -11,9 +11,9 @@ use std::path::PathBuf;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CheckLevel {
     Ok,
-    // `Info` is constructed by `check_control_socket_perms` and
-    // `check_systemd_unit` (Tasks 11/12); silence dead_code in the interim.
-    #[allow(dead_code)]
+    // `Info` is only constructed on Linux (check_control_socket_perms and
+    // check_systemd_unit), so suppress dead_code on the other platforms.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Info,
     Warn,
 }
@@ -31,9 +31,9 @@ impl CheckResult {
             message: msg.into(),
         }
     }
-    // `info` is called by check_control_socket_perms / check_systemd_unit
-    // (Tasks 11/12); silence dead_code in the interim.
-    #[allow(dead_code)]
+    // `info` is only called on Linux (by check_control_socket_perms and
+    // check_systemd_unit); suppress dead_code on the other platforms.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn info(msg: impl Into<String>) -> Self {
         Self {
             level: CheckLevel::Info,
@@ -172,6 +172,40 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
                 println!("[WARN] Full Disk Access: status unknown (TCC.db missing)");
                 warn_count += 1;
             }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let checks = [
+            check_selinux(std::path::Path::new("/sys/fs/selinux/enforce")),
+            check_control_socket_perms(
+                std::path::Path::new("/var/run/sigil/control.sock"),
+                std::path::Path::new("/etc/group"),
+            ),
+            check_systemd_unit(
+                std::path::Path::new("/run/systemd/system"),
+                std::path::Path::new("/usr/lib/systemd/system/sigil.service"),
+                std::path::Path::new("/sys/fs/cgroup/system.slice/sigil.service/cgroup.procs"),
+                std::path::Path::new(
+                    "/etc/systemd/system/multi-user.target.wants/sigil.service",
+                ),
+            ),
+            check_events_dir_perms(
+                std::path::Path::new("/var/log/sigil"),
+                std::path::Path::new("/etc/group"),
+            ),
+        ];
+        for r in checks {
+            let prefix = match r.level {
+                CheckLevel::Ok => "[OK]  ",
+                CheckLevel::Info => "[INFO]",
+                CheckLevel::Warn => {
+                    warn_count += 1;
+                    "[WARN]"
+                }
+            };
+            println!("{prefix} {}", r.message);
         }
     }
 
