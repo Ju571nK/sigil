@@ -12,7 +12,11 @@ use sigil_core::stats::StatsSnapshot;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i32> {
+pub fn run(
+    what: ShowWhat,
+    policy_override: Option<PathBuf>,
+    events_dir_override: Option<PathBuf>,
+) -> anyhow::Result<i32> {
     // `stats` talks to the running daemon over the control socket; it doesn't
     // touch the policy file, so handle it before the merge below.
     if let ShowWhat::Stats = what {
@@ -22,9 +26,21 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
     if let ShowWhat::PolicyStatus = what {
         return show_policy_status();
     }
+    #[cfg(not(feature = "operator-cli"))]
+    let _ = events_dir_override;
     #[cfg(feature = "operator-cli")]
     if let ShowWhat::Targets = what {
         return show_targets();
+    }
+    #[cfg(feature = "operator-cli")]
+    if let ShowWhat::Events {
+        tail,
+        follow,
+        pretty,
+    } = what
+    {
+        let events_dir = events_dir_override.unwrap_or_else(default_events_dir);
+        return show_events(&events_dir, tail, follow, pretty);
     }
 
     let user_doc = match policy_override.as_ref() {
@@ -58,6 +74,8 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
         ShowWhat::PolicyStatus => unreachable!("handled above"),
         #[cfg(feature = "operator-cli")]
         ShowWhat::Targets => unreachable!("handled above"),
+        #[cfg(feature = "operator-cli")]
+        ShowWhat::Events { .. } => unreachable!("handled above"),
     }
     Ok(0)
 }
@@ -196,8 +214,6 @@ fn write_targets(w: &mut impl Write, t: &TargetsPayload) -> io::Result<()> {
 /// segment. Lexicographic order is chronological for the agent's segment
 /// naming convention (`events-YYYY-MM-DD[-NNN].jsonl`).
 #[cfg(feature = "operator-cli")]
-// Wired into `show_events` in a later task — keep `dead_code` quiet until then.
-#[allow(dead_code)]
 fn latest_segment(events_dir: &std::path::Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(events_dir).ok()?;
     entries
@@ -212,13 +228,71 @@ fn latest_segment(events_dir: &std::path::Path) -> Option<PathBuf> {
         .max()
 }
 
+/// Mirror of `main.rs::default_events_dir`. Kept here so `show::run` can
+/// resolve `--events-dir` without main.rs needing to plumb the default in for
+/// every variant.
+#[cfg(feature = "operator-cli")]
+fn default_events_dir() -> PathBuf {
+    if cfg!(any(target_os = "macos", target_os = "linux")) {
+        PathBuf::from("/var/log/sigil")
+    } else {
+        PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default()).join("Sigil/events")
+    }
+}
+
+/// Snapshot or follow the agent's JSONL events.
+///
+/// - `tail` is the count of trailing lines to print before exiting (snapshot
+///   mode) or before starting to follow (follow mode).
+/// - `follow = true` enables 200 ms polling for new lines; Ctrl-C exits cleanly.
+/// - `pretty = true` deserializes each line as an `Event` and prints a
+///   tab-separated one-liner; `false` prints raw JSONL.
+#[cfg(feature = "operator-cli")]
+fn show_events(
+    events_dir: &std::path::Path,
+    tail: usize,
+    follow: bool,
+    pretty: bool,
+) -> anyhow::Result<i32> {
+    let Some(segment) = latest_segment(events_dir) else {
+        println!("(no events yet)");
+        return Ok(0);
+    };
+    let backlog = read_last_n_lines(&segment, tail)?;
+    let mut stdout = io::stdout().lock();
+    for line in &backlog {
+        if pretty {
+            writeln!(stdout, "{}", format_pretty(line))?;
+        } else {
+            writeln!(stdout, "{line}")?;
+        }
+    }
+    if !follow {
+        return Ok(0);
+    }
+    drop(stdout);
+    run_follow(events_dir, &segment, &backlog, pretty)
+}
+
+/// Follow-mode stub. The next commit replaces this body with the real
+/// polling loop; the stub exists so the snapshot path compiles and is
+/// independently testable in this intermediate commit.
+#[cfg(feature = "operator-cli")]
+fn run_follow(
+    _events_dir: &std::path::Path,
+    _initial_segment: &std::path::Path,
+    _backlog: &[String],
+    _pretty: bool,
+) -> anyhow::Result<i32> {
+    eprintln!("sigil show events --follow: not implemented in this build");
+    Ok(2)
+}
+
 /// Read the last `n` lines from `path`. Returns an empty `Vec` if the file is
 /// missing. Handles files that do not end in a newline (the trailing partial
 /// line is returned as a complete line). Buffers up to `n` lines in memory;
 /// designed for the agent's small operational jsonl segments.
 #[cfg(feature = "operator-cli")]
-// Wired into `show_events` in a later task — keep `dead_code` quiet until then.
-#[allow(dead_code)]
 fn read_last_n_lines(path: &std::path::Path, n: usize) -> std::io::Result<Vec<String>> {
     use std::collections::VecDeque;
     use std::io::BufRead;
@@ -245,7 +319,6 @@ fn read_last_n_lines(path: &std::path::Path, n: usize) -> std::io::Result<Vec<St
 /// Map an `Evidence` variant to (kind_string, one-line summary) for the
 /// `--pretty` renderer. `kind_string` matches the serde tag of the variant.
 #[cfg(feature = "operator-cli")]
-#[allow(dead_code)]
 fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
     use sigil_core::event::Evidence;
     match e {
@@ -331,7 +404,6 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
 /// Unparseable lines pass through with a `! parse error:` marker plus the first
 /// 80 chars of the offending line.
 #[cfg(feature = "operator-cli")]
-#[allow(dead_code)]
 fn format_pretty(line: &str) -> String {
     let event: sigil_core::event::Event = match serde_json::from_str(line) {
         Ok(e) => e,

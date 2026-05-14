@@ -30,7 +30,7 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(code);
         }
         cli::Command::Show { what } => {
-            let code = show::run(what, cli.policy)?;
+            let code = show::run(what, cli.policy.clone(), cli.events_dir.clone())?;
             std::process::exit(code);
         }
         cli::Command::Version => {

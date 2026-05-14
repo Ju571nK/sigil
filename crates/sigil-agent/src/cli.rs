@@ -67,4 +67,19 @@ pub enum ShowWhat {
     /// List the active watch targets and their compiled glob patterns.
     #[cfg(feature = "operator-cli")]
     Targets,
+    /// Tail the agent's JSONL events. Reads the latest segment from the events
+    /// directory; pass --follow to watch for new lines (Ctrl-C to stop).
+    #[cfg(feature = "operator-cli")]
+    Events {
+        /// Number of trailing lines to show before following (or to dump and
+        /// exit when --follow is not set).
+        #[arg(short = 'n', long = "tail", default_value_t = 20)]
+        tail: usize,
+        /// Continue printing new lines as they arrive (200ms polling, Ctrl-C to stop).
+        #[arg(short = 'f', long = "follow")]
+        follow: bool,
+        /// Render each event as a one-line summary instead of raw JSON.
+        #[arg(long = "pretty")]
+        pretty: bool,
+    },
 }
