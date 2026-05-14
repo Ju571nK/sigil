@@ -5,6 +5,43 @@ use sigil_core::policy::expand::{expand_per_user, EnvLookup};
 use sigil_core::policy::{current_platform, defaults, merge};
 use std::path::PathBuf;
 
+/// Result of a single doctor check: `(level, message)`. Free type so the new
+/// Linux helpers don't have to thread `warn_count`/`error_count` themselves —
+/// the main `run()` aggregates from the returned `Level`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CheckLevel {
+    Ok,
+    Info,
+    Warn,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CheckResult {
+    pub(crate) level: CheckLevel,
+    pub(crate) message: String,
+}
+
+impl CheckResult {
+    pub(crate) fn ok(msg: impl Into<String>) -> Self {
+        Self {
+            level: CheckLevel::Ok,
+            message: msg.into(),
+        }
+    }
+    pub(crate) fn info(msg: impl Into<String>) -> Self {
+        Self {
+            level: CheckLevel::Info,
+            message: msg.into(),
+        }
+    }
+    pub(crate) fn warn(msg: impl Into<String>) -> Self {
+        Self {
+            level: CheckLevel::Warn,
+            message: msg.into(),
+        }
+    }
+}
+
 pub fn run(policy_override: Option<PathBuf>) -> i32 {
     let plat = ActivePlatform::new();
     let mut warn_count = 0;
@@ -193,6 +230,27 @@ fn read_group_gid_from(path: &std::path::Path, name: &str) -> Option<u32> {
     None
 }
 
+/// Check `/sys/fs/selinux/enforce`: `1` → enforcing (WARN with audit2allow
+/// hint), `0` → permissive (OK), missing file → disabled (OK).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn check_selinux(enforce_path: &std::path::Path) -> CheckResult {
+    match std::fs::read_to_string(enforce_path) {
+        Ok(s) => match s.trim() {
+            "1" => CheckResult::warn(
+                "SELinux: enforcing (sigil_t context not yet shipped — \
+                 run `audit2allow -a | grep sigil` if events stop)"
+                    .to_string(),
+            ),
+            "0" => CheckResult::ok("SELinux: permissive".to_string()),
+            other => CheckResult::warn(format!("SELinux: unexpected enforce value '{other}'")),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            CheckResult::ok("SELinux: disabled".to_string())
+        }
+        Err(e) => CheckResult::warn(format!("SELinux: state read failed: {e}")),
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::*;
@@ -235,5 +293,39 @@ mod linux_tests {
     fn read_group_gid_returns_none_for_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(read_group_gid_from(&dir.path().join("nope"), "sigil"), None);
+    }
+
+    #[test]
+    fn check_selinux_returns_disabled_when_enforce_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("enforce");
+        let r = check_selinux(&p);
+        assert_eq!(r.level, CheckLevel::Ok);
+        assert!(r.message.contains("disabled"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_selinux_returns_permissive_when_enforce_is_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("enforce");
+        std::fs::write(&p, "0").unwrap();
+        let r = check_selinux(&p);
+        assert_eq!(r.level, CheckLevel::Ok);
+        assert!(r.message.contains("permissive"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_selinux_returns_warn_when_enforce_is_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("enforce");
+        std::fs::write(&p, "1").unwrap();
+        let r = check_selinux(&p);
+        assert_eq!(r.level, CheckLevel::Warn);
+        assert!(r.message.contains("enforcing"), "{:?}", r);
+        assert!(
+            r.message.contains("audit2allow"),
+            "expected audit2allow hint, got {:?}",
+            r
+        );
     }
 }
