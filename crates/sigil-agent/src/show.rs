@@ -191,6 +191,24 @@ fn write_targets(w: &mut impl Write, t: &TargetsPayload) -> io::Result<()> {
     Ok(())
 }
 
+/// Return the path of the lexicographically-largest `events-*.jsonl` file in
+/// `events_dir`, or `None` if the directory is missing or contains no matching
+/// segment. Lexicographic order is chronological for the agent's segment
+/// naming convention (`events-YYYY-MM-DD[-NNN].jsonl`).
+fn latest_segment(events_dir: &std::path::Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(events_dir).ok()?;
+    entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n.starts_with("events-") && n.ends_with(".jsonl"))
+                .unwrap_or(false)
+        })
+        .max()
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -302,5 +320,34 @@ mod tests {
         assert!(String::from_utf8(buf)
             .unwrap()
             .contains("(no active targets)"));
+    }
+
+    #[test]
+    fn latest_segment_returns_none_for_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(latest_segment(dir.path()).is_none());
+    }
+
+    #[test]
+    fn latest_segment_picks_lexicographically_largest_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("events-2026-05-12.jsonl"), b"").unwrap();
+        std::fs::write(dir.path().join("events-2026-05-14-001.jsonl"), b"").unwrap();
+        std::fs::write(dir.path().join("events-2026-05-13.jsonl"), b"").unwrap();
+        // Non-matching files are skipped.
+        std::fs::write(dir.path().join("readme.txt"), b"").unwrap();
+        std::fs::write(dir.path().join("events-foo.json"), b"").unwrap();
+        let picked = latest_segment(dir.path()).unwrap();
+        assert_eq!(
+            picked.file_name().unwrap().to_str().unwrap(),
+            "events-2026-05-14-001.jsonl"
+        );
+    }
+
+    #[test]
+    fn latest_segment_returns_none_when_dir_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("definitely-not-here");
+        assert!(latest_segment(&missing).is_none());
     }
 }
