@@ -195,6 +195,9 @@ fn write_targets(w: &mut impl Write, t: &TargetsPayload) -> io::Result<()> {
 /// `events_dir`, or `None` if the directory is missing or contains no matching
 /// segment. Lexicographic order is chronological for the agent's segment
 /// naming convention (`events-YYYY-MM-DD[-NNN].jsonl`).
+#[cfg(feature = "operator-cli")]
+// Wired into `show_events` in a later task — keep `dead_code` quiet until then.
+#[allow(dead_code)]
 fn latest_segment(events_dir: &std::path::Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(events_dir).ok()?;
     entries
