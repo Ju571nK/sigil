@@ -356,6 +356,62 @@ fn check_systemd_unit(
     }
 }
 
+/// Check that the agent's events_dir exists and has reasonable perms. The
+/// agent writes as `sigil`; operators read via `sigil show events`, so we
+/// accept `0o750` (group-read for sigil) or `0o755` (world-read). World-write
+/// is always a WARN.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn check_events_dir_perms(
+    events_dir: &std::path::Path,
+    group_file: &std::path::Path,
+) -> CheckResult {
+    use std::os::unix::fs::MetadataExt;
+    let meta = match std::fs::metadata(events_dir) {
+        Ok(m) => m,
+        Err(_) => {
+            return CheckResult::warn(format!(
+                "events dir: not found at {}",
+                events_dir.display()
+            ));
+        }
+    };
+    if !meta.is_dir() {
+        return CheckResult::warn(format!(
+            "events dir: {} exists but is not a directory",
+            events_dir.display()
+        ));
+    }
+    let mode = meta.mode() & 0o777;
+    let gid_expected = read_group_gid_from(group_file, "sigil");
+    let gid_actual = meta.gid();
+    let mode_ok = mode == 0o750 || mode == 0o755;
+    let mode_world_writable = mode & 0o002 != 0;
+    if mode_world_writable {
+        return CheckResult::warn(format!(
+            "events dir perms: mode={mode:o} is world-writable at {}",
+            events_dir.display()
+        ));
+    }
+    if !mode_ok {
+        return CheckResult::warn(format!(
+            "events dir perms: mode={mode:o}; expected 0750 or 0755 at {}",
+            events_dir.display()
+        ));
+    }
+    if let Some(g) = gid_expected {
+        if gid_actual != g {
+            return CheckResult::warn(format!(
+                "events dir owner: gid={gid_actual}; expected gid={g} (sigil group) at {}",
+                events_dir.display()
+            ));
+        }
+    }
+    CheckResult::ok(format!(
+        "events dir: mode 0{mode:o} at {}",
+        events_dir.display()
+    ))
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::*;
@@ -538,5 +594,48 @@ mod linux_tests {
         assert_eq!(r.level, CheckLevel::Warn);
         assert!(r.message.contains("inactive"), "{:?}", r);
         assert!(r.message.contains("disabled"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_events_dir_perms_warns_when_dir_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+        let group_file = dir.path().join("group");
+        std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
+        let r = check_events_dir_perms(&missing, &group_file);
+        assert_eq!(r.level, CheckLevel::Warn);
+        assert!(r.message.contains("not found"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_events_dir_perms_warns_when_world_writable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ev = dir.path().join("events");
+        std::fs::create_dir(&ev).unwrap();
+        let mut perm = std::fs::metadata(&ev).unwrap().permissions();
+        perm.set_mode(0o777);
+        std::fs::set_permissions(&ev, perm).unwrap();
+        let group_file = dir.path().join("group");
+        std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
+        let r = check_events_dir_perms(&ev, &group_file);
+        assert_eq!(r.level, CheckLevel::Warn);
+        assert!(r.message.contains("777"), "{:?}", r);
+    }
+
+    #[test]
+    fn check_events_dir_perms_ok_for_0750() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ev = dir.path().join("events");
+        std::fs::create_dir(&ev).unwrap();
+        let mut perm = std::fs::metadata(&ev).unwrap().permissions();
+        perm.set_mode(0o750);
+        std::fs::set_permissions(&ev, perm).unwrap();
+        let group_file = dir.path().join("group");
+        std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
+        let r = check_events_dir_perms(&ev, &group_file);
+        assert_eq!(r.level, CheckLevel::Ok);
+        assert!(r.message.contains("0750"), "{:?}", r);
     }
 }
