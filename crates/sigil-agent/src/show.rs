@@ -12,7 +12,11 @@ use sigil_core::stats::StatsSnapshot;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i32> {
+pub fn run(
+    what: ShowWhat,
+    policy_override: Option<PathBuf>,
+    events_dir_override: Option<PathBuf>,
+) -> anyhow::Result<i32> {
     // `stats` talks to the running daemon over the control socket; it doesn't
     // touch the policy file, so handle it before the merge below.
     if let ShowWhat::Stats = what {
@@ -22,9 +26,21 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
     if let ShowWhat::PolicyStatus = what {
         return show_policy_status();
     }
+    #[cfg(not(feature = "operator-cli"))]
+    let _ = events_dir_override;
     #[cfg(feature = "operator-cli")]
     if let ShowWhat::Targets = what {
         return show_targets();
+    }
+    #[cfg(feature = "operator-cli")]
+    if let ShowWhat::Events {
+        tail,
+        follow,
+        pretty,
+    } = what
+    {
+        let events_dir = events_dir_override.unwrap_or_else(default_events_dir);
+        return show_events(&events_dir, tail, follow, pretty);
     }
 
     let user_doc = match policy_override.as_ref() {
@@ -58,6 +74,8 @@ pub fn run(what: ShowWhat, policy_override: Option<PathBuf>) -> anyhow::Result<i
         ShowWhat::PolicyStatus => unreachable!("handled above"),
         #[cfg(feature = "operator-cli")]
         ShowWhat::Targets => unreachable!("handled above"),
+        #[cfg(feature = "operator-cli")]
+        ShowWhat::Events { .. } => unreachable!("handled above"),
     }
     Ok(0)
 }
@@ -191,6 +209,305 @@ fn write_targets(w: &mut impl Write, t: &TargetsPayload) -> io::Result<()> {
     Ok(())
 }
 
+/// Return the path of the lexicographically-largest `events-*.jsonl` file in
+/// `events_dir`, or `None` if the directory is missing or contains no matching
+/// segment. Lexicographic order is chronological for the agent's segment
+/// naming convention (`events-YYYY-MM-DD[-NNN].jsonl`).
+#[cfg(feature = "operator-cli")]
+fn latest_segment(events_dir: &std::path::Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(events_dir).ok()?;
+    entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n.starts_with("events-") && n.ends_with(".jsonl"))
+                .unwrap_or(false)
+        })
+        .max()
+}
+
+/// Mirror of `main.rs::default_events_dir`. Kept here so `show::run` can
+/// resolve `--events-dir` without main.rs needing to plumb the default in for
+/// every variant.
+#[cfg(feature = "operator-cli")]
+fn default_events_dir() -> PathBuf {
+    if cfg!(any(target_os = "macos", target_os = "linux")) {
+        PathBuf::from("/var/log/sigil")
+    } else {
+        PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default()).join("Sigil/events")
+    }
+}
+
+/// Snapshot or follow the agent's JSONL events. Wrapper around the
+/// writer-parameterized `show_events_to` that targets stdout.
+#[cfg(feature = "operator-cli")]
+fn show_events(
+    events_dir: &std::path::Path,
+    tail: usize,
+    follow: bool,
+    pretty: bool,
+) -> anyhow::Result<i32> {
+    show_events_to(events_dir, tail, follow, pretty, &mut io::stdout().lock())
+}
+
+/// Core implementation. `w` lets tests capture output into a `Vec<u8>`.
+#[cfg(feature = "operator-cli")]
+fn show_events_to<W: Write>(
+    events_dir: &std::path::Path,
+    tail: usize,
+    follow: bool,
+    pretty: bool,
+    w: &mut W,
+) -> anyhow::Result<i32> {
+    let Some(segment) = latest_segment(events_dir) else {
+        writeln!(w, "(no events yet)")?;
+        return Ok(0);
+    };
+    let backlog = read_last_n_lines(&segment, tail)?;
+    for line in &backlog {
+        if pretty {
+            writeln!(w, "{}", format_pretty(line))?;
+        } else {
+            writeln!(w, "{line}")?;
+        }
+    }
+    if !follow {
+        return Ok(0);
+    }
+    run_follow(events_dir, &segment, &backlog, pretty)
+}
+
+/// Snapshot-mode entry point for integration tests. Public under the
+/// `operator-cli` feature so `tests/show_events_e2e.rs` can call into it
+/// without spawning the binary. Not part of the user-facing CLI surface.
+#[cfg(feature = "operator-cli")]
+pub fn show_events_for_test<W: Write>(
+    events_dir: &std::path::Path,
+    tail: usize,
+    pretty: bool,
+    w: &mut W,
+) -> anyhow::Result<i32> {
+    show_events_to(events_dir, tail, false, pretty, w)
+}
+
+/// 200 ms-polled follower over `events_dir`. Starts reading `initial_segment`
+/// from the byte offset just past the backlog, and rotates to a new segment
+/// when `latest_segment` changes. Exits cleanly on Ctrl-C.
+#[cfg(feature = "operator-cli")]
+fn run_follow(
+    events_dir: &std::path::Path,
+    initial_segment: &std::path::Path,
+    backlog: &[String],
+    pretty: bool,
+) -> anyhow::Result<i32> {
+    use std::io::{Read, Seek, SeekFrom};
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let events_dir = events_dir.to_path_buf();
+    let mut current = initial_segment.to_path_buf();
+    // Start at the byte offset of EOF as of the snapshot read: read the file's
+    // current length, since `read_last_n_lines` already drained it.
+    let mut offset: u64 = std::fs::metadata(&current).map(|m| m.len()).unwrap_or(0);
+    let _ = backlog; // backlog already printed in snapshot phase
+    rt.block_on(async move {
+        let mut leftover: Vec<u8> = Vec::new();
+        loop {
+            // Cooperative cancellation: race the poll tick against ctrl_c.
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => return Ok::<i32, anyhow::Error>(0),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
+            }
+            // Detect segment rotation.
+            if let Some(latest) = latest_segment(&events_dir) {
+                if latest != current {
+                    current = latest;
+                    offset = 0;
+                    leftover.clear();
+                }
+            }
+            // Read newly-appended bytes from `current` starting at `offset`.
+            let mut file = match std::fs::File::open(&current) {
+                Ok(f) => f,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            let len = file.metadata()?.len();
+            if len < offset {
+                // File truncated/rotated under us — restart from 0.
+                offset = 0;
+                leftover.clear();
+            }
+            if len == offset {
+                continue;
+            }
+            file.seek(SeekFrom::Start(offset))?;
+            let mut chunk = Vec::new();
+            file.read_to_end(&mut chunk)?;
+            offset = len;
+            // Split on '\n' boundaries; carry any partial trailing line over to
+            // the next tick.
+            let mut buf = std::mem::take(&mut leftover);
+            buf.extend_from_slice(&chunk);
+            let mut start = 0usize;
+            {
+                // Stdout writes are sync; acceptable in a current_thread runtime
+                // since they return immediately (kernel buffers the bytes).
+                let stdout = std::io::stdout();
+                let mut out = stdout.lock();
+                for (i, b) in buf.iter().enumerate() {
+                    if *b == b'\n' {
+                        let line_bytes = &buf[start..i];
+                        let line = String::from_utf8_lossy(line_bytes).into_owned();
+                        let rendered = if pretty { format_pretty(&line) } else { line };
+                        use std::io::Write;
+                        out.write_all(rendered.as_bytes())?;
+                        out.write_all(b"\n")?;
+                        start = i + 1;
+                    }
+                }
+            }
+            if start < buf.len() {
+                leftover = buf[start..].to_vec();
+            }
+        }
+    })
+}
+
+/// Read the last `n` lines from `path`. Returns an empty `Vec` if the file is
+/// missing. Handles files that do not end in a newline (the trailing partial
+/// line is returned as a complete line). Buffers up to `n` lines in memory;
+/// designed for the agent's small operational jsonl segments.
+#[cfg(feature = "operator-cli")]
+fn read_last_n_lines(path: &std::path::Path, n: usize) -> std::io::Result<Vec<String>> {
+    use std::collections::VecDeque;
+    use std::io::BufRead;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut buf: VecDeque<String> = VecDeque::with_capacity(n);
+    for line in reader.lines() {
+        let line = line?;
+        if buf.len() == n {
+            buf.pop_front();
+        }
+        buf.push_back(line);
+    }
+    Ok(buf.into_iter().collect())
+}
+
+/// Map an `Evidence` variant to (kind_string, one-line summary) for the
+/// `--pretty` renderer. `kind_string` matches the serde tag of the variant.
+#[cfg(feature = "operator-cli")]
+fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
+    use sigil_core::event::Evidence;
+    match e {
+        Evidence::FileChange { after_hash, .. } => {
+            let s = match after_hash {
+                Some(h) if h.len() >= 12 => {
+                    format!("blake3={}...{}", &h[..8], &h[h.len() - 4..])
+                }
+                Some(h) => format!("blake3={h}"),
+                None => "blake3=(none)".to_string(),
+            };
+            ("file_change", s)
+        }
+        Evidence::Heartbeat {
+            last_applied_policy_version,
+            ..
+        } => (
+            "heartbeat",
+            format!("policy_version={last_applied_policy_version}"),
+        ),
+        Evidence::ChannelStall {
+            block_events_in_window,
+            ..
+        } => ("channel_stall", format!("drops={block_events_in_window}")),
+        Evidence::PermissionMissing { resource, .. } => {
+            ("permission_missing", format!("resource={resource}"))
+        }
+        Evidence::WatcherDegraded { from, to, .. } => ("watcher_degraded", format!("{from}->{to}")),
+        Evidence::AgentDying { reason, .. } => ("agent_dying", format!("{reason:?}")),
+        Evidence::RateLimitExceeded {
+            count_dropped_in_window,
+            ..
+        } => (
+            "rate_limit_exceeded",
+            format!("dropped={count_dropped_in_window}"),
+        ),
+        Evidence::HostIdFingerprintDrift { .. } => ("host_id_fingerprint_drift", String::new()),
+        Evidence::AgentJsonlForceGc {
+            segments_deleted, ..
+        } => (
+            "agent_jsonl_force_gc",
+            format!("deleted={segments_deleted}"),
+        ),
+        Evidence::SenderSkippedSegment { count, .. } => {
+            ("sender_skipped_segment", format!("count={count}"))
+        }
+        Evidence::PolicySignatureInvalid { reason, .. } => {
+            ("policy_signature_invalid", format!("reason={reason:?}"))
+        }
+        Evidence::PolicyReloaded { policy_version } => (
+            "policy_reloaded",
+            format!("policy_version={policy_version}"),
+        ),
+        Evidence::PolicyExpiredActive { policy_version, .. } => (
+            "policy_expired_active",
+            format!("policy_version={policy_version}"),
+        ),
+        Evidence::HostIdConflict { observed_status } => {
+            ("host_id_conflict", format!("status={observed_status}"))
+        }
+        Evidence::AgentTooOld {
+            observed_status, ..
+        } => ("agent_too_old", format!("status={observed_status}")),
+        Evidence::CertExpired { .. } => ("cert_expired", String::new()),
+        Evidence::TlsFailure { reason } => ("tls_failure", format!("reason={reason}")),
+        Evidence::EventUnprocessableLocal { .. } => ("event_unprocessable_local", String::new()),
+        Evidence::ServerProtocolViolation { .. } => ("server_protocol_violation", String::new()),
+        Evidence::SenderLagCritical { lag_events, .. } => {
+            ("sender_lag_critical", format!("events={lag_events}"))
+        }
+    }
+}
+
+/// Render one JSONL line as a tab-separated one-liner: `<ts>\t<severity>\t<subject>\t<kind>\t<summary>`.
+/// Unparseable lines pass through with a `! parse error:` marker plus the first
+/// 80 chars of the offending line.
+#[cfg(feature = "operator-cli")]
+fn format_pretty(line: &str) -> String {
+    let event: sigil_core::event::Event = match serde_json::from_str(line) {
+        Ok(e) => e,
+        Err(e) => {
+            let preview: String = line.chars().take(80).collect();
+            return format!("! parse error: {e}: {preview}");
+        }
+    };
+    let ts = event
+        .ts
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "<bad-ts>".to_string());
+    let severity = match event.severity {
+        sigil_core::event::Severity::Info => "info",
+        sigil_core::event::Severity::Warn => "warn",
+    };
+    let subject = match &event.subject {
+        sigil_core::event::Subject::Path { value } => value.display().to_string(),
+        sigil_core::event::Subject::Self_ => "<self>".to_string(),
+    };
+    let (kind, summary) = evidence_summary(&event.evidence);
+    format!("{ts}\t{severity}\t{subject}\t{kind}\t{summary}")
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -302,5 +619,193 @@ mod tests {
         assert!(String::from_utf8(buf)
             .unwrap()
             .contains("(no active targets)"));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn latest_segment_returns_none_for_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(latest_segment(dir.path()).is_none());
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn latest_segment_picks_lexicographically_largest_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("events-2026-05-12.jsonl"), b"").unwrap();
+        std::fs::write(dir.path().join("events-2026-05-14-001.jsonl"), b"").unwrap();
+        std::fs::write(dir.path().join("events-2026-05-13.jsonl"), b"").unwrap();
+        // Non-matching files are skipped.
+        std::fs::write(dir.path().join("readme.txt"), b"").unwrap();
+        std::fs::write(dir.path().join("events-foo.json"), b"").unwrap();
+        let picked = latest_segment(dir.path()).unwrap();
+        assert_eq!(
+            picked.file_name().unwrap().to_str().unwrap(),
+            "events-2026-05-14-001.jsonl"
+        );
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn latest_segment_returns_none_when_dir_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("definitely-not-here");
+        assert!(latest_segment(&missing).is_none());
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn read_last_n_lines_returns_empty_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no.jsonl");
+        let out = read_last_n_lines(&missing, 5).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn read_last_n_lines_returns_at_most_n() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("e.jsonl");
+        let mut s = String::new();
+        for i in 0..50 {
+            s.push_str(&format!("line-{i}\n"));
+        }
+        std::fs::write(&p, s).unwrap();
+        let out = read_last_n_lines(&p, 5).unwrap();
+        assert_eq!(out.len(), 5);
+        assert_eq!(out[0], "line-45");
+        assert_eq!(out[4], "line-49");
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn read_last_n_lines_handles_no_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("e.jsonl");
+        std::fs::write(&p, "a\nb\nc").unwrap();
+        let out = read_last_n_lines(&p, 10).unwrap();
+        assert_eq!(out, vec!["a", "b", "c"]);
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn read_last_n_lines_n_zero_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("e.jsonl");
+        std::fs::write(&p, "a\nb\n").unwrap();
+        let out = read_last_n_lines(&p, 0).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn format_pretty_renders_file_change_with_blake3_summary() {
+        use sigil_core::event::{
+            Event, Evidence, EvidenceQuality, FileChangeKind, Severity, SourceKind, Subject,
+            SCHEMA_VERSION,
+        };
+        use std::path::PathBuf;
+        use time::OffsetDateTime;
+        let ev = Event {
+            schema_version: SCHEMA_VERSION,
+            event_id: uuid::Uuid::nil(),
+            ts: OffsetDateTime::from_unix_timestamp(1747218181).unwrap(),
+            host_id: "h".into(),
+            agent_version: "0".into(),
+            severity: Severity::Warn,
+            source: SourceKind::FileSystem,
+            subject: Subject::Path {
+                value: PathBuf::from("/etc/shadow"),
+            },
+            evidence: Evidence::FileChange {
+                change_kind: FileChangeKind::Modified,
+                before_hash: None,
+                after_hash: Some(
+                    "ab12345678901234567890123456789012345678901234567890123456cdef1234".into(),
+                ),
+                recheck_hash: None,
+                rename_from: None,
+                size_after: Some(42),
+                evidence_quality: EvidenceQuality::Definitive,
+            },
+            target_id: Some("etc-shadow".into()),
+        };
+        let line = serde_json::to_string(&ev).unwrap();
+        let out = format_pretty(&line);
+        // Tab-separated, 5 columns.
+        let cols: Vec<&str> = out.split('\t').collect();
+        assert_eq!(cols.len(), 5, "expected 5 tab-separated columns: {out}");
+        assert_eq!(cols[1], "warn");
+        assert_eq!(cols[2], "/etc/shadow");
+        assert_eq!(cols[3], "file_change");
+        assert_eq!(cols[4], "blake3=ab123456...1234");
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn format_pretty_renders_heartbeat_with_policy_version() {
+        use sigil_core::event::{Event, Evidence, Severity, SourceKind, Subject, SCHEMA_VERSION};
+        use std::collections::BTreeMap;
+        use time::OffsetDateTime;
+        let ev = Event {
+            schema_version: SCHEMA_VERSION,
+            event_id: uuid::Uuid::nil(),
+            ts: OffsetDateTime::from_unix_timestamp(1747218181).unwrap(),
+            host_id: "h".into(),
+            agent_version: "0".into(),
+            severity: Severity::Info,
+            source: SourceKind::Agent,
+            subject: Subject::Self_,
+            evidence: Evidence::Heartbeat {
+                uptime_s: 0,
+                is_final: false,
+                channel_stall_events_total: 0,
+                events_emitted_total: 0,
+                events_by_kind: BTreeMap::new(),
+                hash_p50_ms: 0,
+                hash_p99_ms: 0,
+                watcher_backend: "fsevents".into(),
+                state_db_size_bytes: 0,
+                last_log_rotation_ts: None,
+                last_applied_policy_version: 7,
+                policy_expired_active: false,
+                jsonl_above_soft_floor: false,
+            },
+            target_id: None,
+        };
+        let line = serde_json::to_string(&ev).unwrap();
+        let out = format_pretty(&line);
+        let cols: Vec<&str> = out.split('\t').collect();
+        assert_eq!(cols.len(), 5);
+        assert_eq!(cols[1], "info");
+        assert_eq!(cols[2], "<self>");
+        assert_eq!(cols[3], "heartbeat");
+        assert_eq!(cols[4], "policy_version=7");
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn format_pretty_passes_through_unparseable_lines_with_marker() {
+        let out = format_pretty("{not json");
+        assert!(
+            out.starts_with("! parse error:"),
+            "expected parse error marker, got: {out}"
+        );
+        assert!(out.contains("{not json"));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn format_pretty_truncates_long_unparseable_preview_to_80() {
+        let long = "X".repeat(200);
+        let out = format_pretty(&long);
+        assert!(out.starts_with("! parse error:"));
+        // 80-char preview boundary somewhere in the output.
+        let preview_chunk_count = out.matches('X').count();
+        assert_eq!(
+            preview_chunk_count, 80,
+            "preview should be truncated to 80 X's, got {preview_chunk_count}"
+        );
     }
 }
