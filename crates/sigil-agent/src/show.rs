@@ -212,6 +212,36 @@ fn latest_segment(events_dir: &std::path::Path) -> Option<PathBuf> {
         .max()
 }
 
+/// Read the last `n` lines from `path`. Returns an empty `Vec` if the file is
+/// missing. Handles files that do not end in a newline (the trailing partial
+/// line is returned as a complete line). Buffers up to `n` lines in memory;
+/// designed for the agent's small operational jsonl segments.
+#[cfg(feature = "operator-cli")]
+// Wired into `show_events` in a later task — keep `dead_code` quiet until then.
+#[allow(dead_code)]
+fn read_last_n_lines(path: &std::path::Path, n: usize) -> std::io::Result<Vec<String>> {
+    use std::collections::VecDeque;
+    use std::io::BufRead;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut buf: VecDeque<String> = VecDeque::with_capacity(n);
+    for line in reader.lines() {
+        let line = line?;
+        if buf.len() == n {
+            buf.pop_front();
+        }
+        buf.push_back(line);
+    }
+    Ok(buf.into_iter().collect())
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -352,5 +382,46 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("definitely-not-here");
         assert!(latest_segment(&missing).is_none());
+    }
+
+    #[test]
+    fn read_last_n_lines_returns_empty_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no.jsonl");
+        let out = read_last_n_lines(&missing, 5).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn read_last_n_lines_returns_at_most_n() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("e.jsonl");
+        let mut s = String::new();
+        for i in 0..50 {
+            s.push_str(&format!("line-{i}\n"));
+        }
+        std::fs::write(&p, s).unwrap();
+        let out = read_last_n_lines(&p, 5).unwrap();
+        assert_eq!(out.len(), 5);
+        assert_eq!(out[0], "line-45");
+        assert_eq!(out[4], "line-49");
+    }
+
+    #[test]
+    fn read_last_n_lines_handles_no_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("e.jsonl");
+        std::fs::write(&p, "a\nb\nc").unwrap();
+        let out = read_last_n_lines(&p, 10).unwrap();
+        assert_eq!(out, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn read_last_n_lines_n_zero_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("e.jsonl");
+        std::fs::write(&p, "a\nb\n").unwrap();
+        let out = read_last_n_lines(&p, 0).unwrap();
+        assert!(out.is_empty());
     }
 }
