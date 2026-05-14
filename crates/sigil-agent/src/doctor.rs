@@ -166,3 +166,74 @@ fn default_state_db_path() -> PathBuf {
         PathBuf::from("/tmp/sigil-state.db")
     }
 }
+
+/// Parse a Unix `/etc/group`-formatted file and return the gid of `name`, if
+/// present. Each line is `name:passwd:gid:userlist`; we tolerate comment and
+/// malformed lines by skipping them. Free function (takes a path) so unit
+/// tests can use a tempfile.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn read_group_gid_from(path: &std::path::Path, name: &str) -> Option<u32> {
+    let text = std::fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.splitn(4, ':');
+        let n = parts.next()?;
+        let _passwd = parts.next()?;
+        let gid = parts.next()?;
+        if n != name {
+            continue;
+        }
+        if let Ok(g) = gid.parse::<u32>() {
+            return Some(g);
+        }
+    }
+    None
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn read_group_gid_returns_some_for_matching_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("group");
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(f, "root:x:0:").unwrap();
+        writeln!(f, "sigil:x:996:").unwrap();
+        writeln!(f, "wheel:x:10:user1,user2").unwrap();
+        assert_eq!(read_group_gid_from(&p, "sigil"), Some(996));
+        assert_eq!(read_group_gid_from(&p, "root"), Some(0));
+    }
+
+    #[test]
+    fn read_group_gid_returns_none_when_name_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("group");
+        std::fs::write(&p, "root:x:0:\n").unwrap();
+        assert_eq!(read_group_gid_from(&p, "sigil"), None);
+    }
+
+    #[test]
+    fn read_group_gid_skips_malformed_and_comment_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("group");
+        std::fs::write(
+            &p,
+            "# comment\nsigil:x:notanumber:\nsigil:x:42:\n",
+        )
+        .unwrap();
+        // Skips the malformed entry and accepts the second `sigil:` line.
+        assert_eq!(read_group_gid_from(&p, "sigil"), Some(42));
+    }
+
+    #[test]
+    fn read_group_gid_returns_none_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_group_gid_from(&dir.path().join("nope"), "sigil"), None);
+    }
+}
