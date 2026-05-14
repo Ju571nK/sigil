@@ -11,6 +11,9 @@ use std::path::PathBuf;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CheckLevel {
     Ok,
+    // `Info` is constructed by `check_control_socket_perms` and
+    // `check_systemd_unit` (Tasks 11/12); silence dead_code in the interim.
+    #[allow(dead_code)]
     Info,
     Warn,
 }
@@ -28,6 +31,9 @@ impl CheckResult {
             message: msg.into(),
         }
     }
+    // `info` is called by check_control_socket_perms / check_systemd_unit
+    // (Tasks 11/12); silence dead_code in the interim.
+    #[allow(dead_code)]
     pub(crate) fn info(msg: impl Into<String>) -> Self {
         Self {
             level: CheckLevel::Info,
