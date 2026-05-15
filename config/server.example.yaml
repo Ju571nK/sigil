@@ -18,10 +18,10 @@ policy_bundle_path: "/var/lib/sigil-server/signed-policy.json"
 # tls_key_path: "/etc/sigil/server.key"
 # client_ca_path: "/etc/sigil/client-ca.pem"
 
-# Optional — restrict accepted host_ids. One UUID per line. Without this,
-# every authenticated client is accepted.
-# host_allowlist_path: "/etc/sigil/host-allowlist.txt"
+# Optional — restrict accepted host_ids. JSON: {"hosts": ["uuid-a", "uuid-b"]}.
+# Without this, every authenticated client is accepted.
+# host_allowlist_path: "/etc/sigil/host-allowlist.json"
 
 # Optional — per-host event-id high-water file (at-least-once dedup). If
-# unset, the server uses its default location under events_out_dir's parent.
+# unset, the server uses <events_out_dir>/.high-water.json.
 # high_water_path: "/var/lib/sigil-server/high_water.json"

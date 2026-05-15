@@ -6,7 +6,7 @@
 # before enabling.
 
 [Unit]
-Description=Sigil OSS reference server — receives posture events over mTLS HTTPS
+Description=Sigil OSS reference server — receives posture events over HTTPS (mTLS when configured)
 Documentation=https://github.com/Ju571nK/sigil
 After=network-online.target
 Wants=network-online.target

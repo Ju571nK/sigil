@@ -50,8 +50,8 @@ priority = "optional"
 depends = "libc6"
 maintainer-scripts = "../../packaging/debian-server"
 extended-description = """\
-Sigil OSS reference server. Receives sigil agent posture events over mTLS \
-HTTPS and writes them to per-host JSONL. Serves signed policy bundles at \
+Sigil OSS reference server. Receives sigil agent posture events over HTTPS \
+(mTLS when configured) and writes them to per-host JSONL. Serves signed policy bundles at \
 GET /v1/policy. Ships a systemd unit (disabled by default — enable with \
 `systemctl enable --now sigil-server`)."""
 assets = [
@@ -69,7 +69,7 @@ start = false
 
 [package.metadata.generate-rpm]
 name = "sigil-server"
-summary = "OSS reference server: receives sigil agent events over mTLS HTTPS"
+summary = "OSS reference server: receives sigil agent events over HTTPS (mTLS when configured)"
 assets = [
     { source = "../../target/release/sigil-server", dest = "/usr/bin/sigil-server", mode = "0755" },
     { source = "../../packaging/systemd/sigil-server.service", dest = "/usr/lib/systemd/system/sigil-server.service", mode = "0644" },
