@@ -38,3 +38,57 @@ tempfile = { workspace = true }
 tower = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true }
+
+# -- OS packages -------------------------------------------------------------
+# Build with `packaging/build.sh server`. See packaging/README.md.
+
+[package.metadata.deb]
+name = "sigil-server"
+maintainer = "Sigil contributors <sigil@users.noreply.github.com>"
+section = "admin"
+priority = "optional"
+depends = "libc6"
+maintainer-scripts = "../../packaging/debian-server"
+extended-description = """\
+Sigil OSS reference server. Receives sigil agent posture events over HTTPS \
+(mTLS when configured) and writes them to per-host JSONL. Serves signed policy bundles at \
+GET /v1/policy. Ships a systemd unit (disabled by default — enable with \
+`systemctl enable --now sigil-server`)."""
+assets = [
+    ["../../target/release/sigil-server", "usr/bin/", "755"],
+    ["../../config/server.example.yaml", "etc/sigil/server.yaml.example", "644"],
+    ["../../README.md", "usr/share/doc/sigil-server/README.md", "644"],
+    ["../../LICENSE", "usr/share/doc/sigil-server/LICENSE", "644"],
+]
+
+[package.metadata.deb.systemd-units]
+unit-scripts = "../../packaging/systemd"
+unit-name = "sigil-server"
+enable = false
+start = false
+
+[package.metadata.generate-rpm]
+name = "sigil-server"
+summary = "OSS reference server: receives sigil agent events over HTTPS (mTLS when configured)"
+assets = [
+    { source = "../../target/release/sigil-server", dest = "/usr/bin/sigil-server", mode = "0755" },
+    { source = "../../packaging/systemd/sigil-server.service", dest = "/usr/lib/systemd/system/sigil-server.service", mode = "0644" },
+    { source = "../../config/server.example.yaml", dest = "/etc/sigil/server.yaml.example", mode = "0644" },
+    { source = "../../README.md", dest = "/usr/share/doc/sigil-server/README.md", mode = "0644", doc = true },
+    { source = "../../LICENSE", dest = "/usr/share/doc/sigil-server/LICENSE", mode = "0644", doc = true },
+]
+post_install_script = """\
+systemctl daemon-reload >/dev/null 2>&1 || :
+"""
+pre_uninstall_script = """\
+if [ "$1" = 0 ] ; then
+    systemctl --no-reload disable --now sigil-server.service >/dev/null 2>&1 || :
+fi
+"""
+post_uninstall_script = """\
+systemctl daemon-reload >/dev/null 2>&1 || :
+if [ "$1" -ge 1 ] ; then
+    systemctl try-restart sigil-server.service >/dev/null 2>&1 || :
+fi
+"""
+

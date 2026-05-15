@@ -70,20 +70,38 @@ jobs:
         run: |
           cargo install cargo-generate-rpm --locked
           packaging/build.sh rpm
-      - name: inspect & install-test .rpm
+      - name: inspect & install-test .rpm (all 4 packages)
         run: |
           set -eux
-          rpm=$(echo target/generate-rpm/*.rpm)
-          rpm -qpi "$rpm"
-          rpm -qpl "$rpm"
-          rpm -qp --scripts "$rpm"
-          rpm -qpl "$rpm" | grep -qx /usr/bin/sigil
-          rpm -qpl "$rpm" | grep -qx /usr/lib/systemd/system/sigil.service
-          # Install for real, run the binary, then remove. (`systemctl` calls in
-          # the scriptlets are `|| :`-guarded, so they're harmless in a container.)
-          rpm -i "$rpm"
-          /usr/bin/sigil version
-          test -f /etc/sigil/policy.yaml.example
-          test -f /usr/lib/systemd/system/sigil.service
-          rpm -e sigil
-          test ! -e /usr/bin/sigil
+          
+          while IFS='|' read -r pkg bin unit example; do
+            rpm=$(echo target/generate-rpm/${pkg}-*.rpm)
+            echo "=== inspecting $rpm ==="
+            rpm -qpi "$rpm"
+            rpm -qpl "$rpm"
+            rpm -qp --scripts "$rpm"
+            rpm -qpl "$rpm" | grep -qx "/usr/bin/${bin}"
+            if [ -n "$unit" ]; then
+              rpm -qpl "$rpm" | grep -qx "/usr/lib/systemd/system/${unit}"
+            fi
+            if [ -n "$example" ]; then
+              rpm -qpl "$rpm" | grep -qx "$example"
+            fi
+            echo "=== installing $rpm ==="
+            rpm -i "$rpm"
+            "/usr/bin/${bin}" --help >/dev/null
+            if [ -n "$unit" ]; then
+              test -f "/usr/lib/systemd/system/${unit}"
+            fi
+            if [ -n "$example" ]; then
+              test -f "$example"
+            fi
+            echo "=== removing $pkg ==="
+            rpm -e "$pkg"
+            test ! -e "/usr/bin/${bin}"
+          done <<-'TABLE'
+          	sigil|sigil|sigil.service|/etc/sigil/policy.yaml.example
+          	sigil-sender|sigil-sender|sigil-sender.service|/etc/sigil/sender.yaml.example
+          	sigil-server|sigil-server|sigil-server.service|/etc/sigil/server.yaml.example
+          	sigil-signer|sigil-sign||
+          	TABLE

@@ -1,0 +1,27 @@
+# Sigil OSS reference server — example config. Copy to /etc/sigil/server.yaml.
+
+# TLS bind address. Use 0.0.0.0 to accept from any interface, 127.0.0.1 to
+# localhost-only (useful behind a reverse proxy).
+bind: "0.0.0.0:8443"
+
+# Per-host events directory root. Each host_id gets a date-rotated jsonl
+# subdir under here.
+events_out_dir: "/var/lib/sigil-server/events"
+
+# Signed policy bundle served at GET /v1/policy. Operators produce this with
+# `sigil-sign sign ...` and place it here.
+policy_bundle_path: "/var/lib/sigil-server/signed-policy.json"
+
+# Optional — mTLS. When all three are set the server requires client certs
+# signed by `client_ca_path`. Without these, mTLS is OFF (development only).
+# tls_cert_path: "/etc/sigil/server.crt"
+# tls_key_path: "/etc/sigil/server.key"
+# client_ca_path: "/etc/sigil/client-ca.pem"
+
+# Optional — restrict accepted host_ids. JSON: {"hosts": ["uuid-a", "uuid-b"]}.
+# Without this, every authenticated client is accepted.
+# host_allowlist_path: "/etc/sigil/host-allowlist.json"
+
+# Optional — per-host event-id high-water file (at-least-once dedup). If
+# unset, the server uses <events_out_dir>/.high-water.json.
+# high_water_path: "/var/lib/sigil-server/high_water.json"

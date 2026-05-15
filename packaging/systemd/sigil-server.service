@@ -1,0 +1,35 @@
+# Sigil OSS reference server — systemd unit (Linux).
+#
+# Installed automatically by the .deb / .rpm packages to
+# /usr/lib/systemd/system/sigil-server.service. Reads its config from
+# /etc/sigil/server.yaml — copy /etc/sigil/server.yaml.example and edit
+# before enabling.
+
+[Unit]
+Description=Sigil OSS reference server — receives posture events over HTTPS (mTLS when configured)
+Documentation=https://github.com/Ju571nK/sigil
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Note: server's --config is subcommand-level (Serve { config }), so it
+# follows the `serve` subcommand. Sender's --config is global (Cli level)
+# so it precedes its `start` subcommand. Both are correct for their CLIs.
+ExecStart=/usr/bin/sigil-server serve --config /etc/sigil/server.yaml
+Restart=on-failure
+RestartSec=5
+User=root
+StateDirectory=sigil-server
+LogsDirectory=sigil-server
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sigil-server /var/log/sigil-server
+ProtectHome=read-only
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

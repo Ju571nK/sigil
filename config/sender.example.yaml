@@ -1,0 +1,30 @@
+# Sigil sender — example config. Copy to /etc/sigil/sender.yaml and edit.
+
+# URL of the sigil-server (HTTPS, port included if non-default).
+server_base_url: "https://sigil.example.com"
+
+# mTLS material. Generated and signed out-of-band; this host's client cert
+# pins its host_id (handed out at provisioning time).
+client_cert_path: "/etc/sigil/client.crt"
+client_key_path: "/etc/sigil/client.key"
+server_ca_path: "/etc/sigil/server-ca.pem"
+
+# Where the agent writes its JSONL posture events. The sender tails this dir
+# and ships unsent records.
+events_dir: "/var/log/sigil/events"
+
+# The sender's durable read-offset checkpoint (atomic-rename writes).
+offset_path: "/var/lib/sigil/sender-offset.json"
+
+# Agent control IPC. Used by the sender to forward apply_policy responses
+# pulled from /v1/policy.
+agent_control: "/var/run/sigil/control.sock"
+
+# Where the sender quarantines events the server permanently rejects (HTTP
+# 4xx that aren't transient). Operator audits these out-of-band.
+dead_letter_dir: "/var/log/sigil/dead-letter"
+
+# Optional overrides — defaults shown.
+# max_batch_events: 256
+# max_batch_bytes: 1048576
+# policy_poll_interval: 300

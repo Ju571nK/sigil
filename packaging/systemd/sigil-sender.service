@@ -1,0 +1,34 @@
+# Sigil sender — systemd unit (Linux).
+#
+# Installed automatically by the .deb / .rpm packages to
+# /usr/lib/systemd/system/sigil-sender.service. Runs the sender daemon that
+# tails the agent's JSONL spool and ships events to a sigil-server over
+# mTLS HTTPS. Reads its config from /etc/sigil/sender.yaml — copy
+# /etc/sigil/sender.yaml.example and edit before enabling.
+
+[Unit]
+Description=Sigil sender — ships JSONL posture events to sigil-server (mTLS)
+Documentation=https://github.com/Ju571nK/sigil
+After=network-online.target sigil.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sigil-sender --config /etc/sigil/sender.yaml start
+Restart=on-failure
+RestartSec=5
+User=root
+StateDirectory=sigil
+LogsDirectory=sigil
+RuntimeDirectory=sigil
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sigil /var/log/sigil /var/run/sigil
+ProtectHome=read-only
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

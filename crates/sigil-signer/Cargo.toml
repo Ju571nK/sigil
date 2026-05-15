@@ -29,3 +29,33 @@ rand_core = { version = "0.6", features = ["std"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+# -- OS packages -------------------------------------------------------------
+# Build with `packaging/build.sh signer`. Operator CLI — no systemd unit,
+# no /etc/sigil config. See packaging/README.md.
+
+[package.metadata.deb]
+name = "sigil-signer"
+maintainer = "Sigil contributors <sigil@users.noreply.github.com>"
+section = "admin"
+priority = "optional"
+depends = "libc6"
+extended-description = """\
+Sigil-signer (binary `sigil-sign`). Operator CLI: generate ed25519 keypairs, \
+sign policy bundles for distribution, verify signatures, inspect signed \
+envelopes. Used to produce the signed_envelope payloads that sigil-server \
+hands to sigil-sender."""
+assets = [
+    ["../../target/release/sigil-sign", "usr/bin/", "755"],
+    ["../../README.md", "usr/share/doc/sigil-signer/README.md", "644"],
+    ["../../LICENSE", "usr/share/doc/sigil-signer/LICENSE", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "sigil-signer"
+summary = "Operator CLI: keygen / sign / verify / inspect for sigil signed policy envelopes"
+assets = [
+    { source = "../../target/release/sigil-sign", dest = "/usr/bin/sigil-sign", mode = "0755" },
+    { source = "../../README.md", dest = "/usr/share/doc/sigil-signer/README.md", mode = "0644", doc = true },
+    { source = "../../LICENSE", dest = "/usr/share/doc/sigil-signer/LICENSE", mode = "0644", doc = true },
+]

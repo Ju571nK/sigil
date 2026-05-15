@@ -38,3 +38,62 @@ urlencoding = { workspace = true }
 tempfile = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
+
+# -- OS packages -------------------------------------------------------------
+# Build with `packaging/build.sh sender` (needs `cargo install cargo-deb
+# cargo-generate-rpm`). Source paths below are relative to THIS file's
+# directory (crates/sigil-sender/), so the build script runs the packagers
+# from here. See packaging/README.md.
+
+# .deb (Debian/Ubuntu) — `cargo deb --no-build`
+[package.metadata.deb]
+name = "sigil-sender"
+maintainer = "Sigil contributors <sigil@users.noreply.github.com>"
+section = "admin"
+priority = "optional"
+depends = "libc6"
+maintainer-scripts = "../../packaging/debian-sender"
+extended-description = """\
+Sigil sender. Reads the agent's local JSONL spool and ships posture events \
+to a sigil-server over mTLS HTTPS. Pulls signed policy bundles back over \
+the same channel and hands them to the agent via control IPC. Ships a \
+systemd unit (disabled by default — enable with \
+`systemctl enable --now sigil-sender`)."""
+assets = [
+    ["../../target/release/sigil-sender", "usr/bin/", "755"],
+    ["../../config/sender.example.yaml", "etc/sigil/sender.yaml.example", "644"],
+    ["../../README.md", "usr/share/doc/sigil-sender/README.md", "644"],
+    ["../../LICENSE", "usr/share/doc/sigil-sender/LICENSE", "644"],
+]
+
+[package.metadata.deb.systemd-units]
+unit-scripts = "../../packaging/systemd"
+unit-name = "sigil-sender"
+enable = false
+start = false
+
+# .rpm (RHEL/Rocky/Fedora) — `cargo generate-rpm`
+[package.metadata.generate-rpm]
+name = "sigil-sender"
+summary = "Ships sigil agent posture events to a sigil-server over mTLS"
+assets = [
+    { source = "../../target/release/sigil-sender", dest = "/usr/bin/sigil-sender", mode = "0755" },
+    { source = "../../packaging/systemd/sigil-sender.service", dest = "/usr/lib/systemd/system/sigil-sender.service", mode = "0644" },
+    { source = "../../config/sender.example.yaml", dest = "/etc/sigil/sender.yaml.example", mode = "0644" },
+    { source = "../../README.md", dest = "/usr/share/doc/sigil-sender/README.md", mode = "0644", doc = true },
+    { source = "../../LICENSE", dest = "/usr/share/doc/sigil-sender/LICENSE", mode = "0644", doc = true },
+]
+post_install_script = """\
+systemctl daemon-reload >/dev/null 2>&1 || :
+"""
+pre_uninstall_script = """\
+if [ "$1" = 0 ] ; then
+    systemctl --no-reload disable --now sigil-sender.service >/dev/null 2>&1 || :
+fi
+"""
+post_uninstall_script = """\
+systemctl daemon-reload >/dev/null 2>&1 || :
+if [ "$1" -ge 1 ] ; then
+    systemctl try-restart sigil-sender.service >/dev/null 2>&1 || :
+fi
+"""
