@@ -1,18 +1,18 @@
 # OS packages
 
-The Sigil **agent** (the `sigil` binary + its systemd unit) ships as a `.deb`
-and a `.rpm`. The sender / signer / server are not packaged yet.
+Sigil ships four `.deb` / `.rpm` packages — one per binary crate. They install
+the binary, optional systemd unit, and example config to standard FHS paths.
 
-## What's in the package
+## What's in each package
 
-| Path | Source |
-| --- | --- |
-| `/usr/bin/sigil` | the release binary |
-| `/usr/lib/systemd/system/sigil.service` | [`packaging/systemd/sigil.service`](systemd/sigil.service) |
-| `/etc/sigil/policy.yaml.example` | [`config/policy.example.yaml`](../config/policy.example.yaml) |
-| `/usr/share/doc/sigil/README.md`, `LICENSE` | repo docs |
+| Package | Binary | Systemd unit | Example config |
+| --- | --- | --- | --- |
+| `sigil` | `/usr/bin/sigil` | `sigil.service` | `/etc/sigil/policy.yaml.example` |
+| `sigil-sender` | `/usr/bin/sigil-sender` | `sigil-sender.service` | `/etc/sigil/sender.yaml.example` |
+| `sigil-server` | `/usr/bin/sigil-server` | `sigil-server.service` | `/etc/sigil/server.yaml.example` |
+| `sigil-signer` | `/usr/bin/sigil-sign` | — | — |
 
-The systemd unit is installed **disabled**. Nothing starts on install — the
+All systemd units are installed **disabled**. Nothing starts on install — the
 operator decides.
 
 ## Building
@@ -20,54 +20,80 @@ operator decides.
 Pure-Rust packagers, so this runs on macOS or Linux:
 
 ```sh
-cargo install cargo-deb cargo-generate-rpm   # one-time
-packaging/build.sh                            # → target/debian/*.deb, target/generate-rpm/*.rpm
+cargo install cargo-deb cargo-generate-rpm     # one-time
+packaging/build.sh                              # build all 4 packages, both formats
+packaging/build.sh sender                       # only sigil-sender, both formats
+packaging/build.sh signer rpm                   # only sigil-signer .rpm
+packaging/build.sh deb                          # all 4 packages, .deb only
 ```
 
-`packaging/build.sh deb` / `packaging/build.sh rpm` build just one.
+Args (any order, both optional):
+
+| Arg | Values | Default |
+| --- | --- | --- |
+| `<what>` | `agent`, `sender`, `server`, `signer`, `all` | `all` |
+| `<format>` | `deb`, `rpm`, `all` | `all` |
 
 **Build a release package on Linux** (or cross-compile) — the packagers just
-bundle whatever is at `target/release/sigil`, so a package built on macOS
-contains a macOS binary. CI builds and install-tests the `.rpm` on the
-`rocky9` job (`rpm -qpl`, `rpm -i`, `sigil version`, `rpm -e`); the `.deb`
-is not built in CI.
+bundle whatever is at `target/release/<bin>`, so a package built on macOS
+contains a macOS binary. CI builds and install-tests all 4 `.rpm`s on the
+`rocky9` job (`rpm -qpl`, `rpm -i`, `<bin> --help`, `rpm -e`); the `.deb`s
+are not built in CI.
 
 The metadata lives in `[package.metadata.deb]` / `[package.metadata.generate-rpm]`
-in [`crates/sigil-agent/Cargo.toml`](../crates/sigil-agent/Cargo.toml); the deb
-maintainer-script skeletons are in [`packaging/debian/`](debian/).
+in each crate's `Cargo.toml`; the deb maintainer-script skeletons are in
+[`packaging/debian/`](debian/) (agent), [`packaging/debian-sender/`](debian-sender/),
+and [`packaging/debian-server/`](debian-server/). `sigil-signer` has no skeleton
+dir — operator CLI, no systemd integration.
 
 ## Installing
 
 The filenames embed the version and host arch — adjust to match what
-`packaging/build.sh` printed (e.g. `sigil-0.1.0-1.x86_64.rpm`,
-`sigil_0.1.0-1_amd64.deb`):
+`packaging/build.sh` printed (e.g. `sigil-sender-0.1.0-1.x86_64.rpm`,
+`sigil-sender_0.1.0-1_amd64.deb`):
 
 ```sh
 # RHEL / Rocky / Fedora
-sudo dnf install ./target/generate-rpm/sigil-*.rpm
+sudo dnf install ./target/generate-rpm/sigil-sender-*.rpm
 
 # Debian / Ubuntu
-sudo apt install ./target/debian/sigil_*.deb
+sudo apt install ./target/debian/sigil-sender_*.deb
 ```
 
-Then, optionally, drop a policy in place and start it:
+Then for the daemons (sender, server), drop a config in place and start it:
 
 ```sh
-sudo cp /etc/sigil/policy.yaml.example /etc/sigil/policy.yaml
-sudo $EDITOR /etc/sigil/policy.yaml          # or skip — built-in defaults apply if absent
-sudo systemctl enable --now sigil
-sigil doctor                                  # check coverage / privileges
-journalctl -u sigil -f                        # watch it run
+# sender
+sudo cp /etc/sigil/sender.yaml.example /etc/sigil/sender.yaml
+sudo $EDITOR /etc/sigil/sender.yaml
+sudo systemctl enable --now sigil-sender
+journalctl -u sigil-sender -f
+
+# server
+sudo cp /etc/sigil/server.yaml.example /etc/sigil/server.yaml
+sudo $EDITOR /etc/sigil/server.yaml
+sudo systemctl enable --now sigil-server
+journalctl -u sigil-server -f
 ```
 
-Events land in `/var/log/sigil/events-*.jsonl` — point your SIEM agent there.
+`sigil-signer` is a one-shot operator CLI — no service to start:
+
+```sh
+sigil-sign keygen --id ops-2026 --out /etc/sigil/signing-key.json
+sigil-sign sign --key /etc/sigil/signing-key.json --in policy.yaml --out signed-policy.json
+sigil-sign verify --pubkey /etc/sigil/signing-pubkey.json --in signed-policy.json
+```
 
 ## Uninstalling
 
 ```sh
-sudo dnf remove sigil     # or: sudo apt remove sigil
+sudo dnf remove sigil-sender         # or: sudo apt remove sigil-sender
+sudo dnf remove sigil-server         # etc.
+sudo dnf remove sigil-signer
+sudo dnf remove sigil
 ```
 
-The package scripts stop & disable the unit on removal. State under
-`/var/lib/sigil` and logs under `/var/log/sigil` are left in place — remove
-them by hand if you want a clean slate.
+Daemon package scripts stop & disable the unit on removal. State under
+`/var/lib/sigil` (agent, sender) and `/var/lib/sigil-server` (server) plus
+logs under `/var/log/sigil` and `/var/log/sigil-server` are left in place —
+remove them by hand if you want a clean slate.
