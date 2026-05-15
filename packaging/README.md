@@ -32,7 +32,7 @@ Args (any order, both optional):
 | Arg | Values | Default |
 | --- | --- | --- |
 | `<what>` | `agent`, `sender`, `server`, `signer`, `all` | `all` |
-| `<format>` | `deb`, `rpm`, `all` | `all` |
+| `<format>` | `deb`, `rpm` | both formats |
 
 **Build a release package on Linux** (or cross-compile) — the packagers just
 bundle whatever is at `target/release/<bin>`, so a package built on macOS
@@ -60,9 +60,14 @@ sudo dnf install ./target/generate-rpm/sigil-sender-*.rpm
 sudo apt install ./target/debian/sigil-sender_*.deb
 ```
 
-Then for the daemons (sender, server), drop a config in place and start it:
+Then for any of the three daemons, drop a config in place and start it. Agent first (defaults work without a config), then sender / server which need TLS materials:
 
 ```sh
+# agent
+sudo cp /etc/sigil/policy.yaml.example /etc/sigil/policy.yaml   # optional — defaults apply if absent
+sudo systemctl enable --now sigil
+journalctl -u sigil -f
+
 # sender
 sudo cp /etc/sigil/sender.yaml.example /etc/sigil/sender.yaml
 sudo $EDITOR /etc/sigil/sender.yaml
@@ -79,9 +84,15 @@ journalctl -u sigil-server -f
 `sigil-signer` is a one-shot operator CLI — no service to start:
 
 ```sh
-sigil-sign keygen --id ops-2026 --out /etc/sigil/signing-key.json
-sigil-sign sign --key /etc/sigil/signing-key.json --in policy.yaml --out signed-policy.json
-sigil-sign verify --pubkey /etc/sigil/signing-pubkey.json --in signed-policy.json
+# Keypair goes wherever you want — the signer package doesn't create /etc/sigil/.
+sigil-sign keygen --id ops-2026 --out ./signing-key.json
+sigil-sign sign \
+    --in policy.yaml --key ./signing-key.json \
+    --policy-version 1 --valid-until 2026-06-15T00:00:00Z \
+    --out signed-policy.json
+sigil-sign verify \
+    --keystore /etc/sigil/policy-signing-pubkeys.pem \
+    --in signed-policy.json
 ```
 
 ## Uninstalling
@@ -94,6 +105,6 @@ sudo dnf remove sigil
 ```
 
 Daemon package scripts stop & disable the unit on removal. State under
-`/var/lib/sigil` (agent, sender) and `/var/lib/sigil-server` (server) plus
-logs under `/var/log/sigil` and `/var/log/sigil-server` are left in place —
-remove them by hand if you want a clean slate.
+`/var/lib/sigil` (agent, sender) and `/var/lib/sigil-server` (server, events
+also land here) plus logs under `/var/log/sigil` (agent events) are left in
+place — remove them by hand if you want a clean slate.
