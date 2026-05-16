@@ -6,8 +6,10 @@ use std::sync::OnceLock;
 
 /// CVSS-style cap.
 const SCORE_MAX: f32 = 10.0;
-/// Each repeat of the same reason kind adds +25% of the base weight.
-const INCREMENTAL_DISCOUNT: f32 = 0.25;
+/// Each additional occurrence of the same reason kind adds this fraction of
+/// the base weight (the second is `+25%`, third `+50%`, etc.). Surcharge,
+/// not discount — repeats make the score worse, not better.
+const REPEAT_WEIGHT_STEP: f32 = 0.25;
 
 /// Returns the rubric weight for one occurrence of `reason`.
 /// `BroadMatcher` weights branch on `hook_event` (PreToolUse vs other).
@@ -56,7 +58,7 @@ pub fn score(reasons: &[AiGuardReason]) -> f32 {
     for (_kind, group) in by_kind {
         let base = weight_for(group[0]);
         for (i, _r) in group.iter().enumerate() {
-            total += base * (1.0 + INCREMENTAL_DISCOUNT * (i as f32));
+            total += base * (1.0 + REPEAT_WEIGHT_STEP * (i as f32));
         }
     }
     total.min(SCORE_MAX)
@@ -121,11 +123,11 @@ pub fn first_destructive_pattern(cmd: &str) -> Option<&'static str> {
 /// difference) produces a different hash.
 ///
 /// Definition (spec §canonical_hash):
-/// 1. For each reason, build a `(kind_str, payload_json_sorted)` tuple where
-///    `kind_str` is the snake_case discriminant and `payload_json_sorted` is
-///    the inner fields serialized via serde_json (which uses field-declaration
-///    order — stable per build).
-/// 2. Sort the tuples lexicographically by `(kind_str, payload_json_sorted)`.
+/// 1. For each reason, build a `(kind_str, payload_json)` tuple where
+///    `kind_str` is the snake_case discriminant and `payload_json` is the
+///    full serde_json serialization (which includes the kind tag plus all
+///    fields, in field-declaration order — stable per build).
+/// 2. Sort the tuples lexicographically by `(kind_str, payload_json)`.
 /// 3. Serialize the sorted Vec to a JSON string.
 /// 4. Hash the string with blake3 → 32-byte digest.
 pub fn canonical_hash(reasons: &[AiGuardReason]) -> [u8; 32] {
@@ -187,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn two_destructive_inline_apply_25_percent_incremental_discount() {
+    fn two_destructive_inline_second_occurrence_scores_higher() {
         let reasons = vec![
             AiGuardReason::DestructiveInInlineCommand {
                 pattern: "rm -rf".into(),
@@ -255,9 +257,23 @@ mod tests {
     }
 
     #[test]
-    fn destructive_pattern_does_not_match_safe_rm_rf_subdirs() {
+    fn rm_without_rf_flag_is_not_destructive() {
+        // Plain `rm` (no -rf) and unrelated commands must not match.
         assert!(!is_destructive("rm /tmp/foo"));
         assert!(!is_destructive("ls -la"));
+    }
+
+    #[test]
+    fn rm_rf_on_subdirectory_is_flagged_intentionally() {
+        // The pattern `rm\s+-[rR][fF]\s+/(?:[^*]|$)` matches `rm -rf /<x>`
+        // for any first char x other than `*`. This is intentional per spec
+        // (Phase 3b.1: prefer false positives — Sigil measures, does not block).
+        // Operators reading the SIEM see "rm -rf /tmp/foo" flagged and decide.
+        assert!(is_destructive("rm -rf /tmp/foo"));
+        assert!(is_destructive("rm -rf /var/cache"));
+        // Negative case: a literal star/glob immediately after `/` does NOT
+        // hit this pattern (the regex's `[^*]` excludes the `rm -rf /*` case).
+        assert!(!is_destructive("rm -rf /*"));
     }
 
     #[test]

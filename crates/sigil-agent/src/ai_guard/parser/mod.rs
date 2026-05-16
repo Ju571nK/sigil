@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 
 /// Per-tool guard-surface reader.
 pub trait AiGuardParser: Send + Sync {
+    /// Returns the tool identity this parser covers. Used by `ai_guard_task`
+    /// to dispatch file_change events to the right parser and to tag the
+    /// emitted `AiGuardRiskAssessed` events.
     fn tool(&self) -> AiTool;
 
     /// Path globs (canonical/expanded) the parser cares about. Used by
