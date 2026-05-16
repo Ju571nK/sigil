@@ -30,3 +30,23 @@ targets:
       - "%LOCALAPPDATA%\\Programs\\*\\*.exe"
     recursive: false
     follow_symlinks: false
+
+  - id: ai-guard-claude-code-user-global-windows
+    description: Claude Code CLI user-global guard surface (settings + hooks)
+    tier: critical
+    platform: windows
+    paths:
+      - "%USERPROFILE%\\.claude\\settings.json"
+      - "%USERPROFILE%\\.claude\\settings.local.json"
+      - "%USERPROFILE%\\.claude\\hooks\\"
+    recursive: true
+    follow_symlinks: false
+
+  - id: ai-guard-codex-user-global-windows
+    description: Codex CLI user-global config
+    tier: critical
+    platform: windows
+    paths:
+      - "%USERPROFILE%\\.codex\\config.toml"
+    recursive: false
+    follow_symlinks: false

@@ -62,3 +62,23 @@ targets:
       - "~/.config/systemd/user/*.service"
     recursive: false
     follow_symlinks: false
+
+  - id: ai-guard-claude-code-user-global
+    description: Claude Code CLI user-global guard surface (settings + hooks)
+    tier: critical
+    platform: any
+    paths:
+      - "~/.claude/settings.json"
+      - "~/.claude/settings.local.json"
+      - "~/.claude/hooks/"
+    recursive: true
+    follow_symlinks: false
+
+  - id: ai-guard-codex-user-global
+    description: Codex CLI user-global config
+    tier: critical
+    platform: any
+    paths:
+      - "~/.codex/config.toml"
+    recursive: false
+    follow_symlinks: false
