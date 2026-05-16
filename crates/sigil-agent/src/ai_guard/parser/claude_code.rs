@@ -134,12 +134,19 @@ fn classify_command(
     out: &mut Vec<AiGuardReason>,
 ) -> Result<(), AssessError> {
     // First token whitespace-separated. Treat as path candidate iff it looks
-    // path-like (starts with /, ~, or contains a directory separator) AND does
-    // NOT contain shell metacharacters in the first token.
+    // path-like cross-platform (Unix absolute / tilde / any separator, OR a
+    // Windows absolute path like `C:\...` which `Path::is_absolute()` catches,
+    // OR contains a backslash). Exclude shell metacharacters so things like
+    // `./foo | bash` stay classified as inline. Issue #15 — Windows hook
+    // commands like `C:\Users\alice\.claude\hooks\pre.sh` were previously
+    // misclassified as inline because the original check only looked for `/`.
     let first_token = cmd.split_whitespace().next().unwrap_or("");
-    let looks_pathish = first_token.starts_with('/')
-        || first_token.starts_with('~')
-        || (first_token.contains('/') && !first_token.contains('|') && !first_token.contains('&'));
+    let has_shell_meta = first_token.contains('|') || first_token.contains('&');
+    let looks_pathish = !has_shell_meta
+        && (std::path::Path::new(first_token).is_absolute()
+            || first_token.starts_with('~')
+            || first_token.contains('/')
+            || first_token.contains('\\'));
 
     if looks_pathish {
         let candidate = std::path::PathBuf::from(first_token);
@@ -586,6 +593,59 @@ mod tests {
                 .iter()
                 .any(|r| matches!(r, AiGuardReason::PermissionsDenyEmpty)),
             "overlay's empty deny should produce PermissionsDenyEmpty in {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn windows_style_backslash_path_is_classified_as_path_like() {
+        // Regression test for issue #15: hook commands whose first token is a
+        // Windows-style backslash path (e.g., `C:\Users\alice\.claude\hooks\pre.sh`)
+        // must be classified as path-like so they go through the external-
+        // script or convention-dir branch — NOT scanned as an inline command.
+        //
+        // Previously `looks_pathish` only checked for `/` and missed Windows
+        // separators, so Windows hook scripts were silently never read.
+        //
+        // On a Unix test box, the backslash path doesn't exist as a real file
+        // and won't canonicalize inside the tempdir's `hooks` dir. The
+        // post-fix behavior is that it gets classified as an external script
+        // (ExternalScriptUnscanned), proving the path-detection branch fired
+        // rather than the inline branch.
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{
+              "hooks": {
+                "PreToolUse": [
+                  {"matcher": "Bash", "hooks": [
+                    {"type": "command", "command": "C:\\Users\\alice\\.claude\\hooks\\pre.sh"}
+                  ]}
+                ]
+              }
+            }"#,
+        );
+        let p = ClaudeCodeParser;
+        let reasons = p.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::ExternalScriptUnscanned { script_path, .. }
+                    if script_path.to_string_lossy().contains("Users")
+                        && script_path.to_string_lossy().contains("pre.sh")
+            )),
+            "Windows-style backslash path must be classified as path-like \
+             (and emit ExternalScriptUnscanned when outside the convention dir). \
+             Got: {reasons:?}"
+        );
+        // Conversely, the path must NOT have been treated as inline shell —
+        // a Windows path string contains no destructive regex matches, but if
+        // the inline branch fired we'd be silently dropping the scan instead
+        // of emitting the marker.
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::DestructiveInInlineCommand { .. })),
+            "Windows-style path must not be inline-scanned: {reasons:?}"
         );
     }
 }
