@@ -1,10 +1,16 @@
 //! Phase 3b.1 — ai_guard_task orchestration.
 //!
 //! Trigger model:
-//! - Boot: every parser runs once, force-emit even if score is 0.
-//! - File change: hasher broadcasts each canonical path; matching parser
-//!   re-evaluates and emits only if `canonical_hash(reasons)` changed.
-//! - Heartbeat (24h): every parser re-evaluates and force-emits.
+//! - **Boot**: every parser runs once, force-emit even if score is 0.
+//! - **File change**: hasher broadcasts each canonical path it just hashed;
+//!   matching parser re-evaluates and emits only if `canonical_hash(reasons)`
+//!   changed. NOTE: the hasher only emits paths it processed, which means
+//!   only paths covered by an active policy target. The baseline OSS policy
+//!   (sigil-rules-basic) includes `~/.claude/` and `~/.codex/`, so this
+//!   trigger works out-of-box. If an operator removes those targets from
+//!   their custom policy, this task falls back to heartbeat-only.
+//! - **Heartbeat** (24h): every parser re-evaluates and force-emits. Provides
+//!   liveness regardless of whether file-change events flow.
 
 use crate::ai_guard::parser::AiGuardParser;
 use crate::ai_guard::rubric;
@@ -21,8 +27,14 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc};
 
+/// Shared state map keyed by `(tool, scope)`. Persists between calls so
+/// `eval_and_maybe_emit` can deduplicate identical reason sets across
+/// triggers. Read by the operator IPC handler (Task 7) for `sigil show risk`.
 pub type StateMap = HashMap<(AiTool, AiGuardScope), CachedAssessment>;
 
+/// One parser's last emitted state, kept in `StateMap` for change-detection
+/// and IPC introspection. The `reasons_blake3` field is what
+/// `eval_and_maybe_emit` compares against to decide whether to emit.
 #[derive(Clone, Debug)]
 pub struct CachedAssessment {
     pub score: f32,
@@ -31,6 +43,8 @@ pub struct CachedAssessment {
     pub last_assessed_ts: OffsetDateTime,
 }
 
+/// Bundle of shared dependencies the task needs at construction. Built once
+/// in `runtime::run` and consumed by `ai_guard::task::run`.
 pub struct TaskCtx {
     pub parsers: Vec<Box<dyn AiGuardParser>>,
     pub fc_rx: broadcast::Receiver<PathBuf>,
@@ -41,6 +55,8 @@ pub struct TaskCtx {
     pub host_id: String,
 }
 
+/// Main task loop. Boots, then selects between file-change broadcasts and
+/// the heartbeat tick until the broadcast sender is dropped (shutdown).
 pub async fn run(mut ctx: TaskCtx) {
     // 1. Initial scan on boot.
     for parser in &ctx.parsers {
@@ -85,6 +101,15 @@ pub async fn run(mut ctx: TaskCtx) {
 
 /// Match an incoming change path against a watched path/dir. A watched dir
 /// matches any path inside it; a watched file matches by exact equality.
+///
+/// Assumes both `incoming` and `watched` are already canonical. Incoming
+/// paths come from the hasher, which receives them post-`dunce::canonicalize`
+/// from the normalizer. Watched paths come from each parser's
+/// `watched_paths(home_dir)`, which uses raw `home_dir.join(...)` — no
+/// explicit canonicalization. On standard macOS / Linux the user's HOME is
+/// canonical, so this assumption holds. If a future deployment uses a
+/// symlinked HOME (rare), file-change triggers may fail to match silently
+/// and the 24h heartbeat will still keep the assessment live.
 fn path_matches(incoming: &std::path::Path, watched: &std::path::Path) -> bool {
     if incoming == watched {
         return true;
@@ -145,7 +170,7 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
         },
         target_id: None,
     };
-    let _ = ctx
+    if ctx
         .event_tx
         .send(CommittableEvent {
             event,
@@ -153,7 +178,11 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
             path_for_db: PathBuf::new(),
             target_id: String::new(),
         })
-        .await;
+        .await
+        .is_err()
+    {
+        tracing::debug!(tool = ?key.0, "ai_guard event_tx send failed (sink closed during shutdown?)");
+    }
 }
 
 #[cfg(test)]
@@ -360,6 +389,36 @@ mod tests {
         tokio::time::advance(Duration::from_millis(10)).await;
         let attempt = tokio::time::timeout(Duration::from_millis(50), events.recv()).await;
         assert!(attempt.is_err(), "errored parser should not emit");
+        h.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn heartbeat_with_changed_reasons_emits_is_reattestation_false() {
+        let (_tx, fc_rx) = broadcast::channel(8);
+        let parser = ScriptedParser {
+            tool: AiTool::ClaudeCode,
+            scripts: StdMutex::new(vec![
+                vec![AiGuardReason::PermissionsDenyEmpty], // boot
+                vec![AiGuardReason::SandboxDisabled],      // heartbeat — different
+            ]),
+            watched: vec![PathBuf::from("/tmp/test-home/.claude/settings.json")],
+        };
+        let (ctx, mut events) = ctx_with(parser, fc_rx, Duration::from_millis(100));
+        let h = tokio::spawn(run(ctx));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(10)).await;
+        let _boot = events.recv().await.expect("boot event");
+        tokio::time::advance(Duration::from_millis(150)).await;
+        let ev = events.recv().await.expect("heartbeat event");
+        match ev.event.evidence {
+            Evidence::AiGuardRiskAssessed {
+                is_reattestation, ..
+            } => assert!(
+                !is_reattestation,
+                "heartbeat with CHANGED reasons must NOT be reattestation"
+            ),
+            other => panic!("got {other:?}"),
+        }
         h.abort();
     }
 }

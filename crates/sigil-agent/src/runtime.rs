@@ -294,6 +294,12 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     );
 
     // Phase 3b.1 — AI Guard Risk Index broadcast + shared state.
+    // _ai_guard_fc_rx_init is held alive (named with underscore prefix to
+    // suppress unused warnings) so that broadcast::Sender::send() doesn't
+    // return SendError(no receivers) during the brief window between hasher
+    // startup and ai_guard_task subscribing below. Once ai_guard_task calls
+    // ai_guard_fc_tx.subscribe(), this initial receiver becomes redundant
+    // but harmless — broadcast overwrites old slots without blocking.
     let (ai_guard_fc_tx, _ai_guard_fc_rx_init) =
         tokio::sync::broadcast::channel::<std::path::PathBuf>(256);
     let ai_guard_state: Arc<parking_lot::RwLock<crate::ai_guard::StateMap>> =

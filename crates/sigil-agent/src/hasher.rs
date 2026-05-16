@@ -27,7 +27,6 @@ pub async fn run(
     ai_guard_tx: Option<tokio::sync::broadcast::Sender<std::path::PathBuf>>,
 ) {
     while let Some(pending) = rx.recv().await {
-        let pending_path = pending.path.clone();
         let path = pending.path.clone();
         let started = Instant::now();
         let outcome = tokio::task::spawn_blocking(move || hash_path(&path)).await;
@@ -70,6 +69,7 @@ pub async fn run(
             None
         };
 
+        let ag_path = ai_guard_tx.as_ref().map(|_| pending.path.clone());
         let _ = tx
             .send(HashedEvent {
                 norm,
@@ -80,9 +80,9 @@ pub async fn run(
                 debounced_from: Some(pending),
             })
             .await;
-        if let Some(ref ag_tx) = ai_guard_tx {
+        if let (Some(ag_tx), Some(p)) = (&ai_guard_tx, ag_path) {
             // Broadcast best-effort; lagged receivers will catch up via heartbeat.
-            let _ = ag_tx.send(pending_path.clone());
+            let _ = ag_tx.send(p);
         }
     }
 }
