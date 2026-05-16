@@ -86,6 +86,8 @@ pub enum PolicySignatureInvalidReason {
 }
 
 /// Phase 3b.1 — which AI coding agent is being assessed.
+/// Stable wire strings — operators filter by these in the SIEM, so renames are
+/// breaking changes.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AiTool {
@@ -104,6 +106,8 @@ pub enum AiGuardScope {
 }
 
 /// Phase 3b.1 — auto-derived from `score`. low <1 / medium <4 / high <7 / critical 7+.
+/// Stable wire strings — operators filter by these in the SIEM, so renames are
+/// breaking changes.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AiGuardBucket {
@@ -114,6 +118,8 @@ pub enum AiGuardBucket {
 }
 
 /// Phase 3b.1 — one finding inside an `AiGuardRiskAssessed` event.
+/// Stable wire strings — operators filter by these in the SIEM, so renames are
+/// breaking changes.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AiGuardReason {
@@ -145,7 +151,9 @@ pub enum AiGuardReason {
     PermissionsDenyEmpty,
     /// Permission allow includes a wildcard rule.
     PermissionsAllowBroad { rule: String },
-    /// Codex sandbox explicitly disabled.
+    /// Codex `sandbox` explicitly disabled (`mode = "disabled"` or equivalent).
+    /// Codex-only reason — Claude Code uses `NoSandbox{executor:"host_shell"}`
+    /// instead, since Claude has no sandbox concept.
     SandboxDisabled,
     /// MCP server pointing at a remote URL was added.
     McpServerRemote { server_name: String, url: String },
@@ -665,6 +673,26 @@ mod tests {
         let j = serde_json::to_string(&r).unwrap();
         assert!(j.contains("\"kind\":\"external_script_unscanned\""));
         assert!(j.contains("\"script_path\":\"/usr/local/bin/foo.sh\""));
+        let back: AiGuardReason = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn ai_guard_risk_assessed_clean_assessment_empty_reasons_round_trips() {
+        let ev = Evidence::AiGuardRiskAssessed {
+            tool: AiTool::Codex,
+            scope: AiGuardScope::UserGlobal,
+            score: 0.0,
+            bucket: AiGuardBucket::Low,
+            reasons: vec![],
+            is_reattestation: false,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"reasons\":[]"), "got: {s}");
+        assert!(s.contains("\"bucket\":\"low\""));
+        assert!(s.contains("\"tool\":\"codex\""));
+        let back: Evidence = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, ev);
     }
 
     #[test]
