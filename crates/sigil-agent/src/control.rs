@@ -523,4 +523,62 @@ mod tests {
         let back: Request = serde_json::from_str(&s).unwrap();
         assert!(matches!(back, Request::ReloadPolicy));
     }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn request_risk_round_trips_no_filter() {
+        let req = Request::Risk { tool: None };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"cmd\":\"risk\""), "got: {s}");
+        let back: Request = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, Request::Risk { tool: None }));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn request_risk_round_trips_with_tool_filter() {
+        let req = Request::Risk {
+            tool: Some(sigil_core::event::AiTool::ClaudeCode),
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"tool\":\"claude_code\""), "got: {s}");
+        let back: Request = serde_json::from_str(&s).unwrap();
+        assert!(matches!(
+            back,
+            Request::Risk {
+                tool: Some(sigil_core::event::AiTool::ClaudeCode)
+            }
+        ));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn response_with_risk_payload_round_trips() {
+        use sigil_core::event::{AiGuardBucket, AiGuardScope, AiTool};
+        let resp = Response {
+            ok: true,
+            stats: None,
+            apply_policy: None,
+            policy_status: None,
+            targets: None,
+            risk: Some(RiskPayload {
+                assessments: vec![RiskSummary {
+                    tool: AiTool::Codex,
+                    scope: AiGuardScope::UserGlobal,
+                    score: 2.0,
+                    bucket: AiGuardBucket::Medium,
+                    reasons_count: 1,
+                    last_assessed_ts: "2026-05-16T06:00:00Z".into(),
+                }],
+            }),
+            error: None,
+        };
+        let s = serde_json::to_string(&resp).unwrap();
+        assert!(s.contains("\"risk\""));
+        assert!(s.contains("\"tool\":\"codex\""));
+        assert!(s.contains("\"bucket\":\"medium\""));
+        let back: Response = serde_json::from_str(&s).unwrap();
+        assert!(back.risk.is_some());
+        assert_eq!(back.risk.as_ref().unwrap().assessments.len(), 1);
+    }
 }

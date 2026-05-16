@@ -575,7 +575,14 @@ fn write_risk_pretty(w: &mut impl Write, p: &RiskPayload) -> io::Result<()> {
             sigil_core::event::AiTool::ClaudeCode => "claude-code",
             sigil_core::event::AiTool::Codex => "codex",
         };
-        let bucket_str = format!("{:?}", s.bucket).to_lowercase();
+        // Use the serde wire string (snake_case) rather than Debug. Robust
+        // against future multi-word AiGuardBucket variants (e.g., "very_high")
+        // where Debug would emit "Veryhigh" but the SIEM filter expects
+        // "very_high".
+        let bucket_str = serde_json::to_string(&s.bucket)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
         writeln!(
             w,
             "{}\t{}\t{:.1}\t{}\t{}\t{}",
@@ -883,6 +890,73 @@ mod tests {
         assert_eq!(
             preview_chunk_count, 80,
             "preview should be truncated to 80 X's, got {preview_chunk_count}"
+        );
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_risk_pretty_renders_header_and_row() {
+        use crate::control::{RiskPayload, RiskSummary};
+        use sigil_core::event::{AiGuardBucket, AiGuardScope, AiTool};
+        let payload = RiskPayload {
+            assessments: vec![RiskSummary {
+                tool: AiTool::ClaudeCode,
+                scope: AiGuardScope::UserGlobal,
+                score: 3.5,
+                bucket: AiGuardBucket::Medium,
+                reasons_count: 2,
+                last_assessed_ts: "2026-05-16T06:00:00Z".into(),
+            }],
+        };
+        let mut buf = Vec::new();
+        write_risk_pretty(&mut buf, &payload).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.starts_with("TOOL\tSCOPE\tSCORE\tBUCKET\tREASONS\tLAST_ASSESSED\n"));
+        assert!(
+            out.contains("claude-code\tuser-global\t3.5\tmedium\t2\t2026-05-16T06:00:00Z"),
+            "got: {out}"
+        );
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_risk_pretty_empty_prints_sentinel() {
+        use crate::control::RiskPayload;
+        let payload = RiskPayload {
+            assessments: vec![],
+        };
+        let mut buf = Vec::new();
+        write_risk_pretty(&mut buf, &payload).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("(no assessments yet)"),
+            "expected sentinel, got: {out}"
+        );
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_risk_pretty_renders_project_scope() {
+        use crate::control::{RiskPayload, RiskSummary};
+        use sigil_core::event::{AiGuardBucket, AiGuardScope, AiTool};
+        let payload = RiskPayload {
+            assessments: vec![RiskSummary {
+                tool: AiTool::Codex,
+                scope: AiGuardScope::Project {
+                    path: std::path::PathBuf::from("/Users/alice/repo/.claude"),
+                },
+                score: 8.0,
+                bucket: AiGuardBucket::Critical,
+                reasons_count: 5,
+                last_assessed_ts: "2026-05-16T06:01:00Z".into(),
+            }],
+        };
+        let mut buf = Vec::new();
+        write_risk_pretty(&mut buf, &payload).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("codex\tproject:/Users/alice/repo/.claude\t8.0\tcritical\t5\t"),
+            "got: {out}"
         );
     }
 }
