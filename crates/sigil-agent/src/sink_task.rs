@@ -65,5 +65,6 @@ fn evidence_kind_str(e: &sigil_core::event::Evidence) -> &'static str {
         EventUnprocessableLocal { .. } => "event_unprocessable_local",
         ServerProtocolViolation { .. } => "server_protocol_violation",
         SenderLagCritical { .. } => "sender_lag_critical",
+        AiGuardRiskAssessed { .. } => "ai_guard_risk_assessed",
     }
 }

@@ -33,7 +33,9 @@ notify = { workspace = true }
 clap = { workspace = true }
 parking_lot = { workspace = true }
 dunce = { workspace = true }
+regex = { workspace = true }
 tempfile = { workspace = true }
+toml = { workspace = true }
 mac_address = "1.1"
 blake3 = { workspace = true }
 
@@ -45,6 +47,7 @@ data-encoding = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 default = ["operator-cli"]

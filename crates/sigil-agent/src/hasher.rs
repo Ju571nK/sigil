@@ -24,6 +24,7 @@ pub async fn run(
     tx: mpsc::Sender<HashedEvent>,
     target_lookup: Arc<dyn TargetLookup + Send + Sync>,
     stats: Arc<Stats>,
+    ai_guard_tx: Option<tokio::sync::broadcast::Sender<std::path::PathBuf>>,
 ) {
     while let Some(pending) = rx.recv().await {
         let path = pending.path.clone();
@@ -68,6 +69,7 @@ pub async fn run(
             None
         };
 
+        let ag_path = ai_guard_tx.as_ref().map(|_| pending.path.clone());
         let _ = tx
             .send(HashedEvent {
                 norm,
@@ -78,6 +80,10 @@ pub async fn run(
                 debounced_from: Some(pending),
             })
             .await;
+        if let (Some(ag_tx), Some(p)) = (&ai_guard_tx, ag_path) {
+            // Broadcast best-effort; lagged receivers will catch up via heartbeat.
+            let _ = ag_tx.send(p);
+        }
     }
 }
 

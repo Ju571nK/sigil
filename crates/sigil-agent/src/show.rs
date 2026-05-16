@@ -4,6 +4,8 @@ use crate::cli::ShowWhat;
 #[cfg(feature = "operator-cli")]
 use crate::control::PolicyStatusPayload;
 #[cfg(feature = "operator-cli")]
+use crate::control::RiskPayload;
+#[cfg(feature = "operator-cli")]
 use crate::control::TargetsPayload;
 use crate::platform::ActivePlatform;
 use sigil_core::policy::expand::{expand_per_user, EnvLookup};
@@ -42,6 +44,10 @@ pub fn run(
         let events_dir = events_dir_override.unwrap_or_else(default_events_dir);
         return show_events(&events_dir, tail, follow, pretty);
     }
+    #[cfg(feature = "operator-cli")]
+    if let ShowWhat::Risk { tool, pretty } = what {
+        return show_risk(tool, pretty);
+    }
 
     let user_doc = match policy_override.as_ref() {
         Some(p) => Some(sigil_core::policy::parse(&std::fs::read_to_string(p)?)?),
@@ -76,6 +82,8 @@ pub fn run(
         ShowWhat::Targets => unreachable!("handled above"),
         #[cfg(feature = "operator-cli")]
         ShowWhat::Events { .. } => unreachable!("handled above"),
+        #[cfg(feature = "operator-cli")]
+        ShowWhat::Risk { .. } => unreachable!("handled above"),
     }
     Ok(0)
 }
@@ -477,6 +485,10 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
         Evidence::SenderLagCritical { lag_events, .. } => {
             ("sender_lag_critical", format!("events={lag_events}"))
         }
+        Evidence::AiGuardRiskAssessed { tool, bucket, .. } => (
+            "ai_guard_risk_assessed",
+            format!("tool={tool:?} bucket={bucket:?}"),
+        ),
     }
 }
 
@@ -506,6 +518,78 @@ fn format_pretty(line: &str) -> String {
     };
     let (kind, summary) = evidence_summary(&event.evidence);
     format!("{ts}\t{severity}\t{subject}\t{kind}\t{summary}")
+}
+
+#[cfg(feature = "operator-cli")]
+fn show_risk(tool: Option<String>, pretty: bool) -> anyhow::Result<i32> {
+    let parsed = match tool.as_deref() {
+        None => None,
+        Some("claude-code") | Some("claude_code") => Some(sigil_core::event::AiTool::ClaudeCode),
+        Some("codex") => Some(sigil_core::event::AiTool::Codex),
+        Some(other) => {
+            eprintln!("sigil show risk: unknown --tool '{other}' (expected: claude-code, codex)");
+            return Ok(2);
+        }
+    };
+    match crate::control_client::query(&crate::control::Request::Risk { tool: parsed }) {
+        Ok(resp) => match resp.risk {
+            Some(p) => {
+                if pretty {
+                    write_risk_pretty(&mut io::stdout().lock(), &p)?;
+                } else {
+                    let s = serde_json::to_string_pretty(&p)?;
+                    println!("{s}");
+                }
+                Ok(0)
+            }
+            None => {
+                eprintln!(
+                    "sigil show risk: daemon returned no risk{}",
+                    resp.error.map(|e| format!(": {e}")).unwrap_or_default()
+                );
+                Ok(1)
+            }
+        },
+        Err(e) => {
+            eprintln!("sigil show risk: {e}");
+            Ok(1)
+        }
+    }
+}
+
+#[cfg(feature = "operator-cli")]
+fn write_risk_pretty(w: &mut impl Write, p: &RiskPayload) -> io::Result<()> {
+    if p.assessments.is_empty() {
+        writeln!(w, "(no assessments yet)")?;
+        return Ok(());
+    }
+    writeln!(w, "TOOL\tSCOPE\tSCORE\tBUCKET\tREASONS\tLAST_ASSESSED")?;
+    for s in &p.assessments {
+        let scope_str = match &s.scope {
+            sigil_core::event::AiGuardScope::UserGlobal => "user-global".to_string(),
+            sigil_core::event::AiGuardScope::Project { path } => {
+                format!("project:{}", path.display())
+            }
+        };
+        let tool_str = match s.tool {
+            sigil_core::event::AiTool::ClaudeCode => "claude-code",
+            sigil_core::event::AiTool::Codex => "codex",
+        };
+        // Use the serde wire string (snake_case) rather than Debug. Robust
+        // against future multi-word AiGuardBucket variants (e.g., "very_high")
+        // where Debug would emit "Veryhigh" but the SIEM filter expects
+        // "very_high".
+        let bucket_str = serde_json::to_string(&s.bucket)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
+        writeln!(
+            w,
+            "{}\t{}\t{:.1}\t{}\t{}\t{}",
+            tool_str, scope_str, s.score, bucket_str, s.reasons_count, s.last_assessed_ts
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(all(test, unix))]
@@ -806,6 +890,73 @@ mod tests {
         assert_eq!(
             preview_chunk_count, 80,
             "preview should be truncated to 80 X's, got {preview_chunk_count}"
+        );
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_risk_pretty_renders_header_and_row() {
+        use crate::control::{RiskPayload, RiskSummary};
+        use sigil_core::event::{AiGuardBucket, AiGuardScope, AiTool};
+        let payload = RiskPayload {
+            assessments: vec![RiskSummary {
+                tool: AiTool::ClaudeCode,
+                scope: AiGuardScope::UserGlobal,
+                score: 3.5,
+                bucket: AiGuardBucket::Medium,
+                reasons_count: 2,
+                last_assessed_ts: "2026-05-16T06:00:00Z".into(),
+            }],
+        };
+        let mut buf = Vec::new();
+        write_risk_pretty(&mut buf, &payload).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.starts_with("TOOL\tSCOPE\tSCORE\tBUCKET\tREASONS\tLAST_ASSESSED\n"));
+        assert!(
+            out.contains("claude-code\tuser-global\t3.5\tmedium\t2\t2026-05-16T06:00:00Z"),
+            "got: {out}"
+        );
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_risk_pretty_empty_prints_sentinel() {
+        use crate::control::RiskPayload;
+        let payload = RiskPayload {
+            assessments: vec![],
+        };
+        let mut buf = Vec::new();
+        write_risk_pretty(&mut buf, &payload).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("(no assessments yet)"),
+            "expected sentinel, got: {out}"
+        );
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn write_risk_pretty_renders_project_scope() {
+        use crate::control::{RiskPayload, RiskSummary};
+        use sigil_core::event::{AiGuardBucket, AiGuardScope, AiTool};
+        let payload = RiskPayload {
+            assessments: vec![RiskSummary {
+                tool: AiTool::Codex,
+                scope: AiGuardScope::Project {
+                    path: std::path::PathBuf::from("/Users/alice/repo/.claude"),
+                },
+                score: 8.0,
+                bucket: AiGuardBucket::Critical,
+                reasons_count: 5,
+                last_assessed_ts: "2026-05-16T06:01:00Z".into(),
+            }],
+        };
+        let mut buf = Vec::new();
+        write_risk_pretty(&mut buf, &payload).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("codex\tproject:/Users/alice/repo/.claude\t8.0\tcritical\t5\t"),
+            "got: {out}"
         );
     }
 }

@@ -82,4 +82,15 @@ pub enum ShowWhat {
         #[arg(long = "pretty")]
         pretty: bool,
     },
+    /// Print the current AI Guard risk assessment for each tool. Queries the
+    /// running daemon over the control socket.
+    #[cfg(feature = "operator-cli")]
+    Risk {
+        /// Filter to a single tool (`claude-code` or `codex`).
+        #[arg(long = "tool")]
+        tool: Option<String>,
+        /// Render as a tab-separated table instead of raw JSON.
+        #[arg(long = "pretty")]
+        pretty: bool,
+    },
 }
