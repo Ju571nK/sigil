@@ -122,7 +122,15 @@ targets:
                 Duration::from_secs(1),
             )
             .await;
-        if found.is_some() {
+        if let Some(clean_ev) = found {
+            // Verify score also < 1.0 — defensive against future rubric threshold changes.
+            let score = clean_ev["evidence"]["score"]
+                .as_f64()
+                .expect("score must be a number");
+            assert!(
+                score < 1.0,
+                "clean event has bucket=low but score is {score} (expected < 1.0)"
+            );
             clean_seen = true;
             break;
         }
