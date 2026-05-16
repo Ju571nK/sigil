@@ -9,3 +9,4 @@ pub mod parser;
 pub mod rubric;
 
 pub use parser::claude_code::ClaudeCodeParser;
+pub use parser::codex::CodexParser;

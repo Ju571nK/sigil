@@ -32,6 +32,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
+toml = "0.8"
 insta = { version = "1", features = ["yaml", "json"] }
 proptest = "1"
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
