@@ -1,19 +1,42 @@
 # Sigil
 
-> Sigil writes a line for every change on your machine.
+> AI Security Posture Management (AI-SPM) for developer machines.
+> Sigil watches AI coding agent guard surfaces — hooks, permissions,
+> sandbox boundaries — scores their risk, and feeds hash-anchored
+> events to your SIEM.
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![macOS](https://img.shields.io/badge/macOS-supported-success)
 ![Windows](https://img.shields.io/badge/Windows-supported-success)
-![Linux](https://img.shields.io/badge/Linux-not%20yet-lightgrey)
+![Linux](https://img.shields.io/badge/Linux-supported-success)
 ![MSRV](https://img.shields.io/badge/MSRV-1.78-orange)
 ![Status](https://img.shields.io/badge/status-alpha-yellow)
 
-A small Rust agent that watches sensitive files on macOS and Windows and emits
-structured, hash-anchored JSONL events for your SIEM. Built with the AI-coding-agent
-era in mind: the things that matter today are MCP configurations, launch agents,
-credential directories, and other quiet drops that traditional FIM tooling
-doesn't tier as critical.
+## The problem
+
+Claude Code, Codex, Gemini CLI, Cursor — each AI coding agent ships its own
+guard surface (`hooks`, `permissions`, `[sandbox]`, MCP allowlists) across
+user-global, per-project, and per-session scopes. The autonomy ratchet keeps
+moving: hooks run in the host shell, matchers can be `.*`, and a `PreToolUse`
+hook containing `rm -rf` is treated by these tools the same as one that just
+logs. Security teams have no fleet view, no drift alert, no risk index.
+
+## What Sigil does
+
+**Sigil measures. It does not block.** It watches the guard surfaces of every
+supported AI agent, scores their risk against a transparent rubric (sandbox
+boundary × hook content × matcher scope × source provenance), and emits the
+score plus the underlying reasons as a hash-anchored JSONL event your SIEM
+can ingest. Enforcement stays where it belongs — in your MDM, your EDR, or
+your operator's hands. Sigil's job is to make sure those decisions are
+informed.
+
+Underneath the AI-SPM layer is a generic file-posture sensor: a small Rust
+agent that watches policy-defined files on macOS, Windows, and Linux, hashes
+every change with blake3, and ships the events through a signed-policy
+pipeline (mTLS, ed25519). The risk scoring is layered on top — it parses AI
+agent config files, applies the rubric, and emits richer evidence variants
+alongside the raw `file_change` events.
 
 Each event is one JSON object on its own line:
 
@@ -39,8 +62,30 @@ Each event is one JSON object on its own line:
 }
 ```
 
+And — coming in Phase 3b — a richer evidence variant for AI guard surfaces:
+
+```json
+{
+  "evidence": {
+    "kind": "ai_guard_risk_assessed",
+    "tool": "claude-code",
+    "scope": "user-global",
+    "score": 7.5,
+    "reasons": [
+      {"kind": "destructive_in_hook", "pattern": "rm -rf",
+       "hook_event": "PreToolUse", "snippet": "..."},
+      {"kind": "no_sandbox", "executor": "host-shell"},
+      {"kind": "broad_matcher", "matcher": ".*"}
+    ]
+  }
+}
+```
+
 ## Why Sigil?
 
+- **Measures, doesn't block.** AI guard surfaces are scored, not enforced.
+  Enforcement is left to MDM/EDR; Sigil's job is to make sure those decisions
+  are informed.
 - **Tiny, honest, host-only.** Pure user-space. No kernel module, no eBPF, no
   phone-home. A single binary plus a YAML policy file.
 - **Hash-anchored events.** Every observation carries blake3 hashes (before /
@@ -48,20 +93,25 @@ Each event is one JSON object on its own line:
   observation apart from one that was coalesced or delayed.
 - **Versioned schema.** `schema_version` is part of the contract; rename = break.
 - **AI-aware defaults.** Built-in policies cover the paths AI coding agents
-  actually touch on macOS and Windows.
+  actually touch on macOS, Windows, and Linux — including Claude Code, Codex,
+  Gemini CLI, and Cursor guard files.
 
-### What it catches
+### What it monitors
 
-Concrete, AI-era examples — drop these into your policy and the agent will
-emit a JSONL line every time something changes:
+Out of the box, with built-in defaults plus your policy YAML:
 
-- An AI coding agent silently adding entries to `~/.cursor/mcp.json` or
-  `~/.config/claude/mcp.json`.
-- A new `.plist` appearing in `~/Library/LaunchAgents/` (a background daemon
-  installed by tooling).
-- Modifications to `~/.aws/credentials`, `~/.ssh/`, or your shell startup
-  files (`.zshrc`, `.bashrc`, `.profile`).
-- Drift on any path you list under `targets:` in your policy YAML.
+- **AI agent guard surfaces** — `~/.claude/settings*.json` and
+  `<repo>/.claude/`, `~/.codex/config.toml` and `<repo>/.codex/`,
+  `~/.gemini/` and `<repo>/.gemini/`, `~/.cursor/mcp.json`. Hash-anchored
+  events on every change; risk score on the contents (Phase 3b).
+- **Hook scripts** — convention dirs (`~/.claude/hooks/**`,
+  `<repo>/.claude/hooks/**`) watched recursively, so a hook script silently
+  going from "deny" to "exit 0" is visible.
+- **MCP & launch surfaces** — `~/.cursor/mcp.json`, new `.plist` in
+  `~/Library/LaunchAgents/`, etc.
+- **Credential & shell startup** — `~/.aws/credentials`, `~/.ssh/`,
+  `.zshrc`, `.bashrc`, `.profile`.
+- **Anything you list** under `targets:` in your policy YAML.
 
 ## Architecture
 
@@ -151,8 +201,13 @@ flowchart LR
 - **Phase 3a — shipped.** Linux runtime (inotify watcher, `/etc/passwd` user
   enumeration, hardware fingerprint). Minimal foundation; refinements open
   for community contribution.
-- **Phase 3b/c — planned.** Additional posture signals, reproducible-build
-  attestation.
+- **Phase 3b — planned.** AI Agent Risk Index: scoring rubric for
+  Claude Code / Codex / Gemini CLI / Cursor hooks, permissions, and
+  sandbox boundaries. Emits `ai_guard_risk_assessed` evidence variants
+  alongside the underlying `file_change` events. Per-fleet aggregation
+  in the SIEM.
+- **Phase 3c — planned.** Reproducible-build attestation; additional
+  posture signals.
 
 ## Design principles
 
@@ -188,15 +243,33 @@ cargo build
 
 ### Linux packages (`.deb` / `.rpm`)
 
-The agent is also packaged for Debian/Ubuntu and RHEL/Rocky/Fedora — it
-installs `/usr/bin/sigil` plus a (disabled-by-default) systemd unit:
+All four binaries (agent, sender, server, signer) are packaged for
+Debian/Ubuntu and RHEL/Rocky/Fedora. Daemons install a (disabled-by-default)
+systemd unit + `/etc/sigil/<binary>.yaml.example`; `sigil-signer` is an
+operator CLI so it ships just the `/usr/bin/sigil-sign` binary.
 
 ```sh
 cargo install cargo-deb cargo-generate-rpm   # one-time
-packaging/build.sh                            # → target/debian/*.deb, target/generate-rpm/*.rpm
+packaging/build.sh                            # all 4 packages, both formats
+packaging/build.sh sender rpm                 # or: just one package, one format
 
-sudo dnf install ./target/generate-rpm/sigil-0.1.0-1.x86_64.rpm   # or: apt install ./target/debian/sigil_0.1.0-1_amd64.deb
+# Agent (host daemon).
+sudo dnf install ./target/generate-rpm/sigil-0.1.0-1.x86_64.rpm
 sudo systemctl enable --now sigil
+
+# Sender (uploads spool to a sigil-server over mTLS).
+sudo dnf install ./target/generate-rpm/sigil-sender-0.1.0-1.x86_64.rpm
+sudo cp /etc/sigil/sender.yaml.example /etc/sigil/sender.yaml && sudo $EDITOR /etc/sigil/sender.yaml
+sudo systemctl enable --now sigil-sender
+
+# Server (OSS reference: receives events, serves signed policy).
+sudo dnf install ./target/generate-rpm/sigil-server-0.1.0-1.x86_64.rpm
+sudo cp /etc/sigil/server.yaml.example /etc/sigil/server.yaml && sudo $EDITOR /etc/sigil/server.yaml
+sudo systemctl enable --now sigil-server
+
+# Signer (operator CLI: keygen / sign / verify / inspect).
+sudo dnf install ./target/generate-rpm/sigil-signer-0.1.0-1.x86_64.rpm
+sigil-sign --help
 ```
 
 See [`packaging/README.md`](packaging/README.md) for details.
