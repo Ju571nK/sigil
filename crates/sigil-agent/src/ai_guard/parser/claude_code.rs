@@ -87,7 +87,12 @@ fn emit_hook_reasons(
     let Some(hooks) = settings.get("hooks").and_then(Value::as_object) else {
         return Ok(());
     };
-    // Any hooks present at all → host shell w/o sandbox.
+    if hooks.is_empty() {
+        // Empty `"hooks": {}` — no actual hook configured. Treat as "tool
+        // present but no host-shell exposure"; not a NoSandbox finding.
+        return Ok(());
+    }
+    // At least one hook event configured → host shell w/o sandbox.
     out.push(AiGuardReason::NoSandbox {
         executor: "host_shell".into(),
     });
@@ -98,7 +103,7 @@ fn emit_hook_reasons(
         for entry in arr {
             // matcher
             if let Some(matcher) = entry.get("matcher").and_then(Value::as_str) {
-                if matcher.is_empty() || matcher == ".*" {
+                if matcher.is_empty() || matcher == "*" || matcher == ".*" {
                     out.push(AiGuardReason::BroadMatcher {
                         hook_event: event_name.clone(),
                         matcher: matcher.to_string(),
@@ -211,10 +216,16 @@ fn emit_permission_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
     let perms = match settings.get("permissions") {
         Some(p) => p,
         None => {
-            // No permissions section — only flag if there are hooks present,
-            // since an otherwise-empty settings file is not a configuration
-            // choice that needs deny rules.
-            if settings.get("hooks").is_some() {
+            // No `permissions` section at all. Only flag this as a finding if
+            // the operator is actively using hooks (NON-empty hooks object) —
+            // an empty `{}` settings file means "tool not really configured"
+            // rather than "configured insecurely".
+            let has_active_hooks = settings
+                .get("hooks")
+                .and_then(Value::as_object)
+                .map(|m| !m.is_empty())
+                .unwrap_or(false);
+            if has_active_hooks {
                 out.push(AiGuardReason::PermissionsDenyEmpty);
             }
             return;
@@ -501,6 +512,44 @@ mod tests {
                 .iter()
                 .any(|r| matches!(r, AiGuardReason::ExternalScriptUnscanned { .. })),
             "convention path should not be marked external"
+        );
+    }
+
+    #[test]
+    fn broad_matcher_plain_star_emits_broad_matcher() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{
+              "hooks": {
+                "PreToolUse": [
+                  {"matcher": "*", "hooks": [
+                    {"type": "command", "command": "echo hi"}
+                  ]}
+                ]
+              }
+            }"#,
+        );
+        let p = ClaudeCodeParser;
+        let reasons = p.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::BroadMatcher { matcher, .. } if matcher == "*"
+            )),
+            "expected BroadMatcher with matcher=\"*\" in {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn empty_hooks_object_emits_no_findings() {
+        let dir = tempdir().unwrap();
+        write_settings(dir.path(), r#"{"hooks": {}}"#);
+        let p = ClaudeCodeParser;
+        let reasons = p.assess(dir.path()).unwrap();
+        assert!(
+            reasons.is_empty(),
+            "empty hooks object should produce no findings, got {reasons:?}"
         );
     }
 
