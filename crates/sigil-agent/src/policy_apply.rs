@@ -193,7 +193,6 @@ mod tests {
     use sigil_core::policy::pubkeys::KeystoreEntry;
     use sigil_core::policy::signed_envelope::SignedEnvelope;
     use tempfile::tempdir;
-    use time::macros::datetime;
 
     struct Harness {
         ctx: ApplyContext,
@@ -268,7 +267,10 @@ mod tests {
 
     #[tokio::test]
     async fn happy_path_writes_yaml_advances_version_emits_reloaded() {
-        let now = datetime!(2026-05-15 0:00 UTC);
+        // Use real wall clock so envelope.valid_until = now + 24h is always
+        // ahead of apply()'s OffsetDateTime::now_utc() check. A hardcoded
+        // `datetime!(...)` here would be a time-bomb (see issue #6).
+        let now = OffsetDateTime::now_utc();
         let mut h = build_harness(now, 0);
         let envelope = well_formed_envelope(1, now);
         let expected_valid_until = envelope.valid_until;
@@ -313,7 +315,9 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_envelope_emits_invalid_does_not_touch_disk_or_state() {
-        let now = datetime!(2026-05-15 0:00 UTC);
+        // See issue #6 / happy_path comment above: use real now to avoid
+        // expiry false-positives.
+        let now = OffsetDateTime::now_utc();
         let mut h = build_harness(now, 5);
         // version 5 == last_applied 5 → version_regression
         let resp = sign(&h.sk, well_formed_envelope(5, now), now);
@@ -348,7 +352,11 @@ mod tests {
 
     #[tokio::test]
     async fn pubkey_unknown_emits_invalid_with_correct_reason() {
-        let now = datetime!(2026-05-15 0:00 UTC);
+        // Currently passes because verify_envelope short-circuits on
+        // PubkeyUnknown before the time check, but harmonizing with the
+        // other two tests so a future verifier reorder doesn't reintroduce
+        // the time-bomb (issue #6).
+        let now = OffsetDateTime::now_utc();
         let mut h = build_harness(now, 0);
         let mut resp = sign(&h.sk, well_formed_envelope(1, now), now);
         resp.signing_pubkey_id = "k-unknown".into();
