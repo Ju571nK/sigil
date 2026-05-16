@@ -99,6 +99,7 @@ mod tests {
                 apply_policy: None,
                 policy_status: None,
                 targets: None,
+                risk: None,
                 error: None,
             };
             let mut bytes = serde_json::to_vec(&resp).unwrap();
@@ -147,6 +148,7 @@ mod tests {
                         globs: vec!["/etc/shadow".to_string()],
                     }],
                 }),
+                risk: None,
                 error: None,
             };
             let mut bytes = serde_json::to_vec(&resp).unwrap();

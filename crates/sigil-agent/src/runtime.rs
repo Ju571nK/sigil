@@ -238,12 +238,19 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         &effective,
         &expanded_paths,
     )));
+    // Phase 3b.1 — AI Guard shared state. Created here (before ControlContext)
+    // so the IPC handler can read assessments via `ai_guard_state`. The broadcast
+    // sender is created later, close to where the hasher needs it.
+    let ai_guard_state: Arc<parking_lot::RwLock<crate::ai_guard::StateMap>> =
+        Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new()));
     let control_ctx = Arc::new(crate::control::ControlContext {
         stats: stats.clone(),
         apply_ctx: apply_ctx.clone(),
         active_valid_until: active_valid_until.clone(),
         #[cfg(feature = "operator-cli")]
         targets_rx: targets_rx.clone(),
+        #[cfg(feature = "operator-cli")]
+        ai_guard_state: ai_guard_state.clone(),
     });
 
     // Watcher (notify → raw events → tx_norm via normalizer wrapper).
@@ -293,17 +300,16 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         tokio::spawn(debouncer::run(rx_norm, tx_pending)),
     );
 
-    // Phase 3b.1 — AI Guard Risk Index broadcast + shared state.
+    // Phase 3b.1 — AI Guard Risk Index broadcast channel.
     // _ai_guard_fc_rx_init is held alive (named with underscore prefix to
     // suppress unused warnings) so that broadcast::Sender::send() doesn't
     // return SendError(no receivers) during the brief window between hasher
     // startup and ai_guard_task subscribing below. Once ai_guard_task calls
     // ai_guard_fc_tx.subscribe(), this initial receiver becomes redundant
     // but harmless — broadcast overwrites old slots without blocking.
+    // Note: ai_guard_state was created above (before ControlContext).
     let (ai_guard_fc_tx, _ai_guard_fc_rx_init) =
         tokio::sync::broadcast::channel::<std::path::PathBuf>(256);
-    let ai_guard_state: Arc<parking_lot::RwLock<crate::ai_guard::StateMap>> =
-        Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new()));
 
     sup.track(
         "hasher",

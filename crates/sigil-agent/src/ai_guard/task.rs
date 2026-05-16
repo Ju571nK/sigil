@@ -40,6 +40,7 @@ pub struct CachedAssessment {
     pub score: f32,
     pub bucket: AiGuardBucket,
     pub reasons_blake3: [u8; 32],
+    pub reasons_count: usize,
     pub last_assessed_ts: OffsetDateTime,
 }
 
@@ -148,6 +149,7 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
             score,
             bucket,
             reasons_blake3: reasons_hash,
+            reasons_count: reasons.len(),
             last_assessed_ts: now,
         },
     );

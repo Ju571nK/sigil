@@ -49,6 +49,12 @@ pub enum Request {
     /// by nudging the policy-version watch channel.
     #[cfg(feature = "operator-cli")]
     ReloadPolicy,
+    /// Operator introspection: returns the latest AI Guard risk assessment
+    /// for each tool (or a single tool if `tool` is set).
+    #[cfg(feature = "operator-cli")]
+    Risk {
+        tool: Option<sigil_core::event::AiTool>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -61,6 +67,8 @@ pub struct Response {
     pub policy_status: Option<PolicyStatusPayload>,
     /// Present iff the request was `Targets` (Phase 2 operator introspection).
     pub targets: Option<TargetsPayload>,
+    /// Present iff the request was `Risk`.
+    pub risk: Option<RiskPayload>,
     pub error: Option<String>,
 }
 
@@ -107,6 +115,22 @@ pub struct TargetsPayload {
     pub targets: Vec<TargetSummary>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RiskPayload {
+    pub assessments: Vec<RiskSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RiskSummary {
+    pub tool: sigil_core::event::AiTool,
+    pub scope: sigil_core::event::AiGuardScope,
+    pub score: f32,
+    pub bucket: sigil_core::event::AiGuardBucket,
+    pub reasons_count: usize,
+    /// RFC 3339.
+    pub last_assessed_ts: String,
+}
+
 /// Shared context bundle passed to both platform `serve` functions.
 pub struct ControlContext {
     pub stats: Arc<Stats>,
@@ -119,6 +143,8 @@ pub struct ControlContext {
     #[cfg(feature = "operator-cli")]
     pub targets_rx:
         tokio::sync::watch::Receiver<std::sync::Arc<Vec<crate::normalizer::CompiledTarget>>>,
+    #[cfg(feature = "operator-cli")]
+    pub ai_guard_state: std::sync::Arc<parking_lot::RwLock<crate::ai_guard::StateMap>>,
 }
 
 /// Shared dispatch logic. Returns the `Response` for a given `Request`.
@@ -131,6 +157,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
             apply_policy: None,
             policy_status: None,
             targets: None,
+            risk: None,
             error: None,
         },
         Request::ApplyPolicy { response } => {
@@ -146,6 +173,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     }),
                     policy_status: None,
                     targets: None,
+                    risk: None,
                     error: None,
                 },
                 ApplyOutcome::Rejected { reason } => Response {
@@ -154,6 +182,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     apply_policy: Some(ApplyPolicyResult::Rejected { reason }),
                     policy_status: None,
                     targets: None,
+                    risk: None,
                     error: None,
                 },
                 ApplyOutcome::Internal { detail } => Response {
@@ -162,6 +191,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     apply_policy: None,
                     policy_status: None,
                     targets: None,
+                    risk: None,
                     error: Some(format!("internal: {detail}")),
                 },
             }
@@ -192,6 +222,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     policy_expired_active: expired,
                 }),
                 targets: None,
+                risk: None,
                 error: None,
             }
         }
@@ -212,6 +243,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 apply_policy: None,
                 policy_status: None,
                 targets: Some(TargetsPayload { targets: summaries }),
+                risk: None,
                 error: None,
             }
         }
@@ -226,6 +258,46 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 apply_policy: None,
                 policy_status: None,
                 targets: None,
+                risk: None,
+                error: None,
+            }
+        }
+        #[cfg(feature = "operator-cli")]
+        Request::Risk { tool } => {
+            let snapshot = ctx.ai_guard_state.read();
+            let mut assessments: Vec<RiskSummary> = snapshot
+                .iter()
+                .filter(|((t, _scope), _)| match tool {
+                    Some(filter) => *t == filter,
+                    None => true,
+                })
+                .map(|((t, scope), cached)| {
+                    let last = cached
+                        .last_assessed_ts
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_default();
+                    RiskSummary {
+                        tool: *t,
+                        scope: scope.clone(),
+                        score: cached.score,
+                        bucket: cached.bucket,
+                        reasons_count: cached.reasons_count,
+                        last_assessed_ts: last,
+                    }
+                })
+                .collect();
+            assessments.sort_by(|a, b| {
+                serde_json::to_string(&a.tool)
+                    .unwrap_or_default()
+                    .cmp(&serde_json::to_string(&b.tool).unwrap_or_default())
+            });
+            Response {
+                ok: true,
+                stats: None,
+                apply_policy: None,
+                policy_status: None,
+                targets: None,
+                risk: Some(RiskPayload { assessments }),
                 error: None,
             }
         }
@@ -269,6 +341,7 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
                     apply_policy: None,
                     policy_status: None,
                     targets: None,
+                    risk: None,
                     error: Some(e.to_string()),
                 },
             };
@@ -308,6 +381,7 @@ pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result
                     apply_policy: None,
                     policy_status: None,
                     targets: None,
+                    risk: None,
                     error: Some(e.to_string()),
                 },
             };
@@ -376,6 +450,7 @@ mod tests {
             }),
             policy_status: None,
             targets: None,
+            risk: None,
             error: None,
         };
         let s = serde_json::to_string(&r).unwrap();
@@ -393,6 +468,7 @@ mod tests {
             }),
             policy_status: None,
             targets: None,
+            risk: None,
             error: None,
         };
         let s = serde_json::to_string(&r).unwrap();
@@ -413,6 +489,7 @@ mod tests {
                     globs: vec!["/etc/foo.yaml".into(), "/var/log/bar/*.log".into()],
                 }],
             }),
+            risk: None,
             error: None,
         };
         let s = serde_json::to_string(&resp).unwrap();

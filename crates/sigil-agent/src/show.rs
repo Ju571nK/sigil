@@ -4,6 +4,8 @@ use crate::cli::ShowWhat;
 #[cfg(feature = "operator-cli")]
 use crate::control::PolicyStatusPayload;
 #[cfg(feature = "operator-cli")]
+use crate::control::RiskPayload;
+#[cfg(feature = "operator-cli")]
 use crate::control::TargetsPayload;
 use crate::platform::ActivePlatform;
 use sigil_core::policy::expand::{expand_per_user, EnvLookup};
@@ -42,6 +44,10 @@ pub fn run(
         let events_dir = events_dir_override.unwrap_or_else(default_events_dir);
         return show_events(&events_dir, tail, follow, pretty);
     }
+    #[cfg(feature = "operator-cli")]
+    if let ShowWhat::Risk { tool, pretty } = what {
+        return show_risk(tool, pretty);
+    }
 
     let user_doc = match policy_override.as_ref() {
         Some(p) => Some(sigil_core::policy::parse(&std::fs::read_to_string(p)?)?),
@@ -76,6 +82,8 @@ pub fn run(
         ShowWhat::Targets => unreachable!("handled above"),
         #[cfg(feature = "operator-cli")]
         ShowWhat::Events { .. } => unreachable!("handled above"),
+        #[cfg(feature = "operator-cli")]
+        ShowWhat::Risk { .. } => unreachable!("handled above"),
     }
     Ok(0)
 }
@@ -510,6 +518,71 @@ fn format_pretty(line: &str) -> String {
     };
     let (kind, summary) = evidence_summary(&event.evidence);
     format!("{ts}\t{severity}\t{subject}\t{kind}\t{summary}")
+}
+
+#[cfg(feature = "operator-cli")]
+fn show_risk(tool: Option<String>, pretty: bool) -> anyhow::Result<i32> {
+    let parsed = match tool.as_deref() {
+        None => None,
+        Some("claude-code") | Some("claude_code") => Some(sigil_core::event::AiTool::ClaudeCode),
+        Some("codex") => Some(sigil_core::event::AiTool::Codex),
+        Some(other) => {
+            eprintln!("sigil show risk: unknown --tool '{other}' (expected: claude-code, codex)");
+            return Ok(2);
+        }
+    };
+    match crate::control_client::query(&crate::control::Request::Risk { tool: parsed }) {
+        Ok(resp) => match resp.risk {
+            Some(p) => {
+                if pretty {
+                    write_risk_pretty(&mut io::stdout().lock(), &p)?;
+                } else {
+                    let s = serde_json::to_string_pretty(&p)?;
+                    println!("{s}");
+                }
+                Ok(0)
+            }
+            None => {
+                eprintln!(
+                    "sigil show risk: daemon returned no risk{}",
+                    resp.error.map(|e| format!(": {e}")).unwrap_or_default()
+                );
+                Ok(1)
+            }
+        },
+        Err(e) => {
+            eprintln!("sigil show risk: {e}");
+            Ok(1)
+        }
+    }
+}
+
+#[cfg(feature = "operator-cli")]
+fn write_risk_pretty(w: &mut impl Write, p: &RiskPayload) -> io::Result<()> {
+    if p.assessments.is_empty() {
+        writeln!(w, "(no assessments yet)")?;
+        return Ok(());
+    }
+    writeln!(w, "TOOL\tSCOPE\tSCORE\tBUCKET\tREASONS\tLAST_ASSESSED")?;
+    for s in &p.assessments {
+        let scope_str = match &s.scope {
+            sigil_core::event::AiGuardScope::UserGlobal => "user-global".to_string(),
+            sigil_core::event::AiGuardScope::Project { path } => {
+                format!("project:{}", path.display())
+            }
+        };
+        let tool_str = match s.tool {
+            sigil_core::event::AiTool::ClaudeCode => "claude-code",
+            sigil_core::event::AiTool::Codex => "codex",
+        };
+        let bucket_str = format!("{:?}", s.bucket).to_lowercase();
+        writeln!(
+            w,
+            "{}\t{}\t{:.1}\t{}\t{}\t{}",
+            tool_str, scope_str, s.score, bucket_str, s.reasons_count, s.last_assessed_ts
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(all(test, unix))]
