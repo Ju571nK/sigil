@@ -1,6 +1,8 @@
 //! Phase 3b.1 — per-tool parser trait. Each implementation reads a single
 //! tool's user-global config and returns the assessed reasons.
 
+pub mod claude_code;
+
 use sigil_core::event::{AiGuardReason, AiTool};
 use std::io;
 use std::path::{Path, PathBuf};

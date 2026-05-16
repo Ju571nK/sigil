@@ -7,4 +7,5 @@
 
 pub mod parser;
 pub mod rubric;
-// task and parser implementations land in later tasks.
+
+pub use parser::claude_code::ClaudeCodeParser;
