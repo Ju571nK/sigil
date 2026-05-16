@@ -88,7 +88,7 @@ pub enum PolicySignatureInvalidReason {
 /// Phase 3b.1 — which AI coding agent is being assessed.
 /// Stable wire strings — operators filter by these in the SIEM, so renames are
 /// breaking changes.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum AiTool {
     ClaudeCode,
@@ -96,7 +96,7 @@ pub enum AiTool {
 }
 
 /// Phase 3b.1 — where the assessment applies on the host.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AiGuardScope {
     /// `~/.claude/`, `~/.codex/` — user's global config.

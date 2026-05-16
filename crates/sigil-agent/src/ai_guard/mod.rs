@@ -7,6 +7,8 @@
 
 pub mod parser;
 pub mod rubric;
+pub mod task;
 
 pub use parser::claude_code::ClaudeCodeParser;
 pub use parser::codex::CodexParser;
+pub use task::{run, CachedAssessment, StateMap, TaskCtx};

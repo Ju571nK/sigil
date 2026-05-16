@@ -293,6 +293,12 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         tokio::spawn(debouncer::run(rx_norm, tx_pending)),
     );
 
+    // Phase 3b.1 — AI Guard Risk Index broadcast + shared state.
+    let (ai_guard_fc_tx, _ai_guard_fc_rx_init) =
+        tokio::sync::broadcast::channel::<std::path::PathBuf>(256);
+    let ai_guard_state: Arc<parking_lot::RwLock<crate::ai_guard::StateMap>> =
+        Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new()));
+
     sup.track(
         "hasher",
         tokio::spawn({
@@ -303,8 +309,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             let lookup: Arc<dyn TargetLookup + Send + Sync> = Arc::new(GlobTargetLookup {
                 targets_rx: targets_rx.clone(),
             });
+            let ag_tx = ai_guard_fc_tx.clone();
             async move {
-                crate::hasher::run(rx_pending, tx_hashed, lookup, stats).await;
+                crate::hasher::run(rx_pending, tx_hashed, lookup, stats, Some(ag_tx)).await;
             }
         }),
     );
@@ -346,6 +353,33 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             async move { sink_task::run(sink, rx_sink, cache, stats).await }
         }),
     );
+
+    // Phase 3b.1 — ai_guard_task: scores Claude Code / Codex guard surfaces.
+    {
+        let parsers: Vec<Box<dyn crate::ai_guard::parser::AiGuardParser>> = vec![
+            Box::new(crate::ai_guard::ClaudeCodeParser),
+            Box::new(crate::ai_guard::CodexParser),
+        ];
+        let home_dir = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
+        let ctx = crate::ai_guard::TaskCtx {
+            parsers,
+            fc_rx: ai_guard_fc_tx.subscribe(),
+            event_tx: tx_sink.clone(),
+            state: ai_guard_state.clone(),
+            heartbeat_interval: std::time::Duration::from_secs(24 * 3600),
+            home_dir,
+            host_id: host_id.clone(),
+        };
+        sup.track(
+            "ai_guard",
+            tokio::spawn(async move {
+                crate::ai_guard::run(ctx).await;
+            }),
+        );
+    }
 
     // Best-effort startup snapshot: pick the lexicographically largest segment
     // as the "current" one. Full rotation-time wiring is a Plan A2 follow-up.
