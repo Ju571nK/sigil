@@ -85,6 +85,72 @@ pub enum PolicySignatureInvalidReason {
     ParseFailed,
 }
 
+/// Phase 3b.1 — which AI coding agent is being assessed.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiTool {
+    ClaudeCode,
+    Codex,
+}
+
+/// Phase 3b.1 — where the assessment applies on the host.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AiGuardScope {
+    /// `~/.claude/`, `~/.codex/` — user's global config.
+    UserGlobal,
+    /// Operator-added paths in policy.yaml not under user-global.
+    Project { path: PathBuf },
+}
+
+/// Phase 3b.1 — auto-derived from `score`. low <1 / medium <4 / high <7 / critical 7+.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiGuardBucket {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// Phase 3b.1 — one finding inside an `AiGuardRiskAssessed` event.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AiGuardReason {
+    /// Inline shell command in a hook contains a destructive pattern.
+    DestructiveInInlineCommand {
+        pattern: String,
+        hook_event: String,
+        snippet: String,
+    },
+    /// Same, but the destructive pattern was in a script file we read
+    /// (convention dir like `~/.claude/hooks/`).
+    DestructiveInHookScript {
+        pattern: String,
+        hook_event: String,
+        script_path: PathBuf,
+        snippet: String,
+    },
+    /// Hook command points to an external script we did NOT scan
+    /// (path outside known convention dir). 3b.3 marker.
+    ExternalScriptUnscanned {
+        hook_event: String,
+        script_path: PathBuf,
+    },
+    /// Hook executes in host shell with no sandbox boundary.
+    NoSandbox { executor: String },
+    /// Hook matcher catches all/most tool invocations.
+    BroadMatcher { hook_event: String, matcher: String },
+    /// Permission deny array empty / missing.
+    PermissionsDenyEmpty,
+    /// Permission allow includes a wildcard rule.
+    PermissionsAllowBroad { rule: String },
+    /// Codex sandbox explicitly disabled.
+    SandboxDisabled,
+    /// MCP server pointing at a remote URL was added.
+    McpServerRemote { server_name: String, url: String },
+}
+
 /// The observation payload of an event.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -232,6 +298,22 @@ pub enum Evidence {
         lag_events: u64,
         lag_bytes: u64,
         oldest_unsent_age_s: u64,
+    },
+    /// Phase 3b.1 — periodic + change-triggered assessment of an AI coding
+    /// agent's local guard surface (hooks, permissions, sandbox).
+    /// Emitted by ai_guard_task. Sigil measures, does not block.
+    AiGuardRiskAssessed {
+        tool: AiTool,
+        scope: AiGuardScope,
+        /// 0.0..=10.0 (CVSS-style continuous; higher = more risk).
+        score: f32,
+        /// Auto-derived from `score` (low <1 / medium <4 / high <7 / critical 7+).
+        bucket: AiGuardBucket,
+        /// Per-finding breakdown. Empty array = clean assessment.
+        reasons: Vec<AiGuardReason>,
+        /// `true` iff this is the periodic re-attestation heartbeat (no
+        /// reason set change since last emission). `false` = something changed.
+        is_reattestation: bool,
     },
 }
 
@@ -522,6 +604,67 @@ mod tests {
                 "for {expected_kind}: {s}"
             );
         }
+    }
+
+    #[test]
+    fn ai_guard_risk_assessed_serializes_with_kind_and_round_trips() {
+        let ev = Evidence::AiGuardRiskAssessed {
+            tool: AiTool::ClaudeCode,
+            scope: AiGuardScope::UserGlobal,
+            score: 7.5,
+            bucket: AiGuardBucket::Critical,
+            reasons: vec![
+                AiGuardReason::DestructiveInInlineCommand {
+                    pattern: "rm -rf".into(),
+                    hook_event: "PreToolUse".into(),
+                    snippet: "rm -rf /tmp/sigil-test/*".into(),
+                },
+                AiGuardReason::NoSandbox {
+                    executor: "host_shell".into(),
+                },
+                AiGuardReason::BroadMatcher {
+                    hook_event: "PreToolUse".into(),
+                    matcher: ".*".into(),
+                },
+            ],
+            is_reattestation: false,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(
+            s.contains("\"kind\":\"ai_guard_risk_assessed\""),
+            "got: {s}"
+        );
+        assert!(s.contains("\"tool\":\"claude_code\""));
+        assert!(s.contains("\"bucket\":\"critical\""));
+        assert!(s.contains("\"is_reattestation\":false"));
+        assert!(s.contains("\"kind\":\"destructive_in_inline_command\""));
+        assert!(s.contains("\"kind\":\"no_sandbox\""));
+        assert!(s.contains("\"executor\":\"host_shell\""));
+        let back: Evidence = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn ai_guard_scope_project_serializes_with_path() {
+        let s = AiGuardScope::Project {
+            path: std::path::PathBuf::from("/Users/alice/code/repo-a/.claude"),
+        };
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(j.contains("\"kind\":\"project\""));
+        assert!(j.contains("\"path\":\"/Users/alice/code/repo-a/.claude\""));
+        let back: AiGuardScope = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn ai_guard_reason_external_script_serializes_with_kind() {
+        let r = AiGuardReason::ExternalScriptUnscanned {
+            hook_event: "PreToolUse".into(),
+            script_path: std::path::PathBuf::from("/usr/local/bin/foo.sh"),
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        assert!(j.contains("\"kind\":\"external_script_unscanned\""));
+        assert!(j.contains("\"script_path\":\"/usr/local/bin/foo.sh\""));
     }
 
     #[test]
