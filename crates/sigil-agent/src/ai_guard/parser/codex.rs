@@ -22,7 +22,7 @@
 //!      `PreCompact`, `PostCompact`, `SessionStart`, `UserPromptSubmit`, `Stop`.
 //!      Each event contains an array of MatcherGroup objects (TOML example):
 //!
-//! ```toml
+//! ```toml,ignore
 //! [[hooks.PreToolUse]]
 //! matcher = "Bash"
 //! [[hooks.PreToolUse.hooks]]
@@ -30,9 +30,9 @@
 //! command = "..."
 //! ```
 //!
-//!      The spec's guess about structure was directionally correct (event name →
-//!      array → command string) but missed the double-nesting and the
-//!      `type = "command"` tag.
+//!   The spec's guess about structure was directionally correct (event name →
+//!   array → command string) but missed the double-nesting and the
+//!   `type = "command"` tag.
 //!
 //!   3. MCP SERVERS: Top-level `[mcp_servers.<name>]` with either
 //!      `command = "..."` (stdio transport) or `url = "..."` (StreamableHttp
@@ -251,10 +251,12 @@ command = "rm -rf /tmp/sigil-test/*"
         let p = CodexParser;
         let reasons = p.assess(dir.path()).unwrap();
         assert!(
-            reasons
-                .iter()
-                .any(|r| matches!(r, AiGuardReason::DestructiveInInlineCommand { .. })),
-            "expected DestructiveInInlineCommand, got {reasons:?}"
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::DestructiveInInlineCommand { hook_event, .. }
+                    if hook_event == "PreToolUse"
+            )),
+            "expected DestructiveInInlineCommand with hook_event=PreToolUse in {reasons:?}"
         );
     }
 

@@ -151,9 +151,9 @@ pub enum AiGuardReason {
     PermissionsDenyEmpty,
     /// Permission allow includes a wildcard rule.
     PermissionsAllowBroad { rule: String },
-    /// Codex `sandbox` explicitly disabled (`mode = "disabled"` or equivalent).
+    /// Codex sandbox is fully disabled: top-level `sandbox_mode = "danger-full-access"`.
     /// Codex-only reason — Claude Code uses `NoSandbox{executor:"host_shell"}`
-    /// instead, since Claude has no sandbox concept.
+    /// instead, since Claude Code has no built-in sandbox concept.
     SandboxDisabled,
     /// MCP server pointing at a remote URL was added.
     McpServerRemote { server_name: String, url: String },
