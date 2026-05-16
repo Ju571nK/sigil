@@ -1,5 +1,6 @@
 //! Internal library shared with integration tests.
 
+pub mod ai_guard;
 pub mod cli;
 pub mod control;
 pub mod control_client;

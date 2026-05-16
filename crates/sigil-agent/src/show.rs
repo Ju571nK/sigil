@@ -477,6 +477,10 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
         Evidence::SenderLagCritical { lag_events, .. } => {
             ("sender_lag_critical", format!("events={lag_events}"))
         }
+        Evidence::AiGuardRiskAssessed { tool, bucket, .. } => (
+            "ai_guard_risk_assessed",
+            format!("tool={tool:?} bucket={bucket:?}"),
+        ),
     }
 }
 
