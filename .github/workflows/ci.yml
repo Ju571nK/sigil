@@ -75,7 +75,9 @@ jobs:
           set -eux
           
           while IFS='|' read -r pkg bin unit example; do
-            rpm=$(echo target/generate-rpm/${pkg}-*.rpm)
+            # Anchor on a digit after the dash so `sigil-*.rpm` doesn't match
+            # sigil-sender / sigil-server / sigil-signer too (issue #7).
+            rpm=$(echo target/generate-rpm/${pkg}-[0-9]*.rpm)
             echo "=== inspecting $rpm ==="
             rpm -qpi "$rpm"
             rpm -qpl "$rpm"
