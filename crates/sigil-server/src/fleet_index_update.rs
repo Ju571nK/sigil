@@ -1,1 +1,271 @@
-//! Per-evidence-variant HostSummary update mapping. Implemented in Task 4.
+//! Per-evidence-variant update mapping. Spec §3.3 table. Pure function so it
+//! can be exercised by unit tests without spinning up a FleetIndex.
+
+use crate::fleet_index::HostSummary;
+use sigil_core::event::{Event, Evidence, Severity};
+
+/// Apply one event to a HostSummary. Caller (FleetIndex in Task 5 / boot_rebuild
+/// in Task 6) holds the write lock and the `host_id`-keyed entry.
+pub fn apply_event(host: &mut HostSummary, event: &Event) {
+    // Identity bookkeeping — every variant updates these.
+    host.agent_version = event.agent_version.clone();
+    if host.last_seen_ts.map_or(true, |t| event.ts > t) {
+        host.last_seen_ts = Some(event.ts);
+    }
+    let cur_hour = event.ts.unix_timestamp() / 3600;
+    host.counts_24h.advance_to(cur_hour);
+    let slot = host.counts_24h.slot_for(cur_hour);
+
+    // Generic severity bucket (info/warn) is incremented for every event;
+    // specific-evidence buckets get additional increments below where applicable.
+    if let Some(s) = slot {
+        match event.severity {
+            Severity::Info => host.counts_24h.info[s] = host.counts_24h.info[s].saturating_add(1),
+            Severity::Warn => host.counts_24h.warn[s] = host.counts_24h.warn[s].saturating_add(1),
+        }
+    }
+
+    // Variant-specific updates.
+    match &event.evidence {
+        Evidence::HostMetaSnapshot { snapshot, .. } => {
+            host.latest_host_meta = Some(snapshot.clone());
+        }
+        Evidence::AiGuardRiskAssessed {
+            tool, scope, score, bucket, reasons, is_reattestation,
+        } => {
+            host.current_risk.insert(
+                *tool,
+                crate::fleet_index::RiskEntry {
+                    score: *score,
+                    bucket: *bucket,
+                    assessed_ts: event.ts,
+                    is_reattestation: *is_reattestation,
+                    scope: scope.clone(),
+                    reasons: reasons.clone(),
+                },
+            );
+        }
+        Evidence::Heartbeat {
+            hash_p99_ms,
+            jsonl_above_soft_floor,
+            last_applied_policy_version,
+            policy_expired_active,
+            ..
+        } => {
+            host.agent_health.last_heartbeat_ts = Some(event.ts);
+            host.agent_health.hash_p99_ms_latest = Some(*hash_p99_ms);
+            host.agent_health.jsonl_above_soft_floor_latest = Some(*jsonl_above_soft_floor);
+            // Heartbeat carries the agent's current policy view as a sticky
+            // backup signal. PolicyReloaded / PolicyExpiredActive are the
+            // discrete authoritative sources, but the heartbeat snapshot is
+            // useful after agent restart when no fresh discrete event fires.
+            if *last_applied_policy_version > host.policy_state.last_applied_policy_version {
+                host.policy_state.last_applied_policy_version = *last_applied_policy_version;
+            }
+            host.policy_state.policy_expired_active = *policy_expired_active;
+        }
+        Evidence::PolicyReloaded { policy_version } => {
+            host.policy_state.last_applied_policy_version = *policy_version;
+            host.policy_state.last_policy_reload_ts = Some(event.ts);
+            host.policy_state.policy_expired_active = false;
+        }
+        Evidence::PolicyExpiredActive { .. } => {
+            host.policy_state.policy_expired_active = true;
+        }
+        Evidence::PolicySignatureInvalid { .. } => {
+            if let Some(s) = slot {
+                host.counts_24h.sig_failures[s] = host.counts_24h.sig_failures[s].saturating_add(1);
+            }
+        }
+        Evidence::SenderLagCritical { .. } => {
+            if let Some(s) = slot {
+                host.counts_24h.sender_lag_critical[s] = host.counts_24h.sender_lag_critical[s].saturating_add(1);
+            }
+        }
+        Evidence::WatcherDegraded { .. } => {
+            if let Some(s) = slot {
+                host.counts_24h.watcher_degraded[s] = host.counts_24h.watcher_degraded[s].saturating_add(1);
+            }
+        }
+        Evidence::ChannelStall { .. } => {
+            if let Some(s) = slot {
+                host.counts_24h.channel_stalls[s] = host.counts_24h.channel_stalls[s].saturating_add(1);
+            }
+        }
+        // All other variants: identity + severity-bucket increment above is the
+        // entire update. Listed explicitly so future variant additions raise
+        // a non-exhaustive match warning until decided where to map them.
+        Evidence::FileChange { .. }
+        | Evidence::PermissionMissing { .. }
+        | Evidence::AgentDying { .. }
+        | Evidence::RateLimitExceeded { .. }
+        | Evidence::HostIdFingerprintDrift { .. }
+        | Evidence::AgentJsonlForceGc { .. }
+        | Evidence::SenderSkippedSegment { .. }
+        | Evidence::HostIdConflict { .. }
+        | Evidence::AgentTooOld { .. }
+        | Evidence::CertExpired { .. }
+        | Evidence::TlsFailure { .. }
+        | Evidence::EventUnprocessableLocal { .. }
+        | Evidence::ServerProtocolViolation { .. } => { /* identity + severity only */ }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sigil_core::event::{
+        AiGuardBucket, AiGuardScope, AiTool, Event, Evidence, HostMetaSnapshot,
+        PolicySignatureInvalidReason, Severity, SourceKind, Subject, SCHEMA_VERSION,
+    };
+    use std::collections::BTreeMap;
+    use time::macros::datetime;
+    use uuid::Uuid;
+
+    fn ev(evidence: Evidence, sev: Severity, ts: time::OffsetDateTime) -> Event {
+        Event {
+            schema_version: SCHEMA_VERSION,
+            event_id: Uuid::now_v7(),
+            ts,
+            host_id: "h".into(),
+            agent_version: "0.5.0".into(),
+            severity: sev,
+            source: SourceKind::Agent,
+            subject: Subject::Self_,
+            evidence,
+            target_id: None,
+        }
+    }
+
+    fn heartbeat(
+        hash_p99_ms: u32,
+        jsonl_above_soft_floor: bool,
+        last_applied_policy_version: i64,
+        policy_expired_active: bool,
+    ) -> Evidence {
+        Evidence::Heartbeat {
+            uptime_s: 60,
+            is_final: false,
+            channel_stall_events_total: 0,
+            events_emitted_total: 100,
+            events_by_kind: BTreeMap::new(),
+            hash_p50_ms: 1,
+            hash_p99_ms,
+            watcher_backend: "fsevents".into(),
+            state_db_size_bytes: 4096,
+            last_log_rotation_ts: None,
+            last_applied_policy_version,
+            policy_expired_active,
+            jsonl_above_soft_floor,
+        }
+    }
+
+    #[test]
+    fn host_meta_snapshot_populates_latest_meta() {
+        let mut h = HostSummary::new("h".into());
+        let snap = HostMetaSnapshot {
+            hostname: Some("alice".into()),
+            os_name: None, os_version: None, kernel_version: None,
+            architecture: None, interfaces: vec![],
+            default_gateway_v4: None, default_gateway_v6: None,
+            dns_servers: vec![],
+        };
+        let e = ev(Evidence::HostMetaSnapshot { snapshot: snap.clone(), is_reattestation: false },
+                   Severity::Info, datetime!(2026-05-17 12:00 UTC));
+        apply_event(&mut h, &e);
+        assert_eq!(h.latest_host_meta.as_ref().unwrap().hostname.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn ai_guard_risk_inserts_per_tool_latest() {
+        let mut h = HostSummary::new("h".into());
+        let e = ev(Evidence::AiGuardRiskAssessed {
+            tool: AiTool::ClaudeCode,
+            scope: AiGuardScope::UserGlobal,
+            score: 7.2,
+            bucket: AiGuardBucket::Critical,
+            reasons: vec![],
+            is_reattestation: false,
+        }, Severity::Warn, datetime!(2026-05-17 12:00 UTC));
+        apply_event(&mut h, &e);
+        let entry = h.current_risk.get(&AiTool::ClaudeCode).unwrap();
+        assert_eq!(entry.score, 7.2);
+        assert_eq!(entry.bucket, AiGuardBucket::Critical);
+    }
+
+    #[test]
+    fn policy_reloaded_updates_version_and_clears_expired() {
+        let mut h = HostSummary::new("h".into());
+        h.policy_state.policy_expired_active = true;
+        let e = ev(Evidence::PolicyReloaded { policy_version: 17 },
+                   Severity::Info, datetime!(2026-05-17 12:00 UTC));
+        apply_event(&mut h, &e);
+        assert_eq!(h.policy_state.last_applied_policy_version, 17);
+        assert!(!h.policy_state.policy_expired_active);
+        assert_eq!(h.policy_state.last_policy_reload_ts, Some(datetime!(2026-05-17 12:00 UTC)));
+    }
+
+    #[test]
+    fn policy_expired_active_sets_flag() {
+        let mut h = HostSummary::new("h".into());
+        let e = ev(Evidence::PolicyExpiredActive {
+            policy_version: 17,
+            valid_until: datetime!(2026-05-10 0:00 UTC),
+        }, Severity::Warn, datetime!(2026-05-17 12:00 UTC));
+        apply_event(&mut h, &e);
+        assert!(h.policy_state.policy_expired_active);
+    }
+
+    #[test]
+    fn policy_signature_invalid_increments_counter() {
+        let mut h = HostSummary::new("h".into());
+        let e = ev(Evidence::PolicySignatureInvalid {
+            reason: PolicySignatureInvalidReason::SignatureInvalid,
+            signing_pubkey_id: "k1".into(),
+            policy_version_in_envelope: 17,
+            last_applied_policy_version: 16,
+        }, Severity::Warn, datetime!(2026-05-17 12:00 UTC));
+        apply_event(&mut h, &e);
+        assert_eq!(h.counts_24h.sum_sig_failures(), 1);
+    }
+
+    #[test]
+    fn heartbeat_updates_health_block_and_policy_backup() {
+        let mut h = HostSummary::new("h".into());
+        let e = ev(
+            heartbeat(12, false, 17, false),
+            Severity::Info,
+            datetime!(2026-05-17 12:00 UTC),
+        );
+        apply_event(&mut h, &e);
+        assert_eq!(h.agent_health.hash_p99_ms_latest, Some(12));
+        assert_eq!(h.agent_health.jsonl_above_soft_floor_latest, Some(false));
+        assert_eq!(h.agent_health.last_heartbeat_ts, Some(datetime!(2026-05-17 12:00 UTC)));
+        // Heartbeat's policy-version backup signal also populated the index.
+        assert_eq!(h.policy_state.last_applied_policy_version, 17);
+        assert!(!h.policy_state.policy_expired_active);
+    }
+
+    #[test]
+    fn identity_fields_track_latest() {
+        let mut h = HostSummary::new("h".into());
+        let t1 = datetime!(2026-05-17 12:00 UTC);
+        let t2 = datetime!(2026-05-17 13:00 UTC);
+        apply_event(&mut h, &ev(heartbeat(1, false, 0, false), Severity::Info, t1));
+        apply_event(&mut h, &ev(heartbeat(1, false, 0, false), Severity::Info, t2));
+        assert_eq!(h.last_seen_ts, Some(t2));
+    }
+
+    #[test]
+    fn old_event_skipped_for_counts_but_keeps_identity() {
+        let mut h = HostSummary::new("h".into());
+        let recent = datetime!(2026-05-17 12:00 UTC);
+        let ancient = datetime!(2026-05-15 12:00 UTC); // 2 days old (out of 24h window)
+        apply_event(&mut h, &ev(heartbeat(1, false, 0, false), Severity::Info, recent));
+        apply_event(&mut h, &ev(heartbeat(1, false, 0, false), Severity::Info, ancient));
+        // Recent counted, ancient skipped.
+        assert_eq!(h.counts_24h.sum_info(), 1);
+        // last_seen_ts stays at recent (we used max()).
+        assert_eq!(h.last_seen_ts, Some(recent));
+    }
+}
