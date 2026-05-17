@@ -1,5 +1,6 @@
 //! Route handlers for the read API.
 
+pub mod events;
 pub mod fleet_compliance;
 pub mod fleet_hosts;
 pub mod fleet_risk;

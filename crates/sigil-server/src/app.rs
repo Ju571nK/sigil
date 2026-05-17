@@ -40,5 +40,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/v1/fleet/hosts/:host_id", get(crate::routes::fleet_hosts::get_fleet_host_by_id).route_layer(from_fn_with_state(token.clone(), require_bearer)))
         .route("/v1/fleet/risk", get(crate::routes::fleet_risk::get_fleet_risk).route_layer(from_fn_with_state(token.clone(), require_bearer)))
         .route("/v1/fleet/compliance", get(crate::routes::fleet_compliance::get_fleet_compliance).route_layer(from_fn_with_state(token.clone(), require_bearer)))
+        .route("/v1/events", get(crate::routes::events::get_events).route_layer(from_fn_with_state(token.clone(), require_bearer)))
+        .route("/v1/events/:event_id", get(crate::routes::events::get_event_by_id).route_layer(from_fn_with_state(token.clone(), require_bearer)))
         .with_state(state)
 }
