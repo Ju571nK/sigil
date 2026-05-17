@@ -16,14 +16,14 @@
 
 pub mod allowlist;
 pub mod app;
+pub mod auth;
+pub mod boot_rebuild;
 pub mod cli;
 pub mod config;
 pub mod events_route;
-pub mod persist;
-pub mod policy_route;
-pub mod auth;
-pub mod boot_rebuild;
 pub mod fleet_index;
 pub mod fleet_index_update;
 pub mod jsonl_scan;
+pub mod persist;
+pub mod policy_route;
 pub mod routes;

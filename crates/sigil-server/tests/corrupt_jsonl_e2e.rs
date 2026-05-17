@@ -35,6 +35,13 @@ fn jsonl_scan_skips_corrupt_lines() {
     let f = host_dir.join("received-2026-05-17.jsonl");
     let body = format!("{}{}{}", good_line(), "{not json}\n", good_line());
     std::fs::write(&f, body).unwrap();
-    let r = scan(dir.path(), &ScanFilters { limit: 10, ..Default::default() }).unwrap();
+    let r = scan(
+        dir.path(),
+        &ScanFilters {
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(r.events.len(), 2);
 }

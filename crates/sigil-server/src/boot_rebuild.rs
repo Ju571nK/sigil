@@ -73,10 +73,13 @@ pub fn rebuild_from_jsonl(events_out_dir: &Path) -> std::io::Result<HashMap<Stri
                     break;
                 }
             };
-            if line.trim().is_empty() { continue; }
+            if line.trim().is_empty() {
+                continue;
+            }
             match serde_json::from_str::<Event>(line.trim_end()) {
                 Ok(event) => {
-                    let entry = out.entry(event.host_id.clone())
+                    let entry = out
+                        .entry(event.host_id.clone())
                         .or_insert_with(|| HostSummary::new(event.host_id.clone()));
                     apply_event(entry, &event);
                 }
@@ -150,7 +153,10 @@ mod tests {
         let host_dir = dir.path().join("h1");
         std::fs::create_dir_all(&host_dir).unwrap();
         let file = host_dir.join("received-2026-05-17.jsonl");
-        write_line(&file, &host_meta_event("h1", "alice", "2026-05-17T12:00:00Z"));
+        write_line(
+            &file,
+            &host_meta_event("h1", "alice", "2026-05-17T12:00:00Z"),
+        );
         let map = rebuild_from_jsonl(dir.path()).unwrap();
         assert_eq!(map.len(), 1);
         let h = map.get("h1").unwrap();
@@ -164,8 +170,14 @@ mod tests {
         std::fs::create_dir_all(&host_dir).unwrap();
         let f_old = host_dir.join("received-2026-05-16.jsonl");
         let f_new = host_dir.join("received-2026-05-17.jsonl");
-        write_line(&f_old, &host_meta_event("h1", "old-name", "2026-05-16T12:00:00Z"));
-        write_line(&f_new, &host_meta_event("h1", "new-name", "2026-05-17T12:00:00Z"));
+        write_line(
+            &f_old,
+            &host_meta_event("h1", "old-name", "2026-05-16T12:00:00Z"),
+        );
+        write_line(
+            &f_new,
+            &host_meta_event("h1", "new-name", "2026-05-17T12:00:00Z"),
+        );
         let map = rebuild_from_jsonl(dir.path()).unwrap();
         // newer overrides older
         assert_eq!(map.get("h1").unwrap().hostname(), Some("new-name"));
@@ -178,7 +190,10 @@ mod tests {
         std::fs::create_dir_all(&host_dir).unwrap();
         let file = host_dir.join("received-2026-05-17.jsonl");
         write_line(&file, &serde_json::json!("not-an-object"));
-        write_line(&file, &host_meta_event("h1", "alice", "2026-05-17T12:00:00Z"));
+        write_line(
+            &file,
+            &host_meta_event("h1", "alice", "2026-05-17T12:00:00Z"),
+        );
         let map = rebuild_from_jsonl(dir.path()).unwrap();
         // good line still applied; bad line warned + skipped
         assert_eq!(map.get("h1").unwrap().hostname(), Some("alice"));

@@ -40,7 +40,10 @@ async fn ingested_host_meta_appears_in_detail_block() {
         severity: sigil_core::event::Severity::Info,
         source: sigil_core::event::SourceKind::Agent,
         subject: sigil_core::event::Subject::Self_,
-        evidence: sigil_core::event::Evidence::HostMetaSnapshot { snapshot: snap, is_reattestation: false },
+        evidence: sigil_core::event::Evidence::HostMetaSnapshot {
+            snapshot: snap,
+            is_reattestation: false,
+        },
         target_id: None,
     };
     idx.apply_event(&ev);
@@ -55,12 +58,20 @@ async fn ingested_host_meta_appears_in_detail_block() {
         read_token: ReadToken(Some("tok".into())),
     });
     let app = build_router(state);
-    let req = Request::builder().method("GET").uri("/v1/fleet/hosts/h1")
-        .header(header::AUTHORIZATION, "Bearer tok").body(Body::empty()).unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/fleet/hosts/h1")
+        .header(header::AUTHORIZATION, "Bearer tok")
+        .body(Body::empty())
+        .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+        &axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(body["hostname"], "alice");
     assert_eq!(body["host_meta"]["os_name"], "macOS");
     assert_eq!(body["host_meta"]["interfaces"][0]["name"], "en0");

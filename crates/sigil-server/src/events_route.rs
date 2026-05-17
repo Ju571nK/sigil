@@ -136,7 +136,9 @@ pub async fn post_events(
         }
         match serde_json::from_value::<sigil_core::event::Event>(entry.payload.clone()) {
             Ok(event) => state.fleet_index.apply_event(&event),
-            Err(e) => tracing::warn!(error = ?e, event_id = %entry.event_id, "fleet_index apply skipped"),
+            Err(e) => {
+                tracing::warn!(error = ?e, event_id = %entry.event_id, "fleet_index apply skipped")
+            }
         }
     }
 

@@ -30,7 +30,9 @@ async fn events_pagination_walks_in_pages() {
     let mut all_ids: Vec<uuid::Uuid> = (0..5).map(|_| uuid::Uuid::now_v7()).collect();
     all_ids.sort(); // ascending; pagination returns descending.
     let mut buf = String::new();
-    for u in &all_ids { buf.push_str(&ev_jsonl(*u, "2026-05-17T12:00:00Z")); }
+    for u in &all_ids {
+        buf.push_str(&ev_jsonl(*u, "2026-05-17T12:00:00Z"));
+    }
     std::fs::write(&f, buf).unwrap();
 
     let state = Arc::new(AppState {
@@ -49,11 +51,20 @@ async fn events_pagination_walks_in_pages() {
             None => "/v1/events?limit=2".to_string(),
             Some(c) => format!("/v1/events?limit=2&cursor={c}"),
         };
-        let req = Request::builder().method("GET").uri(uri)
-            .header(header::AUTHORIZATION, "Bearer tok").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header(header::AUTHORIZATION, "Bearer tok")
+            .body(Body::empty())
+            .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap()
+        serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
     }
 
     let p1 = page(&app, None).await;

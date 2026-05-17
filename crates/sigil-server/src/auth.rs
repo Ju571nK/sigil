@@ -20,18 +20,26 @@ impl ReadToken {
         match std::env::var("SIGIL_SERVER_READ_TOKEN") {
             Ok(s) => {
                 let t = s.trim().to_string();
-                if t.is_empty() { ReadToken(None) } else { ReadToken(Some(t)) }
+                if t.is_empty() {
+                    ReadToken(None)
+                } else {
+                    ReadToken(Some(t))
+                }
             }
             Err(_) => ReadToken(None),
         }
     }
 
-    pub fn is_enabled(&self) -> bool { self.0.is_some() }
+    pub fn is_enabled(&self) -> bool {
+        self.0.is_some()
+    }
 }
 
 /// Constant-time byte compare to dodge timing side channels on token equality.
 pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
     let mut diff = 0u8;
     for (x, y) in a.iter().zip(b.iter()) {
         diff |= x ^ y;
@@ -123,7 +131,10 @@ mod tests {
     #[test]
     fn extract_bearer_basic() {
         let mut h = HeaderMap::new();
-        h.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer hello"));
+        h.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer hello"),
+        );
         assert_eq!(extract_bearer(&h), Some("hello"));
         h.insert(header::AUTHORIZATION, HeaderValue::from_static("Basic xxx"));
         assert_eq!(extract_bearer(&h), None);

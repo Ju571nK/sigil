@@ -21,14 +21,24 @@ fn state_with_token(dir: &std::path::Path, token: &str) -> Arc<AppState> {
     })
 }
 
-async fn get(app: &axum::Router, path: &str, token: Option<&str>) -> (StatusCode, serde_json::Value) {
+async fn get(
+    app: &axum::Router,
+    path: &str,
+    token: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
     let mut b = Request::builder().method("GET").uri(path);
     if let Some(t) = token {
         b = b.header(header::AUTHORIZATION, format!("Bearer {t}"));
     }
-    let resp = app.clone().oneshot(b.body(Body::empty()).unwrap()).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(b.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
     (status, v)
 }
@@ -48,7 +58,10 @@ async fn meta_returns_alerts_default() {
     let app = build_router(state_with_token(dir.path(), "tok"));
     let (status, body) = get(&app, "/v1/meta", Some("tok")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["alerts_definition_default"]["evidence_kinds"][0], "ai_guard_risk_assessed");
+    assert_eq!(
+        body["alerts_definition_default"]["evidence_kinds"][0],
+        "ai_guard_risk_assessed"
+    );
 }
 
 #[tokio::test]

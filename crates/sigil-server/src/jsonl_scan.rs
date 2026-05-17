@@ -102,7 +102,10 @@ pub fn scan(events_out_dir: &Path, f: &ScanFilters) -> std::io::Result<ScanResul
         }
     }
 
-    Ok(ScanResult { events: out, next_cursor })
+    Ok(ScanResult {
+        events: out,
+        next_cursor,
+    })
 }
 
 fn filter_match(e: &Event, f: &ScanFilters) -> bool {
@@ -219,8 +222,14 @@ mod tests {
         std::fs::create_dir_all(&host_dir).unwrap();
         let f1 = host_dir.join("received-2026-05-16.jsonl");
         let f2 = host_dir.join("received-2026-05-17.jsonl");
-        write_line(&f1, &evjson("h1", "2026-05-16T12:00:00Z", "host_id_conflict"));
-        write_line(&f2, &evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict"));
+        write_line(
+            &f1,
+            &evjson("h1", "2026-05-16T12:00:00Z", "host_id_conflict"),
+        );
+        write_line(
+            &f2,
+            &evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict"),
+        );
         let r = scan(
             dir.path(),
             &ScanFilters {
@@ -240,7 +249,10 @@ mod tests {
         let host_dir = dir.path().join("h1");
         std::fs::create_dir_all(&host_dir).unwrap();
         let f = host_dir.join("received-2026-05-17.jsonl");
-        write_line(&f, &evjson("h1", "2026-05-17T11:00:00Z", "host_id_conflict"));
+        write_line(
+            &f,
+            &evjson("h1", "2026-05-17T11:00:00Z", "host_id_conflict"),
+        );
         write_line(&f, &evjson("h1", "2026-05-17T12:00:00Z", "tls_failure"));
         let r = scan(
             dir.path(),
@@ -262,7 +274,10 @@ mod tests {
         std::fs::create_dir_all(&host_dir).unwrap();
         let f = host_dir.join("received-2026-05-17.jsonl");
         for _ in 0..5 {
-            write_line(&f, &evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict"));
+            write_line(
+                &f,
+                &evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict"),
+            );
         }
         let r = scan(
             dir.path(),

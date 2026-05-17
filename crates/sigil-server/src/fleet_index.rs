@@ -1,9 +1,7 @@
 //! In-memory FleetIndex schemas (Task 3 = types only; Task 5 adds FleetIndex wrapper).
 
 use serde::{Deserialize, Serialize};
-use sigil_core::event::{
-    AiGuardBucket, AiGuardReason, AiGuardScope, AiTool, HostMetaSnapshot,
-};
+use sigil_core::event::{AiGuardBucket, AiGuardReason, AiGuardScope, AiTool, HostMetaSnapshot};
 use std::collections::BTreeMap;
 use time::OffsetDateTime;
 
@@ -95,12 +93,24 @@ impl HourlyBuckets {
         }
     }
 
-    pub fn sum_warn(&self) -> u32 { self.warn.iter().sum() }
-    pub fn sum_info(&self) -> u32 { self.info.iter().sum() }
-    pub fn sum_sig_failures(&self) -> u32 { self.sig_failures.iter().sum() }
-    pub fn sum_channel_stalls(&self) -> u32 { self.channel_stalls.iter().sum() }
-    pub fn sum_watcher_degraded(&self) -> u32 { self.watcher_degraded.iter().sum() }
-    pub fn sum_sender_lag_critical(&self) -> u32 { self.sender_lag_critical.iter().sum() }
+    pub fn sum_warn(&self) -> u32 {
+        self.warn.iter().sum()
+    }
+    pub fn sum_info(&self) -> u32 {
+        self.info.iter().sum()
+    }
+    pub fn sum_sig_failures(&self) -> u32 {
+        self.sig_failures.iter().sum()
+    }
+    pub fn sum_channel_stalls(&self) -> u32 {
+        self.channel_stalls.iter().sum()
+    }
+    pub fn sum_watcher_degraded(&self) -> u32 {
+        self.watcher_degraded.iter().sum()
+    }
+    pub fn sum_sender_lag_critical(&self) -> u32 {
+        self.sender_lag_critical.iter().sum()
+    }
 }
 
 /// Everything the read API needs to answer fleet questions about one host
@@ -131,7 +141,9 @@ impl HostSummary {
 
     /// Convenience: `.hostname` lifted from `latest_host_meta`. None if no snapshot yet.
     pub fn hostname(&self) -> Option<&str> {
-        self.latest_host_meta.as_ref().and_then(|m| m.hostname.as_deref())
+        self.latest_host_meta
+            .as_ref()
+            .and_then(|m| m.hostname.as_deref())
     }
 }
 
@@ -145,23 +157,37 @@ mod tests {
         b.warn[3] = 99; // leftover from some hypothetical reuse
         b.advance_to(100);
         assert_eq!(b.head_hour_unix, 100);
-        assert_eq!(b.warn[3], 99, "first advance must not zero buckets — head was 0");
+        assert_eq!(
+            b.warn[3], 99,
+            "first advance must not zero buckets — head was 0"
+        );
     }
 
     #[test]
     fn hourly_buckets_advance_zeros_skipped_slots() {
-        let mut b = HourlyBuckets { head_hour_unix: 1000, warn: [5; 24], ..Default::default() };
+        let mut b = HourlyBuckets {
+            head_hour_unix: 1000,
+            warn: [5; 24],
+            ..Default::default()
+        };
         // advance one hour
         b.advance_to(1001);
         let zeroed_slot = (1001 % 24) as usize;
-        assert_eq!(b.warn[zeroed_slot], 0, "slot {zeroed_slot} should be zeroed");
+        assert_eq!(
+            b.warn[zeroed_slot], 0,
+            "slot {zeroed_slot} should be zeroed"
+        );
         // other slots untouched
         assert_eq!(b.warn[((1000) % 24) as usize], 5);
     }
 
     #[test]
     fn hourly_buckets_advance_24h_or_more_clears_everything() {
-        let mut b = HourlyBuckets { head_hour_unix: 1000, warn: [7; 24], ..Default::default() };
+        let mut b = HourlyBuckets {
+            head_hour_unix: 1000,
+            warn: [7; 24],
+            ..Default::default()
+        };
         b.advance_to(1024); // 24 hours later → all 24 slots zeroed
         assert_eq!(b.warn, [0; 24]);
         assert_eq!(b.head_hour_unix, 1024);
@@ -169,7 +195,10 @@ mod tests {
 
     #[test]
     fn hourly_buckets_advance_backwards_is_noop() {
-        let mut b = HourlyBuckets { head_hour_unix: 1000, ..Default::default() };
+        let mut b = HourlyBuckets {
+            head_hour_unix: 1000,
+            ..Default::default()
+        };
         b.warn[(1000 % 24) as usize] = 9;
         b.advance_to(999);
         assert_eq!(b.head_hour_unix, 1000);
@@ -178,10 +207,13 @@ mod tests {
 
     #[test]
     fn hourly_buckets_slot_for_within_window() {
-        let b = HourlyBuckets { head_hour_unix: 1000, ..Default::default() };
+        let b = HourlyBuckets {
+            head_hour_unix: 1000,
+            ..Default::default()
+        };
         assert_eq!(b.slot_for(1000), Some((1000 % 24) as usize));
         assert_eq!(b.slot_for(990), Some((990 % 24) as usize)); // 10h old, in window
-        assert_eq!(b.slot_for(976), None);  // 24h old → just out
+        assert_eq!(b.slot_for(976), None); // 24h old → just out
         assert_eq!(b.slot_for(1001), None); // future
     }
 
@@ -191,9 +223,13 @@ mod tests {
         assert_eq!(h.hostname(), None);
         h.latest_host_meta = Some(HostMetaSnapshot {
             hostname: Some("alice".into()),
-            os_name: None, os_version: None, kernel_version: None,
-            architecture: None, interfaces: vec![],
-            default_gateway_v4: None, default_gateway_v6: None,
+            os_name: None,
+            os_version: None,
+            kernel_version: None,
+            architecture: None,
+            interfaces: vec![],
+            default_gateway_v4: None,
+            default_gateway_v6: None,
             dns_servers: vec![],
         });
         assert_eq!(h.hostname(), Some("alice"));
@@ -212,13 +248,16 @@ pub struct FleetIndex {
 }
 
 impl FleetIndex {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Apply an event under write lock. Creates the host's HostSummary
     /// on first ingest (key = `event.host_id`).
     pub fn apply_event(&self, event: &sigil_core::event::Event) {
         let mut w = self.inner.write();
-        let entry = w.entry(event.host_id.clone())
+        let entry = w
+            .entry(event.host_id.clone())
             .or_insert_with(|| HostSummary::new(event.host_id.clone()));
         crate::fleet_index_update::apply_event(entry, event);
     }
@@ -241,8 +280,12 @@ impl FleetIndex {
     }
 
     /// Used by /v1/fleet/hosts.total_estimated and by some tests.
-    pub fn len(&self) -> usize { self.inner.read().len() }
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn len(&self) -> usize {
+        self.inner.read().len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[cfg(test)]
@@ -267,9 +310,13 @@ mod index_tests {
             evidence: Evidence::HostMetaSnapshot {
                 snapshot: HostMetaSnapshot {
                     hostname: Some(hostname.into()),
-                    os_name: None, os_version: None, kernel_version: None,
-                    architecture: None, interfaces: vec![],
-                    default_gateway_v4: None, default_gateway_v6: None,
+                    os_name: None,
+                    os_version: None,
+                    kernel_version: None,
+                    architecture: None,
+                    interfaces: vec![],
+                    default_gateway_v4: None,
+                    default_gateway_v6: None,
                     dns_servers: vec![],
                 },
                 is_reattestation: false,
@@ -294,7 +341,10 @@ mod index_tests {
         idx.apply_event(&snap_ev("h1", "alice"));
         idx.apply_event(&snap_ev("h1", "alice-renamed"));
         assert_eq!(idx.len(), 1);
-        assert_eq!(idx.get_host("h1").unwrap().hostname(), Some("alice-renamed"));
+        assert_eq!(
+            idx.get_host("h1").unwrap().hostname(),
+            Some("alice-renamed")
+        );
     }
 
     #[test]

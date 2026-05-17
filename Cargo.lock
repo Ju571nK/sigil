@@ -2355,6 +2355,7 @@ dependencies = [
  "blake3",
  "clap",
  "http",
+ "parking_lot",
  "reqwest",
  "rustls",
  "rustls-pemfile",

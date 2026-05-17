@@ -48,13 +48,23 @@ fn list_filter_match(
 ) -> bool {
     if let Some(ss) = status_filter {
         let s = classify_status(h.last_seen_ts, now);
-        if !ss.iter().any(|x| x == s) { return false; }
+        if !ss.iter().any(|x| x == s) {
+            return false;
+        }
     }
     if let Some(bf) = bucket_filter {
         let max = max_bucket_str(h);
         match max {
-            Some(b) => if !bf.iter().any(|x| x == b) { return false; },
-            None => if !bf.iter().any(|x| x == "low") { return false; }, // no risk ≈ low
+            Some(b) => {
+                if !bf.iter().any(|x| x == b) {
+                    return false;
+                }
+            }
+            None => {
+                if !bf.iter().any(|x| x == "low") {
+                    return false;
+                }
+            } // no risk ≈ low
         }
     }
     true
@@ -66,18 +76,31 @@ fn max_bucket_str(h: &HostSummary) -> Option<&'static str> {
     for entry in h.current_risk.values() {
         let new_rank = bucket_rank(entry.bucket);
         let cur_rank = max.map(bucket_rank).unwrap_or(0);
-        if new_rank >= cur_rank { max = Some(entry.bucket); }
+        if new_rank >= cur_rank {
+            max = Some(entry.bucket);
+        }
     }
-    max.map(|b| match b { Low => "low", Medium => "medium", High => "high", Critical => "critical" })
+    max.map(|b| match b {
+        Low => "low",
+        Medium => "medium",
+        High => "high",
+        Critical => "critical",
+    })
 }
 
 fn bucket_rank(b: sigil_core::event::AiGuardBucket) -> u8 {
     use sigil_core::event::AiGuardBucket::*;
-    match b { Low => 1, Medium => 2, High => 3, Critical => 4 }
+    match b {
+        Low => 1,
+        Medium => 2,
+        High => 3,
+        Critical => 4,
+    }
 }
 
 fn comma_split(s: &Option<String>) -> Option<Vec<String>> {
-    s.as_ref().map(|v| v.split(',').map(|p| p.trim().to_string()).collect())
+    s.as_ref()
+        .map(|v| v.split(',').map(|p| p.trim().to_string()).collect())
 }
 
 pub async fn get_fleet_hosts(
@@ -113,9 +136,11 @@ pub async fn get_fleet_hosts(
     // Cursor walk: skip everything up to and including the cursor's host_id.
     let start = match &q.cursor {
         None => 0usize,
-        Some(c) => {
-            all.iter().position(|h| &h.host_id == c).map(|i| i + 1).unwrap_or(all.len())
-        }
+        Some(c) => all
+            .iter()
+            .position(|h| &h.host_id == c)
+            .map(|i| i + 1)
+            .unwrap_or(all.len()),
     };
     let end = (start + limit).min(all.len());
     let page: Vec<Value> = all[start..end]
@@ -123,40 +148,62 @@ pub async fn get_fleet_hosts(
         .map(|h| render_host_summary_list(h, now))
         .collect();
     let next_cursor = if end < all.len() {
-        all.get(end - 1).map(|h| h.host_id.clone()).map(Value::String).unwrap_or(Value::Null)
-    } else { Value::Null };
+        all.get(end - 1)
+            .map(|h| h.host_id.clone())
+            .map(Value::String)
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
     let total_estimated = all.len();
 
     Json(json!({
         "hosts": page,
         "next_cursor": next_cursor,
         "total_estimated": total_estimated,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 fn top_bucket(h: &HostSummary) -> sigil_core::event::AiGuardBucket {
     use sigil_core::event::AiGuardBucket::*;
-    h.current_risk.values().map(|e| e.bucket).max_by_key(|b| bucket_rank(*b)).unwrap_or(Low)
+    h.current_risk
+        .values()
+        .map(|e| e.bucket)
+        .max_by_key(|b| bucket_rank(*b))
+        .unwrap_or(Low)
 }
 
 fn rfc3339(ts: OffsetDateTime) -> String {
-    ts.format(&time::format_description::well_known::Rfc3339).unwrap()
+    ts.format(&time::format_description::well_known::Rfc3339)
+        .unwrap()
 }
 
 fn render_risk_block(h: &HostSummary) -> Value {
     if h.current_risk.is_empty() {
         return Value::Null;
     }
-    let by_tool: serde_json::Map<String, Value> = h.current_risk.iter().map(|(tool, entry)| {
-        let tool_str = serde_json::to_value(tool).unwrap();
-        (tool_str.as_str().unwrap().to_string(), json!({
-            "score": entry.score,
-            "bucket": entry.bucket,
-            "assessed_ts": rfc3339(entry.assessed_ts),
-        }))
-    }).collect();
+    let by_tool: serde_json::Map<String, Value> = h
+        .current_risk
+        .iter()
+        .map(|(tool, entry)| {
+            let tool_str = serde_json::to_value(tool).unwrap();
+            (
+                tool_str.as_str().unwrap().to_string(),
+                json!({
+                    "score": entry.score,
+                    "bucket": entry.bucket,
+                    "assessed_ts": rfc3339(entry.assessed_ts),
+                }),
+            )
+        })
+        .collect();
     let max = top_bucket(h);
-    let max_score = h.current_risk.values().map(|e| e.score).fold(0f32, f32::max);
+    let max_score = h
+        .current_risk
+        .values()
+        .map(|e| e.score)
+        .fold(0f32, f32::max);
     json!({
         "max_score": max_score,
         "max_bucket": max,
@@ -186,44 +233,68 @@ pub async fn get_fleet_host_by_id(
     let now = OffsetDateTime::now_utc();
     let h = match state.fleet_index.get_host(&host_id) {
         Some(h) => h,
-        None => return (StatusCode::NOT_FOUND, Json(json!({
-            "error": {"code": "not_found", "message": "host_id not in index"}
-        }))).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": {"code": "not_found", "message": "host_id not in index"}
+                })),
+            )
+                .into_response()
+        }
     };
 
     // Build detail response = list shape + extra blocks
     let mut body = render_host_summary_list(&h, now);
     let body_obj = body.as_object_mut().unwrap();
 
-    body_obj.insert("host_meta".into(),
-        h.latest_host_meta.as_ref().map(|m| serde_json::to_value(m).unwrap()).unwrap_or(Value::Null));
+    body_obj.insert(
+        "host_meta".into(),
+        h.latest_host_meta
+            .as_ref()
+            .map(|m| serde_json::to_value(m).unwrap())
+            .unwrap_or(Value::Null),
+    );
 
-    body_obj.insert("policy_state".into(), json!({
-        "last_applied_policy_version": h.policy_state.last_applied_policy_version,
-        "policy_expired_active": h.policy_state.policy_expired_active,
-        "last_policy_reload_ts": h.policy_state.last_policy_reload_ts.map(rfc3339),
-    }));
+    body_obj.insert(
+        "policy_state".into(),
+        json!({
+            "last_applied_policy_version": h.policy_state.last_applied_policy_version,
+            "policy_expired_active": h.policy_state.policy_expired_active,
+            "last_policy_reload_ts": h.policy_state.last_policy_reload_ts.map(rfc3339),
+        }),
+    );
 
-    body_obj.insert("agent_health".into(), json!({
-        "recent_channel_stalls_24h": h.counts_24h.sum_channel_stalls(),
-        "recent_watcher_degraded_24h": h.counts_24h.sum_watcher_degraded(),
-        "recent_sender_lag_critical_24h": h.counts_24h.sum_sender_lag_critical(),
-        "last_heartbeat_ts": h.agent_health.last_heartbeat_ts.map(rfc3339),
-        "hash_p99_ms_latest": h.agent_health.hash_p99_ms_latest,
-        "jsonl_above_soft_floor_latest": h.agent_health.jsonl_above_soft_floor_latest,
-    }));
+    body_obj.insert(
+        "agent_health".into(),
+        json!({
+            "recent_channel_stalls_24h": h.counts_24h.sum_channel_stalls(),
+            "recent_watcher_degraded_24h": h.counts_24h.sum_watcher_degraded(),
+            "recent_sender_lag_critical_24h": h.counts_24h.sum_sender_lag_critical(),
+            "last_heartbeat_ts": h.agent_health.last_heartbeat_ts.map(rfc3339),
+            "hash_p99_ms_latest": h.agent_health.hash_p99_ms_latest,
+            "jsonl_above_soft_floor_latest": h.agent_health.jsonl_above_soft_floor_latest,
+        }),
+    );
 
-    let by_tool: serde_json::Map<String, Value> = h.current_risk.iter().map(|(tool, entry)| {
-        let tool_str = serde_json::to_value(tool).unwrap();
-        (tool_str.as_str().unwrap().to_string(), json!({
-            "score": entry.score,
-            "bucket": entry.bucket,
-            "assessed_ts": rfc3339(entry.assessed_ts),
-            "is_reattestation": entry.is_reattestation,
-            "scope": entry.scope,
-            "reasons": entry.reasons,
-        }))
-    }).collect();
+    let by_tool: serde_json::Map<String, Value> = h
+        .current_risk
+        .iter()
+        .map(|(tool, entry)| {
+            let tool_str = serde_json::to_value(tool).unwrap();
+            (
+                tool_str.as_str().unwrap().to_string(),
+                json!({
+                    "score": entry.score,
+                    "bucket": entry.bucket,
+                    "assessed_ts": rfc3339(entry.assessed_ts),
+                    "is_reattestation": entry.is_reattestation,
+                    "scope": entry.scope,
+                    "reasons": entry.reasons,
+                }),
+            )
+        })
+        .collect();
     body_obj.insert("ai_guard".into(), json!({ "by_tool": by_tool }));
 
     Json(body).into_response()
