@@ -571,10 +571,15 @@ fn write_risk_pretty(w: &mut impl Write, p: &RiskPayload) -> io::Result<()> {
             sigil_core::event::AiGuardScope::Project { path } => {
                 format!("project:{}", path.display())
             }
+            sigil_core::event::AiGuardScope::Application { app } => {
+                format!("application:{app}")
+            }
         };
         let tool_str = match s.tool {
             sigil_core::event::AiTool::ClaudeCode => "claude-code",
             sigil_core::event::AiTool::Codex => "codex",
+            sigil_core::event::AiTool::ClaudeDesktop => "claude-desktop",
+            sigil_core::event::AiTool::ContinueDev => "continue-dev",
         };
         // Use the serde wire string (snake_case) rather than Debug. Robust
         // against future multi-word AiGuardBucket variants (e.g., "very_high")

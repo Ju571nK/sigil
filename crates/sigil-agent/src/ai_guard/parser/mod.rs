@@ -4,7 +4,7 @@
 pub mod claude_code;
 pub mod codex;
 
-use sigil_core::event::{AiGuardReason, AiTool};
+use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,11 @@ pub trait AiGuardParser: Send + Sync {
     /// to dispatch file_change events to the right parser and to tag the
     /// emitted `AiGuardRiskAssessed` events.
     fn tool(&self) -> AiTool;
+
+    /// Returns the scope to tag emitted events with. CLI parsers (claude_code,
+    /// codex) return `UserGlobal`; application-form parsers return
+    /// `Application{app:"..."}`. Phase 3b.6.
+    fn scope(&self) -> AiGuardScope;
 
     /// Path globs (canonical/expanded) the parser cares about. Used by
     /// `ai_guard_task` to decide whether an incoming file_change belongs to

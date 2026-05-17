@@ -129,7 +129,7 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
     let score = rubric::score(&reasons);
     let bucket = rubric::bucket(score);
     let reasons_hash = rubric::canonical_hash(&reasons);
-    let key = (parser.tool(), AiGuardScope::UserGlobal);
+    let key = (parser.tool(), parser.scope());
     let prev = ctx.state.read().get(&key).cloned();
     let changed = prev
         .as_ref()
@@ -205,6 +205,9 @@ mod tests {
     impl AiGuardParser for ScriptedParser {
         fn tool(&self) -> AiTool {
             self.tool
+        }
+        fn scope(&self) -> AiGuardScope {
+            AiGuardScope::UserGlobal
         }
         fn watched_paths(&self, _home: &std::path::Path) -> Vec<PathBuf> {
             self.watched.clone()
@@ -364,6 +367,9 @@ mod tests {
         impl AiGuardParser for ErrorParser {
             fn tool(&self) -> AiTool {
                 AiTool::ClaudeCode
+            }
+            fn scope(&self) -> AiGuardScope {
+                AiGuardScope::UserGlobal
             }
             fn watched_paths(&self, _h: &std::path::Path) -> Vec<PathBuf> {
                 vec![PathBuf::from("/tmp/x")]

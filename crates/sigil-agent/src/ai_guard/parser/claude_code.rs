@@ -5,7 +5,7 @@
 use crate::ai_guard::parser::{AiGuardParser, AssessError};
 use crate::ai_guard::rubric;
 use serde_json::Value;
-use sigil_core::event::{AiGuardReason, AiTool};
+use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
 use std::path::{Path, PathBuf};
 
 pub struct ClaudeCodeParser;
@@ -13,6 +13,10 @@ pub struct ClaudeCodeParser;
 impl AiGuardParser for ClaudeCodeParser {
     fn tool(&self) -> AiTool {
         AiTool::ClaudeCode
+    }
+
+    fn scope(&self) -> AiGuardScope {
+        AiGuardScope::UserGlobal
     }
 
     fn watched_paths(&self, home_dir: &Path) -> Vec<PathBuf> {

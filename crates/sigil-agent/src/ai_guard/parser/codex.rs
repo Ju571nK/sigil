@@ -42,7 +42,7 @@
 
 use crate::ai_guard::parser::{AiGuardParser, AssessError};
 use crate::ai_guard::rubric;
-use sigil_core::event::{AiGuardReason, AiTool};
+use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
 use std::path::{Path, PathBuf};
 use toml::Value;
 
@@ -51,6 +51,10 @@ pub struct CodexParser;
 impl AiGuardParser for CodexParser {
     fn tool(&self) -> AiTool {
         AiTool::Codex
+    }
+
+    fn scope(&self) -> AiGuardScope {
+        AiGuardScope::UserGlobal
     }
 
     fn watched_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
