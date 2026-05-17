@@ -51,7 +51,7 @@ pub fn rebuild_from_jsonl(events_out_dir: &Path) -> std::io::Result<HashMap<Stri
         }
     }
     // Sort by file basename (the YYYY-MM-DD prefix makes this chronological).
-    files.sort_by(|(_, a), (_, b)| a.cmp(b));
+    files.sort_by_key(|(_, name)| name.clone());
 
     for (path, _name) in files {
         let f = match std::fs::File::open(&path) {

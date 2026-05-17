@@ -30,7 +30,7 @@ pub async fn get_fleet_compliance(
         .and_then(|v| v.get("policy_version").and_then(|n| n.as_i64()));
 
     let mut hosts = state.fleet_index.snapshot_all();
-    hosts.sort_by(|a, b| a.host_id.cmp(&b.host_id));
+    hosts.sort_by_key(|h| h.host_id.clone());
 
     let start = match &q.cursor {
         None => 0,

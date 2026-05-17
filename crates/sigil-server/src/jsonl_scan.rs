@@ -136,7 +136,7 @@ pub fn scan(events_out_dir: &Path, f: &ScanFilters) -> std::io::Result<ScanResul
         }
     }
     // Sort file basenames desc (newest day first).
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|f| std::cmp::Reverse(f.1.clone()));
 
     'outer: for (_host_id, _fname, path) in files {
         let bytes = match std::fs::read(&path) {
