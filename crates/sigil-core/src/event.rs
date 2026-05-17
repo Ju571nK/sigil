@@ -159,6 +159,49 @@ pub enum AiGuardReason {
     McpServerRemote { server_name: String, url: String },
 }
 
+/// Phase 3b.4-pre — full host identity / OS / network snapshot, emitted by
+/// host_meta_snapshot_task. Surfaces hostname (so server-side fleet views
+/// can label hosts with something human-readable instead of UUIDs) plus
+/// OS and network metadata for additional fleet attribution.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HostMetaSnapshot {
+    /// Local hostname per the OS (e.g., "alice-macbook-pro").
+    pub hostname: Option<String>,
+
+    /// OS name (e.g., "macOS", "Rocky Linux", "Windows").
+    pub os_name: Option<String>,
+    /// OS version string (e.g., "14.5", "9.3", "11").
+    pub os_version: Option<String>,
+    /// Kernel version (e.g., "23.5.0", "5.14.0-427.20.1.el9_4.x86_64").
+    pub kernel_version: Option<String>,
+    /// CPU architecture (e.g., "x86_64", "aarch64").
+    pub architecture: Option<String>,
+
+    /// All non-loopback network interfaces with assigned addresses.
+    pub interfaces: Vec<NetworkInterface>,
+    /// IPv4 default gateway, if discoverable.
+    pub default_gateway_v4: Option<String>,
+    /// IPv6 default gateway, if discoverable.
+    pub default_gateway_v6: Option<String>,
+    /// Configured DNS resolver IPs (system resolver only — not per-interface).
+    pub dns_servers: Vec<String>,
+}
+
+/// Phase 3b.4-pre — one network interface inside a `HostMetaSnapshot`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NetworkInterface {
+    /// Interface name (e.g., "en0", "eth0", "Ethernet 1").
+    pub name: String,
+    /// MAC address as colon-separated lowercase hex
+    /// (e.g., "00:1b:44:11:3a:b7"). None for interfaces without an L2
+    /// address (loopback excluded upstream).
+    pub mac: Option<String>,
+    /// IPv4 addresses assigned, each as "addr/prefix" (e.g., "10.0.1.42/24").
+    pub ipv4: Vec<String>,
+    /// IPv6 addresses assigned, each as "addr/prefix" (e.g., "fe80::1/64").
+    pub ipv6: Vec<String>,
+}
+
 /// The observation payload of an event.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -321,6 +364,16 @@ pub enum Evidence {
         reasons: Vec<AiGuardReason>,
         /// `true` iff this is the periodic re-attestation heartbeat (no
         /// reason set change since last emission). `false` = something changed.
+        is_reattestation: bool,
+    },
+    /// Phase 3b.4-pre — periodic snapshot of host identity + network + OS
+    /// metadata. Emitted by host_meta_snapshot_task on boot, every 24h, and
+    /// whenever the snapshot's canonical hash differs from the last
+    /// emission. Sigil measures, does not block.
+    HostMetaSnapshot {
+        snapshot: HostMetaSnapshot,
+        /// `true` iff this is the periodic 24h re-attestation (snapshot
+        /// unchanged since last emit). `false` = boot scan or change detected.
         is_reattestation: bool,
     },
 }
@@ -693,6 +746,69 @@ mod tests {
         assert!(s.contains("\"tool\":\"codex\""));
         let back: Evidence = serde_json::from_str(&s).unwrap();
         assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn host_meta_snapshot_full_round_trips() {
+        let snap = HostMetaSnapshot {
+            hostname: Some("alice-mbp".into()),
+            os_name: Some("macOS".into()),
+            os_version: Some("14.5".into()),
+            kernel_version: Some("23.5.0".into()),
+            architecture: Some("arm64".into()),
+            interfaces: vec![NetworkInterface {
+                name: "en0".into(),
+                mac: Some("00:1b:44:11:3a:b7".into()),
+                ipv4: vec!["192.168.1.42/24".into()],
+                ipv6: vec!["fe80::1/64".into()],
+            }],
+            default_gateway_v4: Some("192.168.1.1".into()),
+            default_gateway_v6: None,
+            dns_servers: vec!["1.1.1.1".into(), "8.8.8.8".into()],
+        };
+        let ev = Evidence::HostMetaSnapshot {
+            snapshot: snap.clone(),
+            is_reattestation: false,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains(r#""kind":"host_meta_snapshot""#), "got: {s}");
+        assert!(s.contains(r#""is_reattestation":false"#), "got: {s}");
+        let back: Evidence = serde_json::from_str(&s).unwrap();
+        match back {
+            Evidence::HostMetaSnapshot { snapshot, is_reattestation } => {
+                assert_eq!(snapshot, snap);
+                assert!(!is_reattestation);
+            }
+            other => panic!("expected HostMetaSnapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_meta_snapshot_with_all_nones_round_trips() {
+        let snap = HostMetaSnapshot {
+            hostname: None,
+            os_name: None,
+            os_version: None,
+            kernel_version: None,
+            architecture: None,
+            interfaces: Vec::new(),
+            default_gateway_v4: None,
+            default_gateway_v6: None,
+            dns_servers: Vec::new(),
+        };
+        let ev = Evidence::HostMetaSnapshot {
+            snapshot: snap.clone(),
+            is_reattestation: true,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        let back: Evidence = serde_json::from_str(&s).unwrap();
+        match back {
+            Evidence::HostMetaSnapshot { snapshot, is_reattestation } => {
+                assert_eq!(snapshot, snap);
+                assert!(is_reattestation);
+            }
+            other => panic!("expected HostMetaSnapshot, got {other:?}"),
+        }
     }
 
     #[test]
