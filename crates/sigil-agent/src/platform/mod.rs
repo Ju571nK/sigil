@@ -9,6 +9,28 @@ pub trait Platform: HostIdResolver + UserEnumerator + Send + Sync {
     /// On Windows this returns `FdaState::Granted` unconditionally.
     fn fda_state(&self) -> FdaState;
     fn name(&self) -> &'static str;
+
+    /// Phase 3b.4-pre — kernel version string. None if unavailable.
+    fn kernel_version(&self) -> Option<String> {
+        None
+    }
+
+    /// Phase 3b.4-pre — default IPv4 gateway as dotted-quad string.
+    /// None if no default route or discovery fails.
+    fn default_gateway_v4(&self) -> Option<String> {
+        None
+    }
+
+    /// Phase 3b.4-pre — default IPv6 gateway. None if no default route.
+    fn default_gateway_v6(&self) -> Option<String> {
+        None
+    }
+
+    /// Phase 3b.4-pre — system resolver DNS server IPs (IPv4 + IPv6 mixed).
+    /// Empty Vec if discovery fails.
+    fn dns_servers(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

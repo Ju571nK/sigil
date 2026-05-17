@@ -9,6 +9,8 @@ pub mod doctor;
 pub mod gc_config;
 pub mod hasher;
 pub mod heartbeat;
+pub mod host_meta_snapshot;
+pub mod host_meta_snapshot_task;
 pub mod host_meta_task;
 pub mod jsonl_gc;
 pub mod jsonl_gc_task;
