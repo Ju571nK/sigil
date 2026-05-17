@@ -77,6 +77,12 @@ pub struct PolicyDocument {
     pub overrides: Vec<Override>,
     #[serde(default)]
     pub targets: Vec<WatchTarget>,
+    /// Phase 3b.6.1 — workspace root paths under which the agent looks
+    /// 1-level deep for `.continue/config.json` and spawns per-repo
+    /// ContinueDevProjectParser instances. Empty / absent = feature off.
+    /// Tilde + env-var expansion happens at discovery time.
+    #[serde(default)]
+    pub continue_workspaces: Vec<String>,
 }
 
 fn default_host_id_strategy() -> HostIdStrategy {
@@ -137,6 +143,8 @@ pub fn current_platform() -> Platform {
 pub struct EffectivePolicy {
     pub host_id_strategy: HostIdStrategy,
     pub targets: Vec<WatchTarget>,
+    /// Phase 3b.6.1 — forwarded from user PolicyDocument (defaults never set).
+    pub continue_workspaces: Vec<String>,
 }
 
 /// Merge a defaults document and a user-override document into an effective policy.
@@ -186,9 +194,16 @@ pub fn merge(
     if by_id.is_empty() {
         return Err(PolicyError::EmptyTargets);
     }
+
+    let continue_workspaces = user
+        .as_ref()
+        .map(|u| u.continue_workspaces.clone())
+        .unwrap_or_default();
+
     Ok(EffectivePolicy {
         host_id_strategy: strategy,
         targets: by_id,
+        continue_workspaces,
     })
 }
 
@@ -209,6 +224,7 @@ pub fn defaults() -> Result<PolicyDocument, PolicyError> {
             host_id_strategy: HostIdStrategy::MachineId,
             overrides: vec![],
             targets: vec![],
+            continue_workspaces: vec![],
         }),
     }
 }
@@ -325,6 +341,7 @@ targets:
                 def_target("d1", Tier::Critical, Platform::Macos),
                 def_target("d2", Tier::Standard, Platform::Windows),
             ],
+            continue_workspaces: vec![],
         }
     }
 
@@ -346,6 +363,7 @@ targets:
                 tier: None,
             }],
             targets: vec![def_target("u1", Tier::Critical, Platform::Macos)],
+            continue_workspaces: vec![],
         };
         let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
         let ids: Vec<&str> = eff.targets.iter().map(|t| t.id.as_str()).collect();
@@ -363,6 +381,7 @@ targets:
                 tier: Some(Tier::Standard),
             }],
             targets: vec![],
+            continue_workspaces: vec![],
         };
         let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
         assert_eq!(eff.targets[0].tier, Tier::Standard);
@@ -379,6 +398,7 @@ targets:
                 tier: None,
             }],
             targets: vec![],
+            continue_workspaces: vec![],
         };
         let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::UnknownOverrideId(_)));
@@ -391,6 +411,7 @@ targets:
             host_id_strategy: HostIdStrategy::MachineId,
             overrides: vec![],
             targets: vec![def_target("d1", Tier::Critical, Platform::Macos)],
+            continue_workspaces: vec![],
         };
         let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::DuplicateId(_)));
@@ -407,6 +428,7 @@ targets:
                 Tier::Critical,
                 Platform::Windows,
             )],
+            continue_workspaces: vec![],
         };
         let err = merge(defaults, None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::EmptyTargets));
@@ -456,5 +478,33 @@ targets:
             assert!(!t.id.is_empty());
             assert!(!t.paths.is_empty());
         }
+    }
+
+    #[test]
+    fn policy_document_continue_workspaces_round_trip() {
+        let yaml = r#"version: 1
+host_id_strategy: machine_id
+continue_workspaces:
+  - "~/code"
+  - "/abs/work"
+targets: []
+"#;
+        let doc: PolicyDocument = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            doc.continue_workspaces,
+            vec!["~/code".to_string(), "/abs/work".to_string()]
+        );
+    }
+
+    #[test]
+    fn policy_document_without_continue_workspaces_defaults_to_empty() {
+        // Backward compat: pre-3b.6.1 policy.yaml has no continue_workspaces field;
+        // deserialization must still succeed and produce an empty Vec.
+        let yaml = r#"version: 1
+host_id_strategy: machine_id
+targets: []
+"#;
+        let doc: PolicyDocument = serde_yaml::from_str(yaml).unwrap();
+        assert!(doc.continue_workspaces.is_empty());
     }
 }
