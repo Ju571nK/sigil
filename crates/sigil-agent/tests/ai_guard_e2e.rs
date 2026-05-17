@@ -9,11 +9,18 @@
 mod common;
 use common::TestAgentBuilder;
 use std::time::Duration;
+use tokio::sync::Mutex;
+
+/// All tests in this file manipulate the process-global HOME env var and must
+/// therefore run serially. This async mutex is held across await points inside
+/// each test, preventing concurrent HOME modifications.
+static HOME_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn destructive_claude_settings_emits_critical_then_clean_settings_emits_low() {
-    // We override HOME at process scope — acceptable since this integration-test
-    // binary is a single function compiled on its own.
+    // Serialize all tests in this binary — each manipulates the process-global
+    // HOME env var. The guard is released when it drops at the end of the test.
+    let _home_guard = HOME_LOCK.lock().await;
     let td = tempfile::TempDir::new().unwrap();
     // Canonicalize the tempdir path (on macOS /var → /private/var) so that
     // the watcher's canonicalized paths match the ai_guard task's home_dir.
@@ -138,6 +145,126 @@ targets:
     assert!(
         clean_seen,
         "after writing a clean settings.json, no low-bucket AiGuardRiskAssessed event arrived"
+    );
+
+    agent.join.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_desktop_config_with_remote_mcp_emits_assessed_event() {
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
+    std::env::set_var("HOME", &home);
+
+    // Pre-seed Claude Desktop config under the macOS-style path.
+    let dir = home.join("Library").join("Application Support").join("Claude");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("claude_desktop_config.json"),
+        r#"{"mcpServers": {"remote-x": {"url": "https://mcp.example.com/sse"}}}"#,
+    )
+    .unwrap();
+
+    // Custom policy with absolute tempdir path (baseline's ~ expansion
+    // doesn't respect HOME override — see existing test comment).
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+targets:
+  - id: e2e-test-claude-desktop-abs
+    description: Claude Desktop config for e2e (absolute tempdir path)
+    tier: critical
+    platform: any
+    paths:
+      - "{home}/Library/Application Support/Claude/claude_desktop_config.json"
+    recursive: false
+    follow_symlinks: false
+"#,
+        home = home.display()
+    );
+
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
+
+    let ev = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "claude_desktop"
+                    && v["evidence"]["scope"]["kind"] == "application"
+                    && v["evidence"]["scope"]["app"] == "claude_desktop"
+            },
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("expected an AiGuardRiskAssessed event for claude_desktop");
+
+    // Should contain mcp_server_remote reason.
+    let reasons = ev["evidence"]["reasons"].as_array().expect("reasons array");
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r["kind"] == "mcp_server_remote" && r["server_name"] == "remote-x"),
+        "expected mcp_server_remote with server_name=remote-x in {reasons:?}"
+    );
+
+    agent.join.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn continue_config_with_destructive_slash_emits_destructive_reason() {
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
+    std::env::set_var("HOME", &home);
+
+    let dir = home.join(".continue");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.json"),
+        r#"{"slashCommands": [{"name": "danger", "run": "rm -rf /tmp/sigil-test-3b6"}]}"#,
+    )
+    .unwrap();
+
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+targets:
+  - id: e2e-test-continue-abs
+    description: Continue config for e2e (absolute tempdir path)
+    tier: critical
+    platform: any
+    paths:
+      - "{home}/.continue/config.json"
+    recursive: false
+    follow_symlinks: false
+"#,
+        home = home.display()
+    );
+
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
+
+    let ev = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "continue_dev"
+                    && v["evidence"]["scope"]["kind"] == "application"
+                    && v["evidence"]["scope"]["app"] == "continue"
+            },
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("expected an AiGuardRiskAssessed event for continue_dev");
+
+    let reasons = ev["evidence"]["reasons"].as_array().expect("reasons array");
+    assert!(
+        reasons.iter().any(|r| {
+            r["kind"] == "destructive_in_inline_command" && r["hook_event"] == "slash_command"
+        }),
+        "expected destructive_in_inline_command with hook_event=slash_command in {reasons:?}"
     );
 
     agent.join.abort();
