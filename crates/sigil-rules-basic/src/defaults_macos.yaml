@@ -49,3 +49,13 @@ targets:
       - "~/.codex/config.toml"
     recursive: false
     follow_symlinks: false
+
+  - id: ai-guard-continue-config-macos
+    description: Continue.dev user-global config (VSCode/JetBrains extension)
+    tier: critical
+    platform: macos
+    paths:
+      - "~/.continue/config.json"
+    recursive: false
+    follow_symlinks: false
+

@@ -50,3 +50,13 @@ targets:
       - "%USERPROFILE%\\.codex\\config.toml"
     recursive: false
     follow_symlinks: false
+
+  - id: ai-guard-continue-config-windows
+    description: Continue.dev user-global config (VSCode/JetBrains extension)
+    tier: critical
+    platform: windows
+    paths:
+      - "%USERPROFILE%\\.continue\\config.json"
+    recursive: false
+    follow_symlinks: false
+
