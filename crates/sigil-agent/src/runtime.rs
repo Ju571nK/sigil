@@ -372,6 +372,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             Box::new(crate::ai_guard::ClaudeCodeParser),
             Box::new(crate::ai_guard::CodexParser),
             Box::new(crate::ai_guard::ClaudeDesktopParser),
+            Box::new(crate::ai_guard::ContinueDevParser),
         ];
         let home_dir = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
