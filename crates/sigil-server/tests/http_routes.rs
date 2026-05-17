@@ -10,12 +10,16 @@ use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 fn state_in(dir: &std::path::Path, allowlist: Option<HashSet<String>>) -> Arc<AppState> {
+    use sigil_server::auth::ReadToken;
+    use sigil_server::fleet_index::FleetIndex;
     Arc::new(AppState {
         events_out_dir: dir.to_path_buf(),
         policy_bundle_path: dir.join("signed-policy.json"),
         high_water_path: dir.join(".high-water.json"),
         allowlist,
         high_water: Mutex::new(HighWater::default()),
+        fleet_index: FleetIndex::new(),
+        read_token: ReadToken(None),
     })
 }
 

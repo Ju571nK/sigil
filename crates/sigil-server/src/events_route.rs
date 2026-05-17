@@ -126,6 +126,20 @@ pub async fn post_events(
         }
     }
 
+    // Phase 3b.4 — update in-memory fleet index for each accepted event.
+    // Best-effort: a parse failure here should not roll back the persist,
+    // since the JSONL is the source of truth.
+    for entry in &req.events {
+        // Skip rejected entries by id lookup.
+        if !accepted.iter().any(|id| id == &entry.event_id) {
+            continue;
+        }
+        match serde_json::from_value::<sigil_core::event::Event>(entry.payload.clone()) {
+            Ok(event) => state.fleet_index.apply_event(&event),
+            Err(e) => tracing::warn!(error = ?e, event_id = %entry.event_id, "fleet_index apply skipped"),
+        }
+    }
+
     let resp = EventsAccepted {
         accepted,
         rejected,

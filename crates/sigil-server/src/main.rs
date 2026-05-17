@@ -26,15 +26,37 @@ fn main() -> Result<()> {
 }
 
 fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
+    use sigil_server::auth::ReadToken;
+    use sigil_server::boot_rebuild::rebuild_from_jsonl;
+    use sigil_server::fleet_index::FleetIndex;
+
     let allowlist =
         allowlist::load(cfg.host_allowlist_path.as_deref()).context("load host allowlist")?;
     let high_water = HighWater::load(&cfg.high_water_path()).context("load high-water map")?;
+
+    let read_token = ReadToken::from_env();
+    if read_token.is_enabled() {
+        tracing::info!("read API enabled (SIGIL_SERVER_READ_TOKEN set)");
+    } else {
+        tracing::warn!("SIGIL_SERVER_READ_TOKEN unset — read API disabled (404)");
+    }
+
+    let fleet_index = FleetIndex::new();
+    tracing::info!("boot rebuild: scanning JSONL");
+    let t0 = std::time::Instant::now();
+    let built = rebuild_from_jsonl(&cfg.events_out_dir).context("boot rebuild")?;
+    let n = built.len();
+    fleet_index.replace(built);
+    tracing::info!(hosts = n, elapsed_ms = ?t0.elapsed().as_millis(), "boot rebuild complete");
+
     Ok(Arc::new(AppState {
         events_out_dir: cfg.events_out_dir.clone(),
         policy_bundle_path: cfg.policy_bundle_path.clone(),
         high_water_path: cfg.high_water_path(),
         allowlist,
         high_water: Mutex::new(high_water),
+        fleet_index,
+        read_token,
     }))
 }
 

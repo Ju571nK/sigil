@@ -1,5 +1,7 @@
 //! Shared app state + router assembly.
 
+use crate::auth::ReadToken;
+use crate::fleet_index::FleetIndex;
 use crate::persist::HighWater;
 use axum::{routing::get, routing::post, Router};
 use std::collections::HashSet;
@@ -14,6 +16,11 @@ pub struct AppState {
     pub allowlist: Option<HashSet<String>>,
     /// host_id → highest persisted sequence. Guards the JSONL append + dedup.
     pub high_water: Mutex<HighWater>,
+    /// Phase 3b.4 — in-memory per-host summary index. Updated synchronously
+    /// inside the POST /v1/events handler after a successful persist.
+    pub fleet_index: FleetIndex,
+    /// Phase 3b.4 — bearer token for the read API. `None` ⇒ read endpoints 404.
+    pub read_token: ReadToken,
 }
 
 pub type SharedState = Arc<AppState>;
