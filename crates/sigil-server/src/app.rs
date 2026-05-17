@@ -35,6 +35,8 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/v1/policy", get(crate::policy_route::get_policy))
         .route("/v1/healthz", get(crate::routes::healthz::get_healthz))
         .route("/v1/meta", get(crate::routes::meta::get_meta).route_layer(from_fn_with_state(token.clone(), require_bearer)))
-        .route("/v1/policy/meta", get(crate::routes::policy_meta::get_policy_meta).route_layer(from_fn_with_state(token, require_bearer)))
+        .route("/v1/policy/meta", get(crate::routes::policy_meta::get_policy_meta).route_layer(from_fn_with_state(token.clone(), require_bearer)))
+        .route("/v1/fleet/hosts", get(crate::routes::fleet_hosts::get_fleet_hosts).route_layer(from_fn_with_state(token.clone(), require_bearer)))
+        .route("/v1/fleet/hosts/:host_id", get(crate::routes::fleet_hosts::get_fleet_host_by_id).route_layer(from_fn_with_state(token.clone(), require_bearer)))
         .with_state(state)
 }
