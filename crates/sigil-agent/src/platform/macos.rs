@@ -21,6 +21,40 @@ impl MacosPlatform {
     }
 }
 
+fn parse_uname_r(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() { None } else { Some(t.to_string()) }
+}
+
+fn parse_route_n_get_default(s: &str) -> Option<String> {
+    for line in s.lines() {
+        if let Some(rest) = line.trim().strip_prefix("gateway:") {
+            let g = rest.trim();
+            if !g.is_empty() {
+                return Some(g.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn parse_scutil_dns(s: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in s.lines() {
+        let line = line.trim();
+        if let Some(idx) = line.find("nameserver[") {
+            let after = &line[idx..];
+            if let Some(colon) = after.find(':') {
+                let val = after[colon + 1..].trim();
+                if !val.is_empty() && !out.contains(&val.to_string()) {
+                    out.push(val.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
 impl Platform for MacosPlatform {
     fn fda_state(&self) -> FdaState {
         // Probe a known FDA-protected system path.
@@ -36,6 +70,43 @@ impl Platform for MacosPlatform {
     }
     fn name(&self) -> &'static str {
         "macos"
+    }
+
+    fn kernel_version(&self) -> Option<String> {
+        std::process::Command::new("uname")
+            .arg("-r")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| parse_uname_r(&s))
+    }
+
+    fn default_gateway_v4(&self) -> Option<String> {
+        std::process::Command::new("route")
+            .args(["-n", "get", "default"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| parse_route_n_get_default(&s))
+    }
+
+    fn default_gateway_v6(&self) -> Option<String> {
+        std::process::Command::new("route")
+            .args(["-n", "get", "-inet6", "default"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| parse_route_n_get_default(&s))
+    }
+
+    fn dns_servers(&self) -> Vec<String> {
+        std::process::Command::new("scutil")
+            .arg("--dns")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| parse_scutil_dns(&s))
+            .unwrap_or_default()
     }
 }
 
@@ -187,5 +258,42 @@ mod tests {
         let a = p.fresh_uuid();
         let b = p.fresh_uuid();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn parse_route_n_get_default_extracts_gateway() {
+        let fixture = "   route to: default\ndestination: default\n       mask: default\n    gateway: 192.168.1.1\n  interface: en0\n";
+        assert_eq!(parse_route_n_get_default(fixture), Some("192.168.1.1".to_string()));
+    }
+
+    #[test]
+    fn parse_route_n_get_default_returns_none_when_no_gateway_line() {
+        let fixture = "route to: default\n   destination: default\n";
+        assert_eq!(parse_route_n_get_default(fixture), None);
+    }
+
+    #[test]
+    fn parse_scutil_dns_extracts_all_nameservers_dedup() {
+        let fixture = "DNS configuration\n\nresolver #1\n  nameserver[0] : 192.168.1.1\n  nameserver[1] : 1.1.1.1\n\nresolver #2\n  nameserver[0] : 192.168.1.1\n";
+        let mut got = parse_scutil_dns(fixture);
+        got.sort();
+        assert_eq!(got, vec!["1.1.1.1", "192.168.1.1"]);
+    }
+
+    #[test]
+    fn parse_scutil_dns_returns_empty_for_no_nameservers() {
+        let fixture = "DNS configuration\nresolver #1\n";
+        assert!(parse_scutil_dns(fixture).is_empty());
+    }
+
+    #[test]
+    fn parse_uname_r_trims_trailing_newline() {
+        assert_eq!(parse_uname_r("23.5.0\n"), Some("23.5.0".to_string()));
+    }
+
+    #[test]
+    fn parse_uname_r_returns_none_for_empty() {
+        assert_eq!(parse_uname_r("\n"), None);
+        assert_eq!(parse_uname_r(""), None);
     }
 }
