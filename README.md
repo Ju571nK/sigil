@@ -62,21 +62,24 @@ Each event is one JSON object on its own line:
 }
 ```
 
-And — coming in Phase 3b — a richer evidence variant for AI guard surfaces:
+And — shipped in Phase 3b.1 (Claude Code + Codex; Gemini + Cursor coming
+in 3b.2) — a richer evidence variant for AI guard surfaces:
 
 ```json
 {
   "evidence": {
     "kind": "ai_guard_risk_assessed",
-    "tool": "claude-code",
-    "scope": "user-global",
+    "tool": "claude_code",
+    "scope": {"kind": "user_global"},
     "score": 7.5,
+    "bucket": "critical",
     "reasons": [
-      {"kind": "destructive_in_hook", "pattern": "rm -rf",
+      {"kind": "destructive_in_inline_command", "pattern": "rm -rf",
        "hook_event": "PreToolUse", "snippet": "..."},
-      {"kind": "no_sandbox", "executor": "host-shell"},
-      {"kind": "broad_matcher", "matcher": ".*"}
-    ]
+      {"kind": "no_sandbox", "executor": "host_shell"},
+      {"kind": "broad_matcher", "hook_event": "PreToolUse", "matcher": ".*"}
+    ],
+    "is_reattestation": false
   }
 }
 ```
@@ -103,7 +106,8 @@ Out of the box, with built-in defaults plus your policy YAML:
 - **AI agent guard surfaces** — `~/.claude/settings*.json` and
   `<repo>/.claude/`, `~/.codex/config.toml` and `<repo>/.codex/`,
   `~/.gemini/` and `<repo>/.gemini/`, `~/.cursor/mcp.json`. Hash-anchored
-  events on every change; risk score on the contents (Phase 3b).
+  events on every change; risk score on the contents (Claude Code + Codex
+  shipped in Phase 3b.1; Gemini + Cursor planned in 3b.2).
 - **Hook scripts** — convention dirs (`~/.claude/hooks/**`,
   `<repo>/.claude/hooks/**`) watched recursively, so a hook script silently
   going from "deny" to "exit 0" is visible.
@@ -115,10 +119,10 @@ Out of the box, with built-in defaults plus your policy YAML:
 
 ## Architecture
 
-Sigil is a Rust workspace with five crates, organized as two long-running
-processes plus three shared libraries.
+Sigil is a Rust workspace with seven crates: three long-running binaries,
+one operator CLI, and three shared libraries.
 
-**Processes**
+**Long-running binaries**
 
 - `sigil-agent` — the host daemon (`sigil` binary). Owns the `tokio`
   runtime, the `notify`-based filesystem watcher, the event pipeline, CLI
@@ -127,18 +131,29 @@ processes plus three shared libraries.
 - `sigil-sender` — the uploader (`sigil-sender` binary). Reads JSONL
   batches from the spool, ships them to a SIEM endpoint over HTTPS
   (rustls), and hands signed policy responses back to the agent over IPC.
+- `sigil-server` — OSS reference receiver (`sigil-server` binary). Accepts
+  events from `sigil-sender` over mTLS, persists JSONL, and serves
+  ed25519-signed policy envelopes back to clients. The simplest possible
+  SIEM-shaped endpoint operators can stand up for an end-to-end test or as
+  the upstream for `sigil-manager`.
+
+**Operator CLI**
+
+- `sigil-signer` — keystore + envelope tool (`sigil-sign` binary).
+  `keygen` / `sign` / `verify` / `inspect` for the ed25519 keys that
+  authenticate signed policy responses. One-shot — not a daemon.
 
 **Libraries**
 
 - `sigil-core` — pure domain library (event, policy, state, hashing, …).
-  No OS, `tokio`, or filesystem-watcher dependencies. Consumed by both
-  processes.
+  No OS, `tokio`, or filesystem-watcher dependencies. Consumed by every
+  binary.
 - `sigil-spool` — JSONL=IPC primitive (`Producer` / `Consumer` /
   `Checkpoint` / `Retention`) used at the agent → sender hop. Durable,
   crash-recoverable, domain-neutral.
-- `sigil-rules-basic` — compile-time-embedded baseline rulesets (macOS
-  and Windows defaults). The OSS fallback when no operator policy is
-  supplied; extended rule packs ship separately.
+- `sigil-rules-basic` — compile-time-embedded baseline rulesets (macOS,
+  Linux, and Windows defaults). The OSS fallback when no operator policy
+  is supplied; extended rule packs ship separately.
 
 ```mermaid
 flowchart LR
@@ -201,13 +216,36 @@ flowchart LR
 - **Phase 3a — shipped.** Linux runtime (inotify watcher, `/etc/passwd` user
   enumeration, hardware fingerprint). Minimal foundation; refinements open
   for community contribution.
-- **Phase 3b — planned.** AI Agent Risk Index: scoring rubric for
-  Claude Code / Codex / Gemini CLI / Cursor hooks, permissions, and
-  sandbox boundaries. Emits `ai_guard_risk_assessed` evidence variants
-  alongside the underlying `file_change` events. Per-fleet aggregation
-  in the SIEM.
+- **Phase 3b.1 — shipped.** AI Agent Risk Index foundation: scoring rubric
+  for **Claude Code + Codex** hooks, permissions, sandbox boundaries, and
+  MCP servers. Emits `ai_guard_risk_assessed` evidence variants alongside
+  the underlying `file_change` events; `sigil show risk` operator CLI.
+- **Phase 3b.2 — planned.** Add **Gemini CLI + Cursor** parsers, reusing
+  the rubric and schema from 3b.1.
+- **Phase 3b.3 — planned.** Dynamic hook-script watch (settings.json
+  parsing → watch arbitrary script paths).
+- **Phase 3b.4 — planned.** Server-side fleet aggregation on
+  `sigil-server` (per-host rollup endpoints, drift alerts).
+- **Phase 3b.5 — planned.** `sigil doctor` integration + operator-tunable
+  rubric (policy.yaml `risk_rubric` section).
 - **Phase 3c — planned.** Reproducible-build attestation; additional
   posture signals.
+
+## Ecosystem
+
+The agent in this repo is the OSS core. A separate, companion project extends
+it with a fleet view:
+
+- **[`sigil-manager`](https://github.com/Ju571nK/sigil-manager)** —
+  self-hostable web console for fleet visibility. Reads from `sigil-server`
+  and renders dashboards (AI Guard risk by host, events over time, policy
+  compliance per host). Public repo, developed separately from this one;
+  early stages.
+
+The OSS agent works standalone — point `sigil-sender` at any SIEM endpoint and
+you're done. `sigil-manager` is an additive convenience layer for teams that
+want a built-in dashboard rather than rolling their own queries in their SIEM,
+not a requirement.
 
 ## Design principles
 
