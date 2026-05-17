@@ -244,9 +244,9 @@ mod tests {
         let (tx, rx) = mpsc::channel(16);
         (
             TaskCtx {
-                parsers: Arc::new(RwLock::new(vec![
-                    Arc::new(parser) as Arc<dyn AiGuardParser>,
-                ])),
+                parsers: Arc::new(RwLock::new(
+                    vec![Arc::new(parser) as Arc<dyn AiGuardParser>],
+                )),
                 fc_rx,
                 event_tx: tx,
                 state: Arc::new(RwLock::new(HashMap::new())),
@@ -401,7 +401,7 @@ mod tests {
         let (event_tx, mut events) = mpsc::channel(8);
         let ctx = TaskCtx {
             parsers: Arc::new(RwLock::new(vec![
-                Arc::new(ErrorParser) as Arc<dyn AiGuardParser>,
+                Arc::new(ErrorParser) as Arc<dyn AiGuardParser>
             ])),
             fc_rx,
             event_tx,

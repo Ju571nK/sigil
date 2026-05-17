@@ -113,8 +113,7 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
 
     let (added_repos, removed_repos): (Vec<PathBuf>, Vec<PathBuf>) = {
         let mut guard = ctx.parsers.write();
-        let mut old_repos: std::collections::BTreeSet<PathBuf> =
-            std::collections::BTreeSet::new();
+        let mut old_repos: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
         guard.retain(|p| {
             if p.tool() == sigil_core::event::AiTool::ContinueDev {
                 if let sigil_core::event::AiGuardScope::Project { path } = p.scope() {
@@ -286,7 +285,9 @@ mod tests {
                 cache,
                 shutdown: CancellationToken::new(),
                 parsers: Arc::new(parking_lot::RwLock::new(Vec::new())),
-                ai_guard_state: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+                ai_guard_state: Arc::new(
+                    parking_lot::RwLock::new(std::collections::HashMap::new()),
+                ),
             },
             plat,
             targets_rx,
@@ -431,8 +432,7 @@ mod tests {
         let canonical_a = dunce::canonicalize(&repo_a).unwrap();
 
         let initial = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
-        let (mut ctx, plat, _trx, parsers, _state) =
-            build_ctx_with_parsers(dir.path(), initial);
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
         reload(&mut ctx, &plat);
         {
             let guard = parsers.read();
@@ -481,8 +481,7 @@ mod tests {
             "version: 1\nhost_id_strategy: machine_id\ncontinue_workspaces:\n  - '{}'\ntargets: []\n",
             workspace.display()
         );
-        let (mut ctx, plat, _trx, parsers, state) =
-            build_ctx_with_parsers(dir.path(), &initial);
+        let (mut ctx, plat, _trx, parsers, state) = build_ctx_with_parsers(dir.path(), &initial);
         reload(&mut ctx, &plat);
 
         // Plant a fake state entry to verify cleanup on removal.

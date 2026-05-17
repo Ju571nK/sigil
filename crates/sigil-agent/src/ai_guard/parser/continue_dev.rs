@@ -107,7 +107,11 @@ fn emit_one_mcp(name: &str, def: &Value, out: &mut Vec<AiGuardReason>) {
 /// - `step` 가 path-like 면: convention dir (~/.continue/hooks/) 안이면 read+scan,
 ///   외부면 ExternalScriptUnscanned.
 /// - `run` / `prompt` 가 string 이면: destructive pattern scan.
-pub(crate) fn emit_slash_command_reasons(settings: &Value, hooks_dir: &Path, out: &mut Vec<AiGuardReason>) {
+pub(crate) fn emit_slash_command_reasons(
+    settings: &Value,
+    hooks_dir: &Path,
+    out: &mut Vec<AiGuardReason>,
+) {
     let Some(arr) = settings.get("slashCommands").and_then(Value::as_array) else {
         return;
     };
@@ -426,8 +430,13 @@ mod tests {
     #[test]
     fn project_parser_missing_config_returns_empty() {
         let dir = tempdir().unwrap();
-        let p = ContinueDevProjectParser { repo_root: dir.path().to_path_buf() };
-        assert!(p.assess(std::path::Path::new("/unused")).unwrap().is_empty());
+        let p = ContinueDevProjectParser {
+            repo_root: dir.path().to_path_buf(),
+        };
+        assert!(p
+            .assess(std::path::Path::new("/unused"))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -441,7 +450,9 @@ mod tests {
             r#"{"slashCommands": [{"name": "danger", "run": "rm -rf /tmp/sigil-3b6.1"}]}"#,
         )
         .unwrap();
-        let p = ContinueDevProjectParser { repo_root: repo.clone() };
+        let p = ContinueDevProjectParser {
+            repo_root: repo.clone(),
+        };
         let reasons = p.assess(std::path::Path::new("/unused")).unwrap();
         assert!(reasons.iter().any(|r| matches!(
             r,
@@ -454,13 +465,17 @@ mod tests {
     fn project_parser_scope_is_project_with_repo_root_path() {
         let dir = tempdir().unwrap();
         let repo = dir.path().to_path_buf();
-        let p = ContinueDevProjectParser { repo_root: repo.clone() };
+        let p = ContinueDevProjectParser {
+            repo_root: repo.clone(),
+        };
         assert_eq!(p.scope(), AiGuardScope::Project { path: repo });
     }
 
     #[test]
     fn project_parser_tool_is_continue_dev_same_as_user_global() {
-        let p = ContinueDevProjectParser { repo_root: std::path::PathBuf::from("/x") };
+        let p = ContinueDevProjectParser {
+            repo_root: std::path::PathBuf::from("/x"),
+        };
         assert_eq!(p.tool(), AiTool::ContinueDev);
     }
 
@@ -470,7 +485,9 @@ mod tests {
         let repo = dir.path();
         std::fs::create_dir_all(repo.join(".continue")).unwrap();
         std::fs::write(repo.join(".continue").join("config.json"), "{ not json").unwrap();
-        let p = ContinueDevProjectParser { repo_root: repo.to_path_buf() };
+        let p = ContinueDevProjectParser {
+            repo_root: repo.to_path_buf(),
+        };
         let err = p.assess(std::path::Path::new("/unused")).unwrap_err();
         assert!(matches!(err, AssessError::Parse { .. }), "got {err:?}");
     }

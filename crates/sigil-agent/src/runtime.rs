@@ -128,8 +128,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // existing watcher subgraph picks up file_change events. These synthetic
     // targets are in-memory only; never written back to disk (the signed policy
     // envelope on disk stays authoritative).
-    let continue_repos =
-        crate::ai_guard::continue_discovery::discover_continue_projects(&effective.continue_workspaces);
+    let continue_repos = crate::ai_guard::continue_discovery::discover_continue_projects(
+        &effective.continue_workspaces,
+    );
     for repo_root in &continue_repos {
         let config = repo_root.join(".continue").join("config.json");
         let id_suffix = {
@@ -363,7 +364,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         Arc::new(crate::ai_guard::ContinueDevParser),
     ];
     for repo_root in continue_repos {
-        parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser { repo_root }));
+        parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser {
+            repo_root,
+        }));
     }
     let ai_guard_parsers: Arc<
         parking_lot::RwLock<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,

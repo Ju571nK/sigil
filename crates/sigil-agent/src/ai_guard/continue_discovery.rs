@@ -58,16 +58,14 @@ pub fn discover_continue_projects(workspace_roots: &[String]) -> Vec<PathBuf> {
 fn expand_and_canonicalize(raw: &str) -> Option<PathBuf> {
     // sigil-core's policy::expand handles `~` and `$VAR`. We reuse it so
     // discovery behaves the same as the rest of policy path resolution.
-    let expanded = match sigil_core::policy::expand::expand(
-        raw,
-        &sigil_core::policy::expand::EnvLookup,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(raw, error = ?e, "continue_discovery: expand failed; skipping");
-            return None;
-        }
-    };
+    let expanded =
+        match sigil_core::policy::expand::expand(raw, &sigil_core::policy::expand::EnvLookup) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(raw, error = ?e, "continue_discovery: expand failed; skipping");
+                return None;
+            }
+        };
     match dunce::canonicalize(&expanded) {
         Ok(p) => Some(p),
         Err(e) => {
@@ -143,7 +141,10 @@ mod tests {
         make_repo_with_continue(&group, "repoC");
 
         let out = discover_continue_projects(&[workspace.to_string_lossy().into()]);
-        assert!(out.is_empty(), "1-level scan must not match group/repoC; got {out:?}");
+        assert!(
+            out.is_empty(),
+            "1-level scan must not match group/repoC; got {out:?}"
+        );
     }
 
     #[test]
