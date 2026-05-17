@@ -26,8 +26,15 @@ pub struct AppState {
 pub type SharedState = Arc<AppState>;
 
 pub fn build_router(state: SharedState) -> Router {
+    use axum::middleware::from_fn_with_state;
+    use crate::auth::require_bearer;
+
+    let token = state.read_token.clone();
     Router::new()
         .route("/v1/events", post(crate::events_route::post_events))
         .route("/v1/policy", get(crate::policy_route::get_policy))
+        .route("/v1/healthz", get(crate::routes::healthz::get_healthz))
+        .route("/v1/meta", get(crate::routes::meta::get_meta).route_layer(from_fn_with_state(token.clone(), require_bearer)))
+        .route("/v1/policy/meta", get(crate::routes::policy_meta::get_policy_meta).route_layer(from_fn_with_state(token, require_bearer)))
         .with_state(state)
 }
