@@ -103,11 +103,15 @@ in 3b.2) — a richer evidence variant for AI guard surfaces:
 
 Out of the box, with built-in defaults plus your policy YAML:
 
-- **AI agent guard surfaces** — `~/.claude/settings*.json` and
-  `<repo>/.claude/`, `~/.codex/config.toml` and `<repo>/.codex/`,
-  `~/.gemini/` and `<repo>/.gemini/`, `~/.cursor/mcp.json`. Hash-anchored
-  events on every change; risk score on the contents (Claude Code + Codex
-  shipped in Phase 3b.1; Gemini + Cursor planned in 3b.2).
+- **AI agent guard surfaces** — Claude Code (`~/.claude/settings*.json`,
+  `<repo>/.claude/`), Codex (`~/.codex/config.toml`, `<repo>/.codex/`),
+  **Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`
+  on macOS, `%APPDATA%\Claude\…` on Windows, `~/.config/Claude/…` on Linux),
+  **Continue.dev** (`~/.continue/config.json`), `~/.gemini/` and
+  `<repo>/.gemini/`, `~/.cursor/mcp.json`. Hash-anchored events on every
+  change; risk score on the contents (Claude Code + Codex shipped 3b.1;
+  Claude Desktop + Continue shipped 3b.6; Gemini + Cursor parsers planned
+  in 3b.2).
 - **Hook scripts** — convention dirs (`~/.claude/hooks/**`,
   `<repo>/.claude/hooks/**`) watched recursively, so a hook script silently
   going from "deny" to "exit 0" is visible.
@@ -224,10 +228,19 @@ flowchart LR
   the rubric and schema from 3b.1.
 - **Phase 3b.3 — planned.** Dynamic hook-script watch (settings.json
   parsing → watch arbitrary script paths).
-- **Phase 3b.4 — planned.** Server-side fleet aggregation on
-  `sigil-server` (per-host rollup endpoints, drift alerts).
+- **Phase 3b.4 — shipped.** Server-side fleet aggregation on
+  `sigil-server`: bearer-gated read API (9 endpoints — `/v1/healthz`,
+  `/v1/meta`, `/v1/policy/meta`, `/v1/fleet/hosts` + detail, `/v1/fleet/risk`,
+  `/v1/fleet/compliance`, `/v1/events` + lookup). In-memory per-host
+  index rebuilt from JSONL on boot, updated inline on each `POST /v1/events`.
 - **Phase 3b.5 — planned.** `sigil doctor` integration + operator-tunable
   rubric (policy.yaml `risk_rubric` section).
+- **Phase 3b.6 — shipped.** Application-form coverage: Claude Desktop
+  (Anthropic.app) + Continue.dev (VSCode/JetBrains 확장) parsers.
+  Reuses Phase 3b.1 rubric — MCP server entries, slashCommands /
+  customCommands inline destructive patterns, external script
+  references. Emits `ai_guard_risk_assessed` with new
+  `scope.kind = "application"`.
 - **Phase 3c — planned.** Reproducible-build attestation; additional
   posture signals.
 
