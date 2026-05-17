@@ -135,7 +135,7 @@ one operator CLI, and three shared libraries.
   events from `sigil-sender` over mTLS, persists JSONL, and serves
   ed25519-signed policy envelopes back to clients. The simplest possible
   SIEM-shaped endpoint operators can stand up for an end-to-end test or as
-  the upstream for `sigil-manager`.
+  the upstream for [`sigil-manager`](https://github.com/Ju571nK/sigil-manager).
 
 **Operator CLI**
 
