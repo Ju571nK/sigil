@@ -393,6 +393,28 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         );
     }
 
+    // Phase 3b.4-pre — host_meta_snapshot_task: hostname / IP / MAC / OS attestation.
+    {
+        let latest_snapshot = std::sync::Arc::new(parking_lot::RwLock::new(
+            crate::host_meta_snapshot_task::LatestSnapshot::default(),
+        ));
+        let source: std::sync::Arc<crate::platform::ActivePlatform> =
+            std::sync::Arc::new(crate::platform::ActivePlatform::new());
+        let ctx = crate::host_meta_snapshot_task::TaskCtx {
+            source,
+            event_tx: tx_sink.clone(),
+            host_id: host_id.clone(),
+            latest: latest_snapshot,
+            heartbeat_interval: std::time::Duration::from_secs(24 * 3600),
+            change_check_interval: std::time::Duration::from_secs(5 * 60),
+            shutdown: cancel.clone(),
+        };
+        sup.track(
+            "host_meta_snapshot",
+            tokio::spawn(crate::host_meta_snapshot_task::run(ctx)),
+        );
+    }
+
     // Best-effort startup snapshot: pick the lexicographically largest segment
     // as the "current" one. Full rotation-time wiring is a Plan A2 follow-up.
     {
