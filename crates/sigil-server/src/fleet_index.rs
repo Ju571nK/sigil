@@ -199,3 +199,122 @@ mod tests {
         assert_eq!(h.hostname(), Some("alice"));
     }
 }
+
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Thread-safe wrapper around the per-host summary map.
+/// All read endpoints hold a `read()` lock; ingest holds `write()`.
+#[derive(Clone, Default)]
+pub struct FleetIndex {
+    inner: Arc<RwLock<HashMap<String, HostSummary>>>,
+}
+
+impl FleetIndex {
+    pub fn new() -> Self { Self::default() }
+
+    /// Apply an event under write lock. Creates the host's HostSummary
+    /// on first ingest (key = `event.host_id`).
+    pub fn apply_event(&self, event: &sigil_core::event::Event) {
+        let mut w = self.inner.write();
+        let entry = w.entry(event.host_id.clone())
+            .or_insert_with(|| HostSummary::new(event.host_id.clone()));
+        crate::fleet_index_update::apply_event(entry, event);
+    }
+
+    /// Clone of one host's summary, or None.
+    pub fn get_host(&self, host_id: &str) -> Option<HostSummary> {
+        self.inner.read().get(host_id).cloned()
+    }
+
+    /// Snapshot of all hosts. Cloned so callers can release the lock fast.
+    pub fn snapshot_all(&self) -> Vec<HostSummary> {
+        self.inner.read().values().cloned().collect()
+    }
+
+    /// Replace internal map wholesale — used by boot rebuild to swap in the
+    /// freshly built index without holding the write lock during the multi-second
+    /// JSONL walk.
+    pub fn replace(&self, fresh: HashMap<String, HostSummary>) {
+        *self.inner.write() = fresh;
+    }
+
+    /// Used by /v1/fleet/hosts.total_estimated and by some tests.
+    pub fn len(&self) -> usize { self.inner.read().len() }
+    pub fn is_empty(&self) -> bool { self.len() == 0 }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+    use sigil_core::event::{
+        Event, Evidence, HostMetaSnapshot, Severity, SourceKind, Subject, SCHEMA_VERSION,
+    };
+    use time::macros::datetime;
+    use uuid::Uuid;
+
+    fn snap_ev(host_id: &str, hostname: &str) -> Event {
+        Event {
+            schema_version: SCHEMA_VERSION,
+            event_id: Uuid::now_v7(),
+            ts: datetime!(2026-05-17 12:00 UTC),
+            host_id: host_id.into(),
+            agent_version: "0.5.0".into(),
+            severity: Severity::Info,
+            source: SourceKind::Agent,
+            subject: Subject::Self_,
+            evidence: Evidence::HostMetaSnapshot {
+                snapshot: HostMetaSnapshot {
+                    hostname: Some(hostname.into()),
+                    os_name: None, os_version: None, kernel_version: None,
+                    architecture: None, interfaces: vec![],
+                    default_gateway_v4: None, default_gateway_v6: None,
+                    dns_servers: vec![],
+                },
+                is_reattestation: false,
+            },
+            target_id: None,
+        }
+    }
+
+    #[test]
+    fn apply_event_creates_host_on_first_seen() {
+        let idx = FleetIndex::new();
+        assert!(idx.is_empty());
+        idx.apply_event(&snap_ev("h1", "alice"));
+        assert_eq!(idx.len(), 1);
+        let h = idx.get_host("h1").unwrap();
+        assert_eq!(h.hostname(), Some("alice"));
+    }
+
+    #[test]
+    fn apply_event_updates_existing_host_in_place() {
+        let idx = FleetIndex::new();
+        idx.apply_event(&snap_ev("h1", "alice"));
+        idx.apply_event(&snap_ev("h1", "alice-renamed"));
+        assert_eq!(idx.len(), 1);
+        assert_eq!(idx.get_host("h1").unwrap().hostname(), Some("alice-renamed"));
+    }
+
+    #[test]
+    fn snapshot_all_returns_clones() {
+        let idx = FleetIndex::new();
+        idx.apply_event(&snap_ev("h1", "alice"));
+        idx.apply_event(&snap_ev("h2", "bob"));
+        let all = idx.snapshot_all();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn replace_swaps_contents() {
+        let idx = FleetIndex::new();
+        idx.apply_event(&snap_ev("h1", "alice"));
+        let mut fresh = HashMap::new();
+        fresh.insert("h2".to_string(), HostSummary::new("h2".into()));
+        idx.replace(fresh);
+        assert_eq!(idx.len(), 1);
+        assert!(idx.get_host("h1").is_none());
+        assert!(idx.get_host("h2").is_some());
+    }
+}
