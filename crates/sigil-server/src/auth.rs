@@ -110,21 +110,20 @@ mod tests {
         assert!(ct_eq(b"", b""));
     }
 
+    // Env vars are process-global, so the two env-mutating cases are merged
+    // into one sequential test to avoid clobbering each other when cargo
+    // test runs in parallel (race observed on Rocky Linux CI runner).
     #[test]
-    fn read_token_from_env_unset_is_none() {
+    fn read_token_from_env_handles_unset_empty_and_trimmed() {
         std::env::remove_var("SIGIL_SERVER_READ_TOKEN");
-        let t = ReadToken::from_env();
-        assert!(!t.is_enabled());
-    }
+        assert!(!ReadToken::from_env().is_enabled());
 
-    #[test]
-    fn read_token_from_env_trims_and_rejects_empty() {
         std::env::set_var("SIGIL_SERVER_READ_TOKEN", "   ");
-        let t = ReadToken::from_env();
-        assert!(!t.is_enabled());
+        assert!(!ReadToken::from_env().is_enabled());
+
         std::env::set_var("SIGIL_SERVER_READ_TOKEN", "  abc  ");
-        let t = ReadToken::from_env();
-        assert_eq!(t.0.as_deref(), Some("abc"));
+        assert_eq!(ReadToken::from_env().0.as_deref(), Some("abc"));
+
         std::env::remove_var("SIGIL_SERVER_READ_TOKEN");
     }
 
