@@ -88,7 +88,7 @@ pub enum PolicySignatureInvalidReason {
 /// Phase 3b.1 — which AI coding agent is being assessed.
 /// Stable wire strings — operators filter by these in the SIEM, so renames are
 /// breaking changes.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum AiTool {
     ClaudeCode,
