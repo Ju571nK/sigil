@@ -53,6 +53,42 @@ impl Platform for LinuxPlatform {
     fn name(&self) -> &'static str {
         "linux"
     }
+
+    fn kernel_version(&self) -> Option<String> {
+        std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .ok()
+            .and_then(|s| parse_osrelease(&s))
+    }
+
+    fn default_gateway_v4(&self) -> Option<String> {
+        std::fs::read_to_string("/proc/net/route")
+            .ok()
+            .and_then(|s| parse_proc_net_route_v4(&s))
+    }
+
+    fn default_gateway_v6(&self) -> Option<String> {
+        let out = std::process::Command::new("ip")
+            .args(["-6", "route", "show", "default"])
+            .output()
+            .ok()?;
+        let s = String::from_utf8(out.stdout).ok()?;
+        for line in s.lines() {
+            let mut iter = line.split_whitespace();
+            if iter.next() == Some("default") && iter.next() == Some("via") {
+                if let Some(gw) = iter.next() {
+                    return Some(gw.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn dns_servers(&self) -> Vec<String> {
+        std::fs::read_to_string("/etc/resolv.conf")
+            .ok()
+            .map(|s| parse_resolv_conf(&s))
+            .unwrap_or_default()
+    }
 }
 
 impl HostIdResolver for LinuxPlatform {
@@ -193,6 +229,52 @@ fn parse_passwd_line(line: &str) -> Option<UserContext> {
     })
 }
 
+fn parse_osrelease(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() { None } else { Some(t.to_string()) }
+}
+
+fn parse_resolv_conf(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in s.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("nameserver") {
+            let val = rest.trim();
+            if !val.is_empty() && !out.iter().any(|x: &String| x == val) {
+                out.push(val.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn parse_proc_net_route_v4(s: &str) -> Option<String> {
+    for (i, line) in s.lines().enumerate() {
+        if i == 0 { continue; } // header
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 3 { continue; }
+        let destination = cols[1];
+        let gateway_hex = cols[2];
+        if destination == "00000000" {
+            return hex_le_to_ipv4(gateway_hex);
+        }
+    }
+    None
+}
+
+fn hex_le_to_ipv4(hex: &str) -> Option<String> {
+    if hex.len() != 8 { return None; }
+    let v = u32::from_str_radix(hex, 16).ok()?;
+    let b0 = (v & 0xff) as u8;
+    let b1 = ((v >> 8) & 0xff) as u8;
+    let b2 = ((v >> 16) & 0xff) as u8;
+    let b3 = ((v >> 24) & 0xff) as u8;
+    Some(format!("{}.{}.{}.{}", b0, b1, b2, b3))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +354,44 @@ mod tests {
         let cpuinfo = "processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Xeon(R) CPU\nstepping\t: 7\n";
         assert_eq!(cpu_brand_from_cpuinfo(cpuinfo), "Intel(R) Xeon(R) CPU");
         assert_eq!(cpu_brand_from_cpuinfo("processor\t: 0\n"), "");
+    }
+
+    #[test]
+    fn parse_resolv_conf_extracts_nameservers_ignores_comments() {
+        let fixture = "# comment\nnameserver 1.1.1.1\nsearch foo.local\nnameserver 8.8.8.8\n; another comment style\nnameserver  192.168.1.1  \n";
+        assert_eq!(
+            parse_resolv_conf(fixture),
+            vec!["1.1.1.1", "8.8.8.8", "192.168.1.1"]
+        );
+    }
+
+    #[test]
+    fn parse_resolv_conf_returns_empty_for_no_nameservers() {
+        let fixture = "search foo.local\noptions edns0\n";
+        assert!(parse_resolv_conf(fixture).is_empty());
+    }
+
+    #[test]
+    fn parse_proc_net_route_finds_default_route_v4() {
+        let fixture = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
+                       eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
+                       eth0\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n";
+        assert_eq!(parse_proc_net_route_v4(fixture), Some("192.168.1.1".to_string()));
+    }
+
+    #[test]
+    fn parse_proc_net_route_returns_none_when_no_default() {
+        let fixture = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
+                       eth0\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n";
+        assert_eq!(parse_proc_net_route_v4(fixture), None);
+    }
+
+    #[test]
+    fn parse_osrelease_trims() {
+        assert_eq!(
+            parse_osrelease("5.14.0-427.20.1.el9_4.x86_64\n"),
+            Some("5.14.0-427.20.1.el9_4.x86_64".to_string())
+        );
+        assert_eq!(parse_osrelease(""), None);
     }
 }
