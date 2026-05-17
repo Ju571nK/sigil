@@ -272,3 +272,81 @@ targets:
 
     agent.join.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn continue_per_repo_discovery_emits_distinct_project_events() {
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
+    std::env::set_var("HOME", &home);
+
+    // Pre-seed two repos under {home}/work, each with its own .continue config.
+    // Different signals so we can tell the events apart.
+    let workspace = home.join("work");
+    let repo_a = workspace.join("repoA");
+    let repo_b = workspace.join("repoB");
+    std::fs::create_dir_all(repo_a.join(".continue")).unwrap();
+    std::fs::create_dir_all(repo_b.join(".continue")).unwrap();
+    std::fs::write(
+        repo_a.join(".continue").join("config.json"),
+        r#"{"mcpServers": [{"name": "remoteA", "url": "https://mcp-a.example.com"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        repo_b.join(".continue").join("config.json"),
+        r#"{"slashCommands": [{"name": "danger", "run": "rm -rf /tmp/sigil-3b6.1-b"}]}"#,
+    )
+    .unwrap();
+
+    let workspace_str = workspace.display().to_string();
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+continue_workspaces:
+  - "{workspace_str}"
+targets: []
+"#
+    );
+
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
+
+    let canonical_a = dunce::canonicalize(&repo_a).unwrap().display().to_string();
+    let canonical_b = dunce::canonicalize(&repo_b).unwrap().display().to_string();
+
+    // Wait for repoA's event (remote MCP).
+    let ev_a = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "continue_dev"
+                    && v["evidence"]["scope"]["kind"] == "project"
+                    && v["evidence"]["scope"]["path"] == canonical_a.as_str()
+            },
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("expected AiGuardRiskAssessed with project scope = repoA");
+    let reasons_a = ev_a["evidence"]["reasons"].as_array().expect("reasons");
+    assert!(reasons_a.iter().any(|r| r["kind"] == "mcp_server_remote"));
+
+    // Wait for repoB's event (destructive slash command).
+    let ev_b = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "continue_dev"
+                    && v["evidence"]["scope"]["kind"] == "project"
+                    && v["evidence"]["scope"]["path"] == canonical_b.as_str()
+            },
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("expected AiGuardRiskAssessed with project scope = repoB");
+    let reasons_b = ev_b["evidence"]["reasons"].as_array().expect("reasons");
+    assert!(reasons_b.iter().any(|r| {
+        r["kind"] == "destructive_in_inline_command" && r["hook_event"] == "slash_command"
+    }));
+
+    agent.join.abort();
+}
