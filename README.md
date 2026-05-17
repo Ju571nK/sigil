@@ -241,6 +241,13 @@ flowchart LR
   customCommands inline destructive patterns, external script
   references. Emits `ai_guard_risk_assessed` with new
   `scope.kind = "application"`.
+- **Phase 3b.6.1 — shipped.** Continue.dev per-repo config auto-discovery.
+  Operator lists workspace roots in the signed policy envelope
+  (`continue_workspaces: [path, ...]`); agent walks each root 1-level
+  deep, spawns a `ContinueDevProjectParser` for every direct subdir
+  that contains `.continue/config.json`, and emits
+  `ai_guard_risk_assessed` events with `scope = project{path: <repo>}`.
+  Hot-reload via the existing signed policy reload path.
 - **Phase 3c — planned.** Reproducible-build attestation; additional
   posture signals.
 
