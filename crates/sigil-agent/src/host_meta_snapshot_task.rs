@@ -7,8 +7,7 @@ use crate::host_meta_snapshot::{collect, snapshot_hash};
 use crate::state_task::CommittableEvent;
 use parking_lot::RwLock;
 use sigil_core::event::{
-    Event, Evidence, HostMetaSnapshot, Severity, SourceKind, Subject,
-    AGENT_VERSION, SCHEMA_VERSION,
+    Event, Evidence, HostMetaSnapshot, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -103,7 +102,10 @@ async fn eval_and_emit<S: SnapshotSource>(ctx: &TaskCtx<S>, force: bool) {
         severity: Severity::Info,
         source: SourceKind::Agent,
         subject: Subject::Self_,
-        evidence: Evidence::HostMetaSnapshot { snapshot, is_reattestation },
+        evidence: Evidence::HostMetaSnapshot {
+            snapshot,
+            is_reattestation,
+        },
         target_id: None,
     };
     if ctx
@@ -150,7 +152,11 @@ mod tests {
                 *self.last.lock().unwrap() = Some(next.clone());
                 next
             } else {
-                self.last.lock().unwrap().clone().expect("scripts must have at least one entry")
+                self.last
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("scripts must have at least one entry")
             }
         }
     }
@@ -192,14 +198,20 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn boot_emits_initial_event_with_is_reattestation_false() {
         let src = ScriptedSource::new(vec![snap("alice-mbp")]);
-        let (ctx, mut events) =
-            ctx_with(src, Duration::from_secs(24 * 3600), Duration::from_secs(300));
+        let (ctx, mut events) = ctx_with(
+            src,
+            Duration::from_secs(24 * 3600),
+            Duration::from_secs(300),
+        );
         let h = tokio::spawn(run(ctx));
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_millis(10)).await;
         let ev = events.recv().await.expect("boot event");
         match ev.event.evidence {
-            Evidence::HostMetaSnapshot { snapshot, is_reattestation } => {
+            Evidence::HostMetaSnapshot {
+                snapshot,
+                is_reattestation,
+            } => {
                 assert_eq!(snapshot.hostname.as_deref(), Some("alice-mbp"));
                 assert!(!is_reattestation, "boot scan must NOT be re-attestation");
             }
@@ -220,8 +232,13 @@ mod tests {
         tokio::time::advance(Duration::from_millis(150)).await;
         let ev = events.recv().await.expect("heartbeat event");
         match ev.event.evidence {
-            Evidence::HostMetaSnapshot { is_reattestation, .. } => {
-                assert!(is_reattestation, "unchanged heartbeat must be re-attestation");
+            Evidence::HostMetaSnapshot {
+                is_reattestation, ..
+            } => {
+                assert!(
+                    is_reattestation,
+                    "unchanged heartbeat must be re-attestation"
+                );
             }
             other => panic!("got {other:?}"),
         }
@@ -240,9 +257,15 @@ mod tests {
         tokio::time::advance(Duration::from_millis(150)).await;
         let ev = events.recv().await.expect("changed heartbeat");
         match ev.event.evidence {
-            Evidence::HostMetaSnapshot { snapshot, is_reattestation } => {
+            Evidence::HostMetaSnapshot {
+                snapshot,
+                is_reattestation,
+            } => {
                 assert_eq!(snapshot.hostname.as_deref(), Some("alice-mbp-renamed"));
-                assert!(!is_reattestation, "changed heartbeat must NOT be re-attestation");
+                assert!(
+                    !is_reattestation,
+                    "changed heartbeat must NOT be re-attestation"
+                );
             }
             other => panic!("got {other:?}"),
         }
@@ -276,9 +299,15 @@ mod tests {
         tokio::time::advance(Duration::from_millis(150)).await;
         let ev = events.recv().await.expect("change-check event");
         match ev.event.evidence {
-            Evidence::HostMetaSnapshot { snapshot, is_reattestation } => {
+            Evidence::HostMetaSnapshot {
+                snapshot,
+                is_reattestation,
+            } => {
                 assert_eq!(snapshot.hostname.as_deref(), Some("alice-mbp-renamed"));
-                assert!(!is_reattestation, "change-check changed must NOT be re-attestation");
+                assert!(
+                    !is_reattestation,
+                    "change-check changed must NOT be re-attestation"
+                );
             }
             other => panic!("got {other:?}"),
         }

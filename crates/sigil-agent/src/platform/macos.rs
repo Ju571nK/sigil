@@ -23,7 +23,11 @@ impl MacosPlatform {
 
 fn parse_uname_r(s: &str) -> Option<String> {
     let t = s.trim();
-    if t.is_empty() { None } else { Some(t.to_string()) }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 fn parse_route_n_get_default(s: &str) -> Option<String> {
@@ -263,7 +267,10 @@ mod tests {
     #[test]
     fn parse_route_n_get_default_extracts_gateway() {
         let fixture = "   route to: default\ndestination: default\n       mask: default\n    gateway: 192.168.1.1\n  interface: en0\n";
-        assert_eq!(parse_route_n_get_default(fixture), Some("192.168.1.1".to_string()));
+        assert_eq!(
+            parse_route_n_get_default(fixture),
+            Some("192.168.1.1".to_string())
+        );
     }
 
     #[test]

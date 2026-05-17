@@ -775,7 +775,10 @@ mod tests {
         assert!(s.contains(r#""is_reattestation":false"#), "got: {s}");
         let back: Evidence = serde_json::from_str(&s).unwrap();
         match back {
-            Evidence::HostMetaSnapshot { snapshot, is_reattestation } => {
+            Evidence::HostMetaSnapshot {
+                snapshot,
+                is_reattestation,
+            } => {
                 assert_eq!(snapshot, snap);
                 assert!(!is_reattestation);
             }
@@ -803,7 +806,10 @@ mod tests {
         let s = serde_json::to_string(&ev).unwrap();
         let back: Evidence = serde_json::from_str(&s).unwrap();
         match back {
-            Evidence::HostMetaSnapshot { snapshot, is_reattestation } => {
+            Evidence::HostMetaSnapshot {
+                snapshot,
+                is_reattestation,
+            } => {
                 assert_eq!(snapshot, snap);
                 assert!(is_reattestation);
             }

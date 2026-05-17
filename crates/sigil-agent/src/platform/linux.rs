@@ -231,7 +231,11 @@ fn parse_passwd_line(line: &str) -> Option<UserContext> {
 
 fn parse_osrelease(s: &str) -> Option<String> {
     let t = s.trim();
-    if t.is_empty() { None } else { Some(t.to_string()) }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 fn parse_resolv_conf(s: &str) -> Vec<String> {
@@ -253,9 +257,13 @@ fn parse_resolv_conf(s: &str) -> Vec<String> {
 
 fn parse_proc_net_route_v4(s: &str) -> Option<String> {
     for (i, line) in s.lines().enumerate() {
-        if i == 0 { continue; } // header
+        if i == 0 {
+            continue;
+        } // header
         let cols: Vec<&str> = line.split_whitespace().collect();
-        if cols.len() < 3 { continue; }
+        if cols.len() < 3 {
+            continue;
+        }
         let destination = cols[1];
         let gateway_hex = cols[2];
         if destination == "00000000" {
@@ -266,7 +274,9 @@ fn parse_proc_net_route_v4(s: &str) -> Option<String> {
 }
 
 fn hex_le_to_ipv4(hex: &str) -> Option<String> {
-    if hex.len() != 8 { return None; }
+    if hex.len() != 8 {
+        return None;
+    }
     let v = u32::from_str_radix(hex, 16).ok()?;
     let b0 = (v & 0xff) as u8;
     let b1 = ((v >> 8) & 0xff) as u8;
@@ -373,15 +383,20 @@ mod tests {
 
     #[test]
     fn parse_proc_net_route_finds_default_route_v4() {
-        let fixture = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
+        let fixture =
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
                        eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
                        eth0\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n";
-        assert_eq!(parse_proc_net_route_v4(fixture), Some("192.168.1.1".to_string()));
+        assert_eq!(
+            parse_proc_net_route_v4(fixture),
+            Some("192.168.1.1".to_string())
+        );
     }
 
     #[test]
     fn parse_proc_net_route_returns_none_when_no_default() {
-        let fixture = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
+        let fixture =
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
                        eth0\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n";
         assert_eq!(parse_proc_net_route_v4(fixture), None);
     }

@@ -33,12 +33,20 @@ pub fn snapshot_hash(snapshot: &HostMetaSnapshot) -> [u8; 32] {
 fn os_info_name() -> Option<String> {
     let info = os_info::get();
     let t = info.os_type();
-    if matches!(t, os_info::Type::Unknown) { None } else { Some(t.to_string()) }
+    if matches!(t, os_info::Type::Unknown) {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 fn os_info_version() -> Option<String> {
     let v = os_info::get().version().to_string();
-    if v == "Unknown" { None } else { Some(v) }
+    if v == "Unknown" {
+        None
+    } else {
+        Some(v)
+    }
 }
 
 fn collect_interfaces() -> Vec<NetworkInterface> {
@@ -48,7 +56,9 @@ fn collect_interfaces() -> Vec<NetworkInterface> {
     let mut by_name: std::collections::BTreeMap<String, NetworkInterface> =
         std::collections::BTreeMap::new();
     for a in addrs {
-        if a.is_loopback() { continue; }
+        if a.is_loopback() {
+            continue;
+        }
         let entry = by_name
             .entry(a.name.clone())
             .or_insert_with(|| NetworkInterface {
@@ -152,7 +162,9 @@ mod tests {
         let all_ones = [0xff; 16];
         assert_eq!(netmask_to_prefix_v6(all_ones), 128);
         let mut half = [0u8; 16];
-        for b in half.iter_mut().take(8) { *b = 0xff; }
+        for b in half.iter_mut().take(8) {
+            *b = 0xff;
+        }
         assert_eq!(netmask_to_prefix_v6(half), 64);
         assert_eq!(netmask_to_prefix_v6([0u8; 16]), 0);
     }

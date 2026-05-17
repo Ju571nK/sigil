@@ -52,7 +52,10 @@ async fn agent_emits_host_meta_snapshot_on_boot() {
     let ifaces = ev["evidence"]["snapshot"]["interfaces"]
         .as_array()
         .expect("interfaces must be an array");
-    assert!(!ifaces.is_empty(), "expected at least one non-loopback interface");
+    assert!(
+        !ifaces.is_empty(),
+        "expected at least one non-loopback interface"
+    );
 
     agent.join.abort();
 }

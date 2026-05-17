@@ -36,7 +36,9 @@ fn parse_route_print_default_v4(s: &str) -> Option<String> {
             in_active = true;
             continue;
         }
-        if !in_active { continue; }
+        if !in_active {
+            continue;
+        }
         let cols: Vec<&str> = trimmed.split_whitespace().collect();
         if cols.len() >= 3 && cols[0] == "0.0.0.0" && cols[1] == "0.0.0.0" {
             let gw = cols[2];
@@ -91,7 +93,11 @@ impl Platform for WindowsPlatform {
             .ok()?;
         let s = String::from_utf8(out.stdout).ok()?;
         let v = s.trim();
-        if v.is_empty() { None } else { Some(v.to_string()) }
+        if v.is_empty() {
+            None
+        } else {
+            Some(v.to_string())
+        }
     }
 
     fn dns_servers(&self) -> Vec<String> {
@@ -101,7 +107,10 @@ impl Platform for WindowsPlatform {
                 "Get-DnsClientServerAddress -AddressFamily IPv4,IPv6 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ServerAddresses",
             ])
             .output() { Ok(o) => o, Err(_) => return Vec::new() };
-        let s = match String::from_utf8(out.stdout) { Ok(s) => s, Err(_) => return Vec::new() };
+        let s = match String::from_utf8(out.stdout) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
         let mut all = parse_dns_servers_output(&s);
         let mut seen = std::collections::HashSet::new();
         all.retain(|x| seen.insert(x.clone()));
@@ -278,7 +287,10 @@ mod tests {
     #[test]
     fn parse_ver_output_extracts_version_string() {
         let fixture = "\r\nMicrosoft Windows [Version 10.0.22631.3447]\r\n";
-        assert_eq!(parse_ver_output(fixture), Some("10.0.22631.3447".to_string()));
+        assert_eq!(
+            parse_ver_output(fixture),
+            Some("10.0.22631.3447".to_string())
+        );
     }
 
     #[test]
@@ -299,7 +311,10 @@ mod tests {
                                  0.0.0.0          0.0.0.0      192.168.1.1     192.168.1.42      25\r\n\
                               192.168.1.0    255.255.255.0         On-link      192.168.1.42     281\r\n\
                        ===========================================================================\r\n";
-        assert_eq!(parse_route_print_default_v4(fixture), Some("192.168.1.1".to_string()));
+        assert_eq!(
+            parse_route_print_default_v4(fixture),
+            Some("192.168.1.1".to_string())
+        );
     }
 
     #[test]
