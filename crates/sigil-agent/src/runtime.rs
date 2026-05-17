@@ -120,8 +120,33 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         Some(p) if p.exists() => Some(sigil_core::policy::parse(&std::fs::read_to_string(p)?)?),
         _ => None,
     };
-    let effective = merge(defaults()?, user_doc, current_platform())?;
+    let mut effective = merge(defaults()?, user_doc, current_platform())?;
     // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
+
+    // Phase 3b.6.1 — discover Continue.dev per-repo configs from the operator's
+    // `continue_workspaces` and synthesize in-memory WatchTarget entries so the
+    // existing watcher subgraph picks up file_change events. These synthetic
+    // targets are in-memory only; never written back to disk (the signed policy
+    // envelope on disk stays authoritative).
+    let continue_repos =
+        crate::ai_guard::continue_discovery::discover_continue_projects(&effective.continue_workspaces);
+    for repo_root in &continue_repos {
+        let config = repo_root.join(".continue").join("config.json");
+        let id_suffix = {
+            let hex = blake3::hash(repo_root.to_string_lossy().as_bytes()).to_hex();
+            hex.as_str()[..8].to_string()
+        };
+        effective.targets.push(sigil_core::policy::WatchTarget {
+            id: format!("continue-project-{id_suffix}"),
+            description: format!("Phase 3b.6.1 synthetic: {}", repo_root.display()),
+            tier: sigil_core::policy::Tier::Critical,
+            platform: sigil_core::policy::Platform::Any,
+            paths: vec![config.to_string_lossy().to_string()],
+            recursive: false,
+            follow_symlinks: false,
+            disabled: false,
+        });
+    }
 
     // 2. Expand paths per user → watch paths + watch roots.
     let (expanded_paths, watch_roots) = expand_targets(&effective, &plat);
@@ -328,6 +353,22 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         }),
     );
 
+    // Phase 3b.6.1 — build the shared parsers list BEFORE the policy_reload
+    // task and ai_guard task so both can share an `Arc<RwLock<..>>` and reload
+    // can mutate the live parser set on hot-reload.
+    let mut parsers_vec: Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>> = vec![
+        Arc::new(crate::ai_guard::ClaudeCodeParser),
+        Arc::new(crate::ai_guard::CodexParser),
+        Arc::new(crate::ai_guard::ClaudeDesktopParser),
+        Arc::new(crate::ai_guard::ContinueDevParser),
+    ];
+    for repo_root in continue_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser { repo_root }));
+    }
+    let ai_guard_parsers: Arc<
+        parking_lot::RwLock<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
+    > = Arc::new(parking_lot::RwLock::new(parsers_vec));
+
     // Live policy reload: on a successful `apply_policy`, re-derive watch
     // targets/roots from the new policy.yaml and apply them to the running
     // pipeline + watcher (no restart). Owns the watcher handle + targets sender.
@@ -342,6 +383,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 watched_roots: watch_roots,
                 cache: cache.clone(),
                 shutdown: cancel.clone(),
+                parsers: ai_guard_parsers.clone(),
+                ai_guard_state: ai_guard_state.clone(),
             },
         )),
     );
@@ -367,19 +410,15 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     );
 
     // Phase 3b.1 — ai_guard_task: scores Claude Code / Codex guard surfaces.
+    // Phase 3b.6.1 — `parsers` is shared with `policy_reload_task` via an
+    // `Arc<RwLock<..>>` so hot-reload can mutate the live parser set.
     {
-        let parsers: Vec<Box<dyn crate::ai_guard::parser::AiGuardParser>> = vec![
-            Box::new(crate::ai_guard::ClaudeCodeParser),
-            Box::new(crate::ai_guard::CodexParser),
-            Box::new(crate::ai_guard::ClaudeDesktopParser),
-            Box::new(crate::ai_guard::ContinueDevParser),
-        ];
         let home_dir = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/"));
         let ctx = crate::ai_guard::TaskCtx {
-            parsers,
+            parsers: ai_guard_parsers,
             fc_rx: ai_guard_fc_tx.subscribe(),
             event_tx: tx_sink.clone(),
             state: ai_guard_state.clone(),

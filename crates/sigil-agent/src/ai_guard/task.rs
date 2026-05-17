@@ -47,7 +47,12 @@ pub struct CachedAssessment {
 /// Bundle of shared dependencies the task needs at construction. Built once
 /// in `runtime::run` and consumed by `ai_guard::task::run`.
 pub struct TaskCtx {
-    pub parsers: Vec<Box<dyn AiGuardParser>>,
+    /// Storage is `Arc<dyn ..>` (not `Box<dyn ..>`) so the dispatcher can
+    /// snapshot-clone the vec before dropping the read guard and entering
+    /// an await — parking_lot RwLockReadGuard isn't Send across `.await`.
+    /// Phase 3b.6.1 — policy_reload mutates this list to add/remove
+    /// `ContinueDevProjectParser` instances as `continue_workspaces` changes.
+    pub parsers: Arc<RwLock<Vec<Arc<dyn AiGuardParser>>>>,
     pub fc_rx: broadcast::Receiver<PathBuf>,
     pub event_tx: mpsc::Sender<CommittableEvent>,
     pub state: Arc<RwLock<StateMap>>,
@@ -59,9 +64,15 @@ pub struct TaskCtx {
 /// Main task loop. Boots, then selects between file-change broadcasts and
 /// the heartbeat tick until the broadcast sender is dropped (shutdown).
 pub async fn run(mut ctx: TaskCtx) {
-    // 1. Initial scan on boot.
-    for parser in &ctx.parsers {
-        eval_and_maybe_emit(parser.as_ref(), &ctx, true).await;
+    // 1. Initial scan on boot. Snapshot-clone the parsers vec before any
+    //    `.await` so the parking_lot RwLockReadGuard is dropped — guards are
+    //    NOT Send across an await. Cloning a `Vec<Arc<dyn>>` just bumps each
+    //    Arc refcount, so this is cheap.
+    {
+        let snapshot: Vec<Arc<dyn AiGuardParser>> = ctx.parsers.read().clone();
+        for parser in &snapshot {
+            eval_and_maybe_emit(parser.as_ref(), &ctx, true).await;
+        }
     }
 
     let mut heartbeat = tokio::time::interval(ctx.heartbeat_interval);
@@ -72,7 +83,9 @@ pub async fn run(mut ctx: TaskCtx) {
             recv = ctx.fc_rx.recv() => {
                 match recv {
                     Ok(path) => {
-                        for parser in &ctx.parsers {
+                        // Snapshot per cycle so reload mutations between cycles take effect.
+                        let snapshot: Vec<Arc<dyn AiGuardParser>> = ctx.parsers.read().clone();
+                        for parser in &snapshot {
                             if parser
                                 .watched_paths(&ctx.home_dir)
                                 .iter()
@@ -92,7 +105,8 @@ pub async fn run(mut ctx: TaskCtx) {
                 }
             }
             _ = heartbeat.tick() => {
-                for parser in &ctx.parsers {
+                let snapshot: Vec<Arc<dyn AiGuardParser>> = ctx.parsers.read().clone();
+                for parser in &snapshot {
                     eval_and_maybe_emit(parser.as_ref(), &ctx, true).await;
                 }
             }
@@ -230,7 +244,9 @@ mod tests {
         let (tx, rx) = mpsc::channel(16);
         (
             TaskCtx {
-                parsers: vec![Box::new(parser)],
+                parsers: Arc::new(RwLock::new(vec![
+                    Arc::new(parser) as Arc<dyn AiGuardParser>,
+                ])),
                 fc_rx,
                 event_tx: tx,
                 state: Arc::new(RwLock::new(HashMap::new())),
@@ -384,7 +400,9 @@ mod tests {
         let (_tx, fc_rx) = broadcast::channel(8);
         let (event_tx, mut events) = mpsc::channel(8);
         let ctx = TaskCtx {
-            parsers: vec![Box::new(ErrorParser)],
+            parsers: Arc::new(RwLock::new(vec![
+                Arc::new(ErrorParser) as Arc<dyn AiGuardParser>,
+            ])),
             fc_rx,
             event_tx,
             state: Arc::new(RwLock::new(HashMap::new())),
