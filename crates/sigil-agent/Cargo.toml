@@ -37,6 +37,8 @@ regex = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
 mac_address = "1.1"
+if-addrs = "0.13"
+os_info = "3"
 blake3 = { workspace = true }
 
 [dev-dependencies]
