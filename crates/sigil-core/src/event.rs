@@ -93,6 +93,10 @@ pub enum PolicySignatureInvalidReason {
 pub enum AiTool {
     ClaudeCode,
     Codex,
+    /// Phase 3b.6 — Claude Desktop (Anthropic.app), application-form companion to ClaudeCode CLI.
+    ClaudeDesktop,
+    /// Phase 3b.6 — Continue.dev VSCode/JetBrains extension.
+    ContinueDev,
 }
 
 /// Phase 3b.1 — where the assessment applies on the host.
@@ -103,6 +107,10 @@ pub enum AiGuardScope {
     UserGlobal,
     /// Operator-added paths in policy.yaml not under user-global.
     Project { path: PathBuf },
+    /// Phase 3b.6 — application/IDE-installed AI agent (Claude Desktop, Continue.dev, ...).
+    /// `app` is a stable snake_case identifier matching the parser
+    /// (e.g., "claude_desktop", "continue").
+    Application { app: String },
 }
 
 /// Phase 3b.1 — auto-derived from `score`. low <1 / medium <4 / high <7 / critical 7+.
@@ -843,5 +851,32 @@ mod tests {
         };
         let line = serde_json::to_string(&ev).unwrap();
         insta::assert_snapshot!(line);
+    }
+
+    #[test]
+    fn ai_tool_claude_desktop_round_trips_as_snake_case() {
+        let t = AiTool::ClaudeDesktop;
+        let j = serde_json::to_string(&t).unwrap();
+        assert_eq!(j, "\"claude_desktop\"");
+        let back: AiTool = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, AiTool::ClaudeDesktop);
+    }
+
+    #[test]
+    fn ai_tool_continue_dev_round_trips_as_snake_case() {
+        let t = AiTool::ContinueDev;
+        let j = serde_json::to_string(&t).unwrap();
+        assert_eq!(j, "\"continue_dev\"");
+        let back: AiTool = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, AiTool::ContinueDev);
+    }
+
+    #[test]
+    fn ai_guard_scope_application_round_trips() {
+        let s = AiGuardScope::Application { app: "claude_desktop".into() };
+        let j = serde_json::to_string(&s).unwrap();
+        assert_eq!(j, r#"{"kind":"application","app":"claude_desktop"}"#);
+        let back: AiGuardScope = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, s);
     }
 }
