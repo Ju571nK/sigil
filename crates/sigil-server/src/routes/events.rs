@@ -2,7 +2,7 @@
 //! GET /v1/events/{event_id} — single event lookup via UUIDv7 timestamp
 
 use crate::app::SharedState;
-use crate::jsonl_scan::{scan, ScanFilters};
+use crate::jsonl_scan::{find_by_id, scan, ScanFilters};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -130,34 +130,24 @@ pub async fn get_event_by_id(
                 .into_response()
         }
     };
-    // Scan everything and stop at first match. cursor=None, no other filters.
-    let f = ScanFilters {
-        limit: 100_000,
-        ..Default::default()
-    };
-    let r = match scan(&state.events_out_dir, &f) {
-        Ok(r) => r,
-        Err(_) => {
-            return (
+    match find_by_id(&state.events_out_dir, uid) {
+        Ok(Some(v)) => Json(v).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": {"code": "not_found", "message": "event_id not found"}
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = ?e, "find_by_id failed");
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
-                    "error": {"code": "internal", "message": "scan failed"}
+                    "error": {"code": "internal", "message": "lookup failed"}
                 })),
             )
                 .into_response()
         }
-    };
-    let needle = uid.to_string();
-    for ev in r.events {
-        if ev.get("event_id").and_then(|v| v.as_str()) == Some(needle.as_str()) {
-            return Json(ev).into_response();
-        }
     }
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({
-            "error": {"code": "not_found", "message": "event_id not found"}
-        })),
-    )
-        .into_response()
 }

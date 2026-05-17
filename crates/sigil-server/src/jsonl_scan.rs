@@ -7,6 +7,75 @@ use sigil_core::event::Event;
 use std::path::Path;
 use uuid::Uuid;
 
+/// Extract the UNIX-ms timestamp from a UUIDv7 (first 48 bits, big-endian).
+fn uuid_v7_unix_ms(uid: Uuid) -> u64 {
+    let b = uid.as_bytes();
+    ((b[0] as u64) << 40)
+        | ((b[1] as u64) << 32)
+        | ((b[2] as u64) << 24)
+        | ((b[3] as u64) << 16)
+        | ((b[4] as u64) << 8)
+        | (b[5] as u64)
+}
+
+/// Find a single event by id using the UUIDv7 timestamp to target the date file,
+/// with a ±1 day window for agent/server clock skew. Returns the raw JSON line if
+/// the matching event_id is found, else `Ok(None)`.
+pub fn find_by_id(events_out_dir: &Path, event_id: Uuid) -> std::io::Result<Option<Value>> {
+    let ms = uuid_v7_unix_ms(event_id);
+    let secs = (ms / 1000) as i64;
+    let center = match time::OffsetDateTime::from_unix_timestamp(secs) {
+        Ok(t) => t,
+        Err(_) => return Ok(None),
+    };
+    let day = time::Duration::days(1);
+    let dates: [String; 3] = [
+        date_str(center - day),
+        date_str(center),
+        date_str(center + day),
+    ];
+    let needle = event_id.to_string();
+
+    let hosts = match std::fs::read_dir(events_out_dir) {
+        Ok(it) => it,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    for h in hosts.flatten() {
+        let name = match h.file_name().to_str().map(str::to_string) {
+            Some(s) => s,
+            None => continue,
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        for d in &dates {
+            let path = h.path().join(format!("received-{d}.jsonl"));
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            for line in bytes.split(|&c| c == b'\n') {
+                if line.is_empty() {
+                    continue;
+                }
+                let v: Value = match serde_json::from_slice(line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if v.get("event_id").and_then(|x| x.as_str()) == Some(needle.as_str()) {
+                    return Ok(Some(v));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn date_str(t: time::OffsetDateTime) -> String {
+    format!("{:04}-{:02}-{:02}", t.year(), t.month() as u8, t.day())
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct ScanFilters {
     pub cursor: Option<Uuid>, // skip events with event_id >= cursor
@@ -265,6 +334,50 @@ mod tests {
         .unwrap();
         assert_eq!(r.events.len(), 1);
         assert_eq!(r.events[0]["evidence"]["kind"], "tls_failure");
+    }
+
+    #[test]
+    fn find_by_id_targets_date_file_from_uuidv7() {
+        let dir = tempdir().unwrap();
+        let host_dir = dir.path().join("h1");
+        std::fs::create_dir_all(&host_dir).unwrap();
+        let target = evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict");
+        let target_id = target["event_id"].as_str().unwrap().to_string();
+        let target_uuid = uuid::Uuid::parse_str(&target_id).unwrap();
+        // Compute the date the UUIDv7 timestamp resolves to and write the line there.
+        let ms = uuid_v7_unix_ms(target_uuid);
+        let t = time::OffsetDateTime::from_unix_timestamp((ms / 1000) as i64).unwrap();
+        let fname = format!(
+            "received-{:04}-{:02}-{:02}.jsonl",
+            t.year(),
+            t.month() as u8,
+            t.day()
+        );
+        let f_target = host_dir.join(&fname);
+        write_line(&f_target, &target);
+        // Decoy in a far-away file that must NOT be opened by find_by_id.
+        let f_decoy = host_dir.join("received-2020-01-01.jsonl");
+        write_line(
+            &f_decoy,
+            &evjson("h1", "2020-01-01T00:00:00Z", "host_id_conflict"),
+        );
+        let got = find_by_id(dir.path(), target_uuid).unwrap();
+        assert!(got.is_some());
+        assert_eq!(got.unwrap()["event_id"], target_id);
+    }
+
+    #[test]
+    fn find_by_id_returns_none_when_absent() {
+        let dir = tempdir().unwrap();
+        let host_dir = dir.path().join("h1");
+        std::fs::create_dir_all(&host_dir).unwrap();
+        let f = host_dir.join("received-2026-05-17.jsonl");
+        write_line(
+            &f,
+            &evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict"),
+        );
+        let missing = uuid::Uuid::now_v7();
+        assert!(find_by_id(dir.path(), missing).unwrap().is_none());
     }
 
     #[test]
