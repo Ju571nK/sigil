@@ -371,6 +371,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         let parsers: Vec<Box<dyn crate::ai_guard::parser::AiGuardParser>> = vec![
             Box::new(crate::ai_guard::ClaudeCodeParser),
             Box::new(crate::ai_guard::CodexParser),
+            Box::new(crate::ai_guard::ClaudeDesktopParser),
         ];
         let home_dir = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))

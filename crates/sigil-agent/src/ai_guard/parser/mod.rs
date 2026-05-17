@@ -2,6 +2,7 @@
 //! tool's user-global config and returns the assessed reasons.
 
 pub mod claude_code;
+pub mod claude_desktop;
 pub mod codex;
 
 use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
