@@ -22,7 +22,9 @@ impl AiGuardParser for ContinueDevParser {
     }
 
     fn scope(&self) -> AiGuardScope {
-        AiGuardScope::Application { app: "continue".into() }
+        AiGuardScope::Application {
+            app: "continue".into(),
+        }
     }
 
     fn watched_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
@@ -52,14 +54,19 @@ impl AiGuardParser for ContinueDevParser {
 /// Continue mcpServers shape varies between v1 (object map keyed by name)
 /// and v2 (array of objects with `name` field). Handle both.
 fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
-    let Some(node) = settings.get("mcpServers") else { return };
+    let Some(node) = settings.get("mcpServers") else {
+        return;
+    };
     if let Some(obj) = node.as_object() {
         for (name, def) in obj {
             emit_one_mcp(name, def, out);
         }
     } else if let Some(arr) = node.as_array() {
         for def in arr {
-            let name = def.get("name").and_then(Value::as_str).unwrap_or("(unnamed)");
+            let name = def
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("(unnamed)");
             emit_one_mcp(name, def, out);
         }
     }
@@ -75,7 +82,9 @@ fn emit_one_mcp(name: &str, def: &Value, out: &mut Vec<AiGuardReason>) {
         }
         return;
     }
-    let Some(command) = def.get("command").and_then(Value::as_str) else { return };
+    let Some(command) = def.get("command").and_then(Value::as_str) else {
+        return;
+    };
     out.push(AiGuardReason::NoSandbox {
         executor: "mcp_command".into(),
     });
@@ -99,7 +108,9 @@ fn emit_one_mcp(name: &str, def: &Value, out: &mut Vec<AiGuardReason>) {
 ///   외부면 ExternalScriptUnscanned.
 /// - `run` / `prompt` 가 string 이면: destructive pattern scan.
 fn emit_slash_command_reasons(settings: &Value, hooks_dir: &Path, out: &mut Vec<AiGuardReason>) {
-    let Some(arr) = settings.get("slashCommands").and_then(Value::as_array) else { return };
+    let Some(arr) = settings.get("slashCommands").and_then(Value::as_array) else {
+        return;
+    };
     for entry in arr {
         // step: path-like external/convention script
         if let Some(step) = entry.get("step").and_then(Value::as_str) {
@@ -118,7 +129,9 @@ fn emit_slash_command_reasons(settings: &Value, hooks_dir: &Path, out: &mut Vec<
 
 /// customCommands: {name, prompt, command?}. `command` is shell-exec; scan it.
 fn emit_custom_command_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
-    let Some(arr) = settings.get("customCommands").and_then(Value::as_array) else { return };
+    let Some(arr) = settings.get("customCommands").and_then(Value::as_array) else {
+        return;
+    };
     for entry in arr {
         if let Some(cmd) = entry.get("command").and_then(Value::as_str) {
             scan_inline(cmd, "custom_command", out);
@@ -183,7 +196,14 @@ fn path_is_inside(candidate: &Path, root: &Path) -> bool {
 fn is_shell(cmd: &str) -> bool {
     matches!(
         cmd.rsplit(['/', '\\']).next().unwrap_or(cmd),
-        "sh" | "bash" | "zsh" | "dash" | "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh"
+        "sh" | "bash"
+            | "zsh"
+            | "dash"
+            | "cmd"
+            | "cmd.exe"
+            | "powershell"
+            | "powershell.exe"
+            | "pwsh"
     )
 }
 
@@ -349,7 +369,9 @@ mod tests {
         let p = ContinueDevParser;
         assert_eq!(
             p.scope(),
-            AiGuardScope::Application { app: "continue".into() }
+            AiGuardScope::Application {
+                app: "continue".into()
+            }
         );
     }
 

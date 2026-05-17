@@ -159,7 +159,10 @@ async fn claude_desktop_config_with_remote_mcp_emits_assessed_event() {
     std::env::set_var("HOME", &home);
 
     // Pre-seed Claude Desktop config under the macOS-style path.
-    let dir = home.join("Library").join("Application Support").join("Claude");
+    let dir = home
+        .join("Library")
+        .join("Application Support")
+        .join("Claude");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("claude_desktop_config.json"),

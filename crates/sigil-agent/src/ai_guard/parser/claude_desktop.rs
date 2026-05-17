@@ -18,7 +18,9 @@ impl AiGuardParser for ClaudeDesktopParser {
     }
 
     fn scope(&self) -> AiGuardScope {
-        AiGuardScope::Application { app: "claude_desktop".into() }
+        AiGuardScope::Application {
+            app: "claude_desktop".into(),
+        }
     }
 
     fn watched_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
@@ -137,7 +139,14 @@ fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
 fn is_shell(cmd: &str) -> bool {
     matches!(
         cmd.rsplit(['/', '\\']).next().unwrap_or(cmd),
-        "sh" | "bash" | "zsh" | "dash" | "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh"
+        "sh" | "bash"
+            | "zsh"
+            | "dash"
+            | "cmd"
+            | "cmd.exe"
+            | "powershell"
+            | "powershell.exe"
+            | "pwsh"
     )
 }
 
@@ -274,7 +283,9 @@ mod tests {
         );
         let p = ClaudeDesktopParser;
         let reasons = p.assess(dir.path()).unwrap();
-        assert!(reasons.iter().any(|r| matches!(r, AiGuardReason::McpServerRemote { .. })));
+        assert!(reasons
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::McpServerRemote { .. })));
     }
 
     #[test]
@@ -291,7 +302,9 @@ mod tests {
         let p = ClaudeDesktopParser;
         assert_eq!(
             p.scope(),
-            AiGuardScope::Application { app: "claude_desktop".into() }
+            AiGuardScope::Application {
+                app: "claude_desktop".into()
+            }
         );
     }
 

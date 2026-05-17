@@ -873,7 +873,9 @@ mod tests {
 
     #[test]
     fn ai_guard_scope_application_round_trips() {
-        let s = AiGuardScope::Application { app: "claude_desktop".into() };
+        let s = AiGuardScope::Application {
+            app: "claude_desktop".into(),
+        };
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(j, r#"{"kind":"application","app":"claude_desktop"}"#);
         let back: AiGuardScope = serde_json::from_str(&j).unwrap();
