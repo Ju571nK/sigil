@@ -53,7 +53,7 @@ impl AiGuardParser for ContinueDevParser {
 
 /// Continue mcpServers shape varies between v1 (object map keyed by name)
 /// and v2 (array of objects with `name` field). Handle both.
-fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
+pub(crate) fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
     let Some(node) = settings.get("mcpServers") else {
         return;
     };
@@ -107,7 +107,7 @@ fn emit_one_mcp(name: &str, def: &Value, out: &mut Vec<AiGuardReason>) {
 /// - `step` 가 path-like 면: convention dir (~/.continue/hooks/) 안이면 read+scan,
 ///   외부면 ExternalScriptUnscanned.
 /// - `run` / `prompt` 가 string 이면: destructive pattern scan.
-fn emit_slash_command_reasons(settings: &Value, hooks_dir: &Path, out: &mut Vec<AiGuardReason>) {
+pub(crate) fn emit_slash_command_reasons(settings: &Value, hooks_dir: &Path, out: &mut Vec<AiGuardReason>) {
     let Some(arr) = settings.get("slashCommands").and_then(Value::as_array) else {
         return;
     };
@@ -128,7 +128,7 @@ fn emit_slash_command_reasons(settings: &Value, hooks_dir: &Path, out: &mut Vec<
 }
 
 /// customCommands: {name, prompt, command?}. `command` is shell-exec; scan it.
-fn emit_custom_command_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
+pub(crate) fn emit_custom_command_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
     let Some(arr) = settings.get("customCommands").and_then(Value::as_array) else {
         return;
     };
@@ -218,6 +218,48 @@ fn first_destructive_after_shell_flag(args: &[Value]) -> Option<String> {
         }
     }
     None
+}
+
+/// Phase 3b.6.1 — per-repo Continue.dev parser. Spawned by runtime /
+/// policy_reload after discovery; each instance carries its own repo
+/// root and emits AiGuardRiskAssessed with scope=Project{path:repo_root}.
+pub struct ContinueDevProjectParser {
+    pub repo_root: PathBuf,
+}
+
+impl AiGuardParser for ContinueDevProjectParser {
+    fn tool(&self) -> AiTool {
+        AiTool::ContinueDev
+    }
+
+    fn scope(&self) -> AiGuardScope {
+        AiGuardScope::Project {
+            path: self.repo_root.clone(),
+        }
+    }
+
+    fn watched_paths(&self, _home_dir: &Path) -> Vec<PathBuf> {
+        vec![self.repo_root.join(".continue").join("config.json")]
+    }
+
+    fn assess(&self, _home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
+        let path = self.repo_root.join(".continue").join("config.json");
+        let text = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => return Err(AssessError::Io { path, source }),
+        };
+        let val: Value = serde_json::from_str(&text).map_err(|e| AssessError::Parse {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        let hooks_dir = self.repo_root.join(".continue").join("hooks");
+        let mut out = Vec::new();
+        emit_mcp_reasons(&val, &mut out);
+        emit_slash_command_reasons(&val, &hooks_dir, &mut out);
+        emit_custom_command_reasons(&val, &mut out);
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -379,5 +421,57 @@ mod tests {
     fn tool_is_continue_dev() {
         let p = ContinueDevParser;
         assert_eq!(p.tool(), AiTool::ContinueDev);
+    }
+
+    #[test]
+    fn project_parser_missing_config_returns_empty() {
+        let dir = tempdir().unwrap();
+        let p = ContinueDevProjectParser { repo_root: dir.path().to_path_buf() };
+        assert!(p.assess(std::path::Path::new("/unused")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn project_parser_destructive_slash_command_is_detected() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repoX");
+        let cdir = repo.join(".continue");
+        std::fs::create_dir_all(&cdir).unwrap();
+        std::fs::write(
+            cdir.join("config.json"),
+            r#"{"slashCommands": [{"name": "danger", "run": "rm -rf /tmp/sigil-3b6.1"}]}"#,
+        )
+        .unwrap();
+        let p = ContinueDevProjectParser { repo_root: repo.clone() };
+        let reasons = p.assess(std::path::Path::new("/unused")).unwrap();
+        assert!(reasons.iter().any(|r| matches!(
+            r,
+            AiGuardReason::DestructiveInInlineCommand { hook_event, .. }
+                if hook_event == "slash_command"
+        )));
+    }
+
+    #[test]
+    fn project_parser_scope_is_project_with_repo_root_path() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let p = ContinueDevProjectParser { repo_root: repo.clone() };
+        assert_eq!(p.scope(), AiGuardScope::Project { path: repo });
+    }
+
+    #[test]
+    fn project_parser_tool_is_continue_dev_same_as_user_global() {
+        let p = ContinueDevProjectParser { repo_root: std::path::PathBuf::from("/x") };
+        assert_eq!(p.tool(), AiTool::ContinueDev);
+    }
+
+    #[test]
+    fn project_parser_corrupt_json_returns_parse_error() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join(".continue")).unwrap();
+        std::fs::write(repo.join(".continue").join("config.json"), "{ not json").unwrap();
+        let p = ContinueDevProjectParser { repo_root: repo.to_path_buf() };
+        let err = p.assess(std::path::Path::new("/unused")).unwrap_err();
+        assert!(matches!(err, AssessError::Parse { .. }), "got {err:?}");
     }
 }
