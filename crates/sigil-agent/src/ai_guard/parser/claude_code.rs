@@ -52,7 +52,7 @@ impl AiGuardParser for ClaudeCodeParser {
 }
 
 /// Read + parse a JSON file, treating `NotFound` as `Ok(None)`.
-fn read_json_optional(path: &Path) -> Result<Option<Value>, AssessError> {
+pub(crate) fn read_json_optional(path: &Path) -> Result<Option<Value>, AssessError> {
     match std::fs::read_to_string(path) {
         Ok(s) => serde_json::from_str(&s)
             .map(Some)
@@ -71,7 +71,7 @@ fn read_json_optional(path: &Path) -> Result<Option<Value>, AssessError> {
 /// Shallow merge: top-level keys from `overlay` win over `base`. Adequate for
 /// Claude's settings.json structure (permissions, hooks, mcpServers are each
 /// either fully overridden or absent in the overlay).
-fn merge_overlay(mut base: Value, overlay: Option<Value>) -> Value {
+pub(crate) fn merge_overlay(mut base: Value, overlay: Option<Value>) -> Value {
     let Some(overlay) = overlay else {
         return base;
     };
@@ -83,7 +83,7 @@ fn merge_overlay(mut base: Value, overlay: Option<Value>) -> Value {
     base
 }
 
-fn emit_hook_reasons(
+pub(crate) fn emit_hook_reasons(
     settings: &Value,
     hooks_dir: &Path,
     out: &mut Vec<AiGuardReason>,
@@ -223,7 +223,7 @@ fn snippet_around_match(contents: &str, pattern: &str) -> String {
     truncate_for_snippet(contents)
 }
 
-fn emit_permission_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
+pub(crate) fn emit_permission_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
     let perms = match settings.get("permissions") {
         Some(p) => p,
         None => {
@@ -267,7 +267,7 @@ fn is_broad_allow(rule: &str) -> bool {
     rule == "*" || rule == "*:*" || rule.ends_with(":*") || rule.ends_with(":.*")
 }
 
-fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
+pub(crate) fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
     let Some(servers) = settings.get("mcpServers").and_then(Value::as_object) else {
         return;
     };
@@ -281,6 +281,55 @@ fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
                 url: url.to_string(),
             });
         }
+    }
+}
+
+/// Phase 3b.6.2 — per-repo Claude Code parser. Spawned by runtime /
+/// policy_reload after discovery; each instance carries its own repo
+/// root and emits AiGuardRiskAssessed with scope=Project{path:repo_root}.
+/// Reuses the user-global ClaudeCodeParser's overlay + emit helpers via
+/// pub(crate) visibility — identical assessment logic, different root.
+pub struct ClaudeCodeProjectParser {
+    pub repo_root: PathBuf,
+}
+
+impl AiGuardParser for ClaudeCodeProjectParser {
+    fn tool(&self) -> AiTool {
+        AiTool::ClaudeCode
+    }
+
+    fn scope(&self) -> AiGuardScope {
+        AiGuardScope::Project {
+            path: self.repo_root.clone(),
+        }
+    }
+
+    fn watched_paths(&self, _home_dir: &Path) -> Vec<PathBuf> {
+        let cd = self.repo_root.join(".claude");
+        vec![
+            cd.join("settings.json"),
+            cd.join("settings.local.json"),
+            cd.join("hooks"),
+        ]
+    }
+
+    fn assess(&self, _home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
+        let cd = self.repo_root.join(".claude");
+        let base = read_json_optional(&cd.join("settings.json"))?;
+        let local = read_json_optional(&cd.join("settings.local.json"))?;
+        if base.is_none() && local.is_none() {
+            return Ok(Vec::new());
+        }
+        let merged = merge_overlay(
+            base.unwrap_or(Value::Object(Default::default())),
+            local,
+        );
+        let hooks_dir = cd.join("hooks");
+        let mut out = Vec::new();
+        emit_hook_reasons(&merged, &hooks_dir, &mut out)?;
+        emit_permission_reasons(&merged, &mut out);
+        emit_mcp_reasons(&merged, &mut out);
+        Ok(out)
     }
 }
 
@@ -651,5 +700,65 @@ mod tests {
                 .any(|r| matches!(r, AiGuardReason::DestructiveInInlineCommand { .. })),
             "Windows-style path must not be inline-scanned: {reasons:?}"
         );
+    }
+
+    #[test]
+    fn project_parser_missing_settings_returns_empty() {
+        let dir = tempdir().unwrap();
+        let p = ClaudeCodeProjectParser {
+            repo_root: dir.path().to_path_buf(),
+        };
+        assert!(p.assess(std::path::Path::new("/unused")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn project_parser_destructive_hook_in_repo_is_detected() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repoX");
+        let cd = repo.join(".claude");
+        std::fs::create_dir_all(&cd).unwrap();
+        std::fs::write(
+            cd.join("settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rm -rf /tmp/sigil-3b6.2"}]}]}}"#,
+        )
+        .unwrap();
+        let p = ClaudeCodeProjectParser { repo_root: repo };
+        let reasons = p.assess(std::path::Path::new("/unused")).unwrap();
+        assert!(reasons.iter().any(|r| matches!(
+            r,
+            AiGuardReason::DestructiveInInlineCommand { hook_event, .. }
+                if hook_event == "PreToolUse"
+        )));
+    }
+
+    #[test]
+    fn project_parser_scope_is_project_with_repo_root_path() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let p = ClaudeCodeProjectParser {
+            repo_root: repo.clone(),
+        };
+        assert_eq!(p.scope(), AiGuardScope::Project { path: repo });
+    }
+
+    #[test]
+    fn project_parser_tool_is_claude_code() {
+        let p = ClaudeCodeProjectParser {
+            repo_root: std::path::PathBuf::from("/x"),
+        };
+        assert_eq!(p.tool(), AiTool::ClaudeCode);
+    }
+
+    #[test]
+    fn project_parser_corrupt_settings_returns_parse_error() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join(".claude")).unwrap();
+        std::fs::write(repo.join(".claude").join("settings.json"), "{ not json").unwrap();
+        let p = ClaudeCodeProjectParser {
+            repo_root: repo.to_path_buf(),
+        };
+        let err = p.assess(std::path::Path::new("/unused")).unwrap_err();
+        assert!(matches!(err, AssessError::Parse { .. }), "got {err:?}");
     }
 }

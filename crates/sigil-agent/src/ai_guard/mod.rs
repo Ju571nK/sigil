@@ -10,7 +10,7 @@ pub mod parser;
 pub mod rubric;
 pub mod task;
 
-pub use parser::claude_code::ClaudeCodeParser;
+pub use parser::claude_code::{ClaudeCodeParser, ClaudeCodeProjectParser};
 pub use parser::claude_desktop::ClaudeDesktopParser;
 pub use parser::codex::CodexParser;
 pub use parser::continue_dev::{ContinueDevParser, ContinueDevProjectParser};
