@@ -36,6 +36,8 @@ proptest! {
             overrides: vec![],
             targets: unique.iter().map(|id| make_target(id, Tier::Standard, Platform::Any)).collect(),
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         };
         let r1 = merge(defaults.clone(), None, Platform::Any).unwrap();
         let r2 = merge(defaults, None, Platform::Any).unwrap();
@@ -57,6 +59,8 @@ proptest! {
             overrides: vec![],
             targets: unique.iter().take(unique.len() - 1).map(|id| make_target(id, Tier::Standard, Platform::Any)).collect(),
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         };
         let user = PolicyDocument {
             version: 1,
@@ -64,6 +68,8 @@ proptest! {
             overrides: vec![],
             targets: vec![make_target(&unique[0], Tier::Critical, Platform::Any)],
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         };
         let res = merge(defaults, Some(user), Platform::Any);
         prop_assert!(res.is_err());

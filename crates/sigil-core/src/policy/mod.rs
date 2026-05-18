@@ -83,6 +83,14 @@ pub struct PolicyDocument {
     /// Tilde + env-var expansion happens at discovery time.
     #[serde(default)]
     pub continue_workspaces: Vec<String>,
+    /// Phase 3b.6.2 — Claude Code workspace roots. 1-level scan for
+    /// `<subdir>/.claude/settings.json` marker.
+    #[serde(default)]
+    pub claude_code_workspaces: Vec<String>,
+    /// Phase 3b.6.2 — Codex workspace roots. 1-level scan for
+    /// `<subdir>/.codex/config.toml` marker.
+    #[serde(default)]
+    pub codex_workspaces: Vec<String>,
 }
 
 fn default_host_id_strategy() -> HostIdStrategy {
@@ -145,6 +153,8 @@ pub struct EffectivePolicy {
     pub targets: Vec<WatchTarget>,
     /// Phase 3b.6.1 — forwarded from user PolicyDocument (defaults never set).
     pub continue_workspaces: Vec<String>,
+    pub claude_code_workspaces: Vec<String>,
+    pub codex_workspaces: Vec<String>,
 }
 
 /// Merge a defaults document and a user-override document into an effective policy.
@@ -199,11 +209,21 @@ pub fn merge(
         .as_ref()
         .map(|u| u.continue_workspaces.clone())
         .unwrap_or_default();
+    let claude_code_workspaces = user
+        .as_ref()
+        .map(|u| u.claude_code_workspaces.clone())
+        .unwrap_or_default();
+    let codex_workspaces = user
+        .as_ref()
+        .map(|u| u.codex_workspaces.clone())
+        .unwrap_or_default();
 
     Ok(EffectivePolicy {
         host_id_strategy: strategy,
         targets: by_id,
         continue_workspaces,
+        claude_code_workspaces,
+        codex_workspaces,
     })
 }
 
@@ -225,6 +245,8 @@ pub fn defaults() -> Result<PolicyDocument, PolicyError> {
             overrides: vec![],
             targets: vec![],
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         }),
     }
 }
@@ -342,6 +364,8 @@ targets:
                 def_target("d2", Tier::Standard, Platform::Windows),
             ],
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         }
     }
 
@@ -364,6 +388,8 @@ targets:
             }],
             targets: vec![def_target("u1", Tier::Critical, Platform::Macos)],
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         };
         let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
         let ids: Vec<&str> = eff.targets.iter().map(|t| t.id.as_str()).collect();
@@ -382,6 +408,8 @@ targets:
             }],
             targets: vec![],
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         };
         let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
         assert_eq!(eff.targets[0].tier, Tier::Standard);
@@ -399,6 +427,8 @@ targets:
             }],
             targets: vec![],
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         };
         let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::UnknownOverrideId(_)));
@@ -412,6 +442,8 @@ targets:
             overrides: vec![],
             targets: vec![def_target("d1", Tier::Critical, Platform::Macos)],
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         };
         let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::DuplicateId(_)));
@@ -429,6 +461,8 @@ targets:
                 Platform::Windows,
             )],
             continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
         };
         let err = merge(defaults, None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::EmptyTargets));
@@ -506,5 +540,44 @@ targets: []
 "#;
         let doc: PolicyDocument = serde_yaml::from_str(yaml).unwrap();
         assert!(doc.continue_workspaces.is_empty());
+    }
+
+    #[test]
+    fn policy_doc_round_trip_with_claude_codex_workspaces() {
+        let yaml = r#"version: 1
+host_id_strategy: machine_id
+claude_code_workspaces:
+  - "~/work"
+  - "/abs/path"
+codex_workspaces:
+  - "~/projects"
+targets: []
+"#;
+        let doc: PolicyDocument = parse(yaml).expect("parse");
+        assert_eq!(doc.claude_code_workspaces, vec!["~/work", "/abs/path"]);
+        assert_eq!(doc.codex_workspaces, vec!["~/projects"]);
+        let back = serde_yaml::to_string(&doc).unwrap();
+        let again: PolicyDocument = parse(&back).expect("re-parse");
+        assert_eq!(again.claude_code_workspaces, doc.claude_code_workspaces);
+        assert_eq!(again.codex_workspaces, doc.codex_workspaces);
+    }
+
+    #[test]
+    fn policy_doc_backward_compat_no_workspace_fields_means_empty() {
+        let yaml = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
+        let doc: PolicyDocument = parse(yaml).expect("parse");
+        assert!(doc.claude_code_workspaces.is_empty());
+        assert!(doc.codex_workspaces.is_empty());
+    }
+
+    #[test]
+    fn merge_forwards_user_claude_codex_workspaces() {
+        let user = parse(
+            "version: 1\nhost_id_strategy: machine_id\nclaude_code_workspaces:\n  - '~/forks'\ncodex_workspaces:\n  - '~/work'\ntargets: []\n",
+        )
+        .unwrap();
+        let eff = merge(defaults().unwrap(), Some(user), current_platform()).unwrap();
+        assert_eq!(eff.claude_code_workspaces, vec!["~/forks"]);
+        assert_eq!(eff.codex_workspaces, vec!["~/work"]);
     }
 }
