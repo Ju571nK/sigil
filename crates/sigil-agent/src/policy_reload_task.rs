@@ -105,8 +105,9 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     // logging. The synthetic WatchTarget block below picks up the same
     // `new_repos` set so the watcher subgraph sees the new config.json files.
     let new_repos: std::collections::BTreeSet<PathBuf> =
-        crate::ai_guard::continue_discovery::discover_continue_projects(
+        crate::ai_guard::workspace_discovery::discover_per_repo(
             &effective.continue_workspaces,
+            ".continue/config.json",
         )
         .into_iter()
         .collect();

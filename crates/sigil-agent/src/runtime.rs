@@ -128,8 +128,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // existing watcher subgraph picks up file_change events. These synthetic
     // targets are in-memory only; never written back to disk (the signed policy
     // envelope on disk stays authoritative).
-    let continue_repos = crate::ai_guard::continue_discovery::discover_continue_projects(
+    let continue_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
         &effective.continue_workspaces,
+        ".continue/config.json",
     );
     for repo_root in &continue_repos {
         let config = repo_root.join(".continue").join("config.json");
