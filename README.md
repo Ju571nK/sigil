@@ -248,6 +248,13 @@ flowchart LR
   that contains `.continue/config.json`, and emits
   `ai_guard_risk_assessed` events with `scope = project{path: <repo>}`.
   Hot-reload via the existing signed policy reload path.
+- **Phase 3b.6.2 — shipped.** Per-repo auto-discovery extended to
+  Claude Code (`<repo>/.claude/settings*.json` + `.claude/hooks/`)
+  and Codex (`<repo>/.codex/config.toml`). Same operator UX as
+  3b.6.1 — `claude_code_workspaces: [path, ...]` and
+  `codex_workspaces: [path, ...]` in the signed policy envelope.
+  Discovery logic generalized into a shared
+  `workspace_discovery::discover_per_repo` helper.
 - **Phase 3c — planned.** Reproducible-build attestation; additional
   posture signals.
 
