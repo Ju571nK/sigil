@@ -12,6 +12,6 @@ pub mod task;
 
 pub use parser::claude_code::{ClaudeCodeParser, ClaudeCodeProjectParser};
 pub use parser::claude_desktop::ClaudeDesktopParser;
-pub use parser::codex::CodexParser;
+pub use parser::codex::{CodexParser, CodexProjectParser};
 pub use parser::continue_dev::{ContinueDevParser, ContinueDevProjectParser};
 pub use task::{run, CachedAssessment, StateMap, TaskCtx};
