@@ -123,31 +123,34 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     let mut effective = merge(defaults()?, user_doc, current_platform())?;
     // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
 
-    // Phase 3b.6.1 — discover Continue.dev per-repo configs from the operator's
-    // `continue_workspaces` and synthesize in-memory WatchTarget entries so the
-    // existing watcher subgraph picks up file_change events. These synthetic
-    // targets are in-memory only; never written back to disk (the signed policy
-    // envelope on disk stays authoritative).
+    // Phase 3b.6.2 — per-repo discovery for Continue / Claude Code / Codex.
+    // Operator opts in via {continue,claude_code,codex}_workspaces in
+    // policy.yaml. For each tool's roots we scan 1-level deep, spawn a
+    // per-repo parser (Task 3+4), and synthesize in-memory WatchTarget
+    // entries so the existing watcher subgraph picks up file_change events.
+    // Synthetic targets are in-memory only; never written back to the
+    // signed policy envelope on disk.
     let continue_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
         &effective.continue_workspaces,
         ".continue/config.json",
     );
+    let claude_code_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
+        &effective.claude_code_workspaces,
+        ".claude/settings.json",
+    );
+    let codex_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
+        &effective.codex_workspaces,
+        ".codex/config.toml",
+    );
+
     for repo_root in &continue_repos {
-        let config = repo_root.join(".continue").join("config.json");
-        let id_suffix = {
-            let hex = blake3::hash(repo_root.to_string_lossy().as_bytes()).to_hex();
-            hex.as_str()[..8].to_string()
-        };
-        effective.targets.push(sigil_core::policy::WatchTarget {
-            id: format!("continue-project-{id_suffix}"),
-            description: format!("Phase 3b.6.1 synthetic: {}", repo_root.display()),
-            tier: sigil_core::policy::Tier::Critical,
-            platform: sigil_core::policy::Platform::Any,
-            paths: vec![config.to_string_lossy().to_string()],
-            recursive: false,
-            follow_symlinks: false,
-            disabled: false,
-        });
+        push_continue_synthetic_target(&mut effective, repo_root);
+    }
+    for repo_root in &claude_code_repos {
+        push_claude_code_synthetic_targets(&mut effective, repo_root);
+    }
+    for repo_root in &codex_repos {
+        push_codex_synthetic_target(&mut effective, repo_root);
     }
 
     // 2. Expand paths per user → watch paths + watch roots.
@@ -368,6 +371,14 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser {
             repo_root,
         }));
+    }
+    for repo_root in claude_code_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::ClaudeCodeProjectParser {
+            repo_root,
+        }));
+    }
+    for repo_root in codex_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::CodexProjectParser { repo_root }));
     }
     let ai_guard_parsers: Arc<
         parking_lot::RwLock<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
@@ -802,4 +813,85 @@ fn reconcile_policy_on_boot(cache: &HashCache, policy_path: &Path) -> anyhow::Re
     } else {
         Ok(None)
     }
+}
+
+/// Phase 3b.6.2 — first 8 hex of a blake3 hash of the repo root path.
+/// Used as the unique suffix for synthetic per-repo WatchTarget ids.
+/// Collision probability is negligible at the scale we expect.
+fn synthetic_target_id_suffix(repo_root: &std::path::Path) -> String {
+    let hex = blake3::hash(repo_root.to_string_lossy().as_bytes()).to_hex();
+    hex.as_str()[..8].to_string()
+}
+
+/// Phase 3b.6.1 — push ONE synthetic WatchTarget for a Continue.dev per-repo
+/// config. Shared between boot (runtime::run) and hot-reload (policy_reload_task).
+pub(crate) fn push_continue_synthetic_target(
+    effective: &mut sigil_core::policy::EffectivePolicy,
+    repo_root: &std::path::Path,
+) {
+    let config = repo_root.join(".continue").join("config.json");
+    let h = synthetic_target_id_suffix(repo_root);
+    effective.targets.push(sigil_core::policy::WatchTarget {
+        id: format!("continue-project-{h}"),
+        description: format!("Phase 3b.6.1 synthetic: {}", repo_root.display()),
+        tier: sigil_core::policy::Tier::Critical,
+        platform: sigil_core::policy::Platform::Any,
+        paths: vec![config.to_string_lossy().to_string()],
+        recursive: false,
+        follow_symlinks: false,
+        disabled: false,
+    });
+}
+
+/// Phase 3b.6.2 — push TWO synthetic WatchTargets for a Claude Code per-repo
+/// config: one for `settings.json` + `settings.local.json` (not recursive),
+/// one for `.claude/hooks/` (recursive — hook scripts are watched as a dir).
+pub(crate) fn push_claude_code_synthetic_targets(
+    effective: &mut sigil_core::policy::EffectivePolicy,
+    repo_root: &std::path::Path,
+) {
+    let cd = repo_root.join(".claude");
+    let h = synthetic_target_id_suffix(repo_root);
+    effective.targets.push(sigil_core::policy::WatchTarget {
+        id: format!("claude_code-settings-{h}"),
+        description: format!("Phase 3b.6.2 synthetic settings: {}", repo_root.display()),
+        tier: sigil_core::policy::Tier::Critical,
+        platform: sigil_core::policy::Platform::Any,
+        paths: vec![
+            cd.join("settings.json").to_string_lossy().to_string(),
+            cd.join("settings.local.json").to_string_lossy().to_string(),
+        ],
+        recursive: false,
+        follow_symlinks: false,
+        disabled: false,
+    });
+    effective.targets.push(sigil_core::policy::WatchTarget {
+        id: format!("claude_code-hooks-{h}"),
+        description: format!("Phase 3b.6.2 synthetic hooks: {}", repo_root.display()),
+        tier: sigil_core::policy::Tier::Critical,
+        platform: sigil_core::policy::Platform::Any,
+        paths: vec![cd.join("hooks").to_string_lossy().to_string()],
+        recursive: true,
+        follow_symlinks: false,
+        disabled: false,
+    });
+}
+
+/// Phase 3b.6.2 — push ONE synthetic WatchTarget for a Codex per-repo config.
+pub(crate) fn push_codex_synthetic_target(
+    effective: &mut sigil_core::policy::EffectivePolicy,
+    repo_root: &std::path::Path,
+) {
+    let config = repo_root.join(".codex").join("config.toml");
+    let h = synthetic_target_id_suffix(repo_root);
+    effective.targets.push(sigil_core::policy::WatchTarget {
+        id: format!("codex-project-{h}"),
+        description: format!("Phase 3b.6.2 synthetic: {}", repo_root.display()),
+        tier: sigil_core::policy::Tier::Critical,
+        platform: sigil_core::policy::Platform::Any,
+        paths: vec![config.to_string_lossy().to_string()],
+        recursive: false,
+        follow_symlinks: false,
+        disabled: false,
+    });
 }

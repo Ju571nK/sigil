@@ -19,6 +19,56 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+/// Phase 3b.6.2 — generic reconcile applied per-tool during hot-reload.
+/// Drops parsers whose repo was removed, adds parsers for new repos,
+/// and returns (added, removed) for tracing + state-map cleanup.
+///
+/// `guard`: a write guard already held on `ctx.parsers`.
+/// `state`: the ai_guard StateMap Arc — entries for removed repos get evicted.
+/// `tool`: the AiTool variant this reconcile operates on (filters which
+/// existing parsers we examine).
+/// `new_repos`: the freshly-discovered repo set from `discover_per_repo`.
+/// `make_parser`: closure that builds the per-tool parser from a repo root.
+fn reconcile_per_repo<P, F>(
+    guard: &mut parking_lot::RwLockWriteGuard<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
+    state: &Arc<parking_lot::RwLock<crate::ai_guard::task::StateMap>>,
+    tool: sigil_core::event::AiTool,
+    new_repos: &std::collections::BTreeSet<PathBuf>,
+    make_parser: F,
+) -> (Vec<PathBuf>, Vec<PathBuf>)
+where
+    P: crate::ai_guard::parser::AiGuardParser + 'static,
+    F: Fn(PathBuf) -> P,
+{
+    let mut old_repos: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    guard.retain(|p| {
+        if p.tool() == tool {
+            if let sigil_core::event::AiGuardScope::Project { path } = p.scope() {
+                old_repos.insert(path.clone());
+                return new_repos.contains(&path);
+            }
+        }
+        true
+    });
+    let added: Vec<PathBuf> = new_repos.difference(&old_repos).cloned().collect();
+    let removed: Vec<PathBuf> = old_repos.difference(new_repos).cloned().collect();
+    for repo_root in &added {
+        guard.push(Arc::new(make_parser(repo_root.clone())));
+    }
+    if !removed.is_empty() {
+        let mut s = state.write();
+        for repo_root in &removed {
+            s.remove(&(
+                tool,
+                sigil_core::event::AiGuardScope::Project {
+                    path: repo_root.clone(),
+                },
+            ));
+        }
+    }
+    (added, removed)
+}
+
 /// Inputs for the reload task. The `WatcherHandle` lives here for the task's
 /// lifetime (so the OS watcher stays alive); `watched_roots` is the diff base
 /// for the next reconcile (start it equal to the roots `run` registered).
@@ -98,82 +148,83 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         }
     };
 
-    // Phase 3b.6.1 — re-discover Continue per-repo parsers and reconcile.
-    // Diff the newly-discovered set against the currently-installed parsers
-    // (filtered to ContinueDev + Project{path}), then add the deltas and drop
-    // the removed. Returns (added_repos, removed_repos) for state cleanup +
-    // logging. The synthetic WatchTarget block below picks up the same
-    // `new_repos` set so the watcher subgraph sees the new config.json files.
-    let new_repos: std::collections::BTreeSet<PathBuf> =
+    // Phase 3b.6.2 — re-discover all 3 tools and reconcile each via the
+    // generic reconcile_per_repo helper. State map entries for removed
+    // repos are evicted to prevent stale memory across reloads.
+    let new_continue: std::collections::BTreeSet<PathBuf> =
         crate::ai_guard::workspace_discovery::discover_per_repo(
             &effective.continue_workspaces,
             ".continue/config.json",
         )
         .into_iter()
         .collect();
+    let new_claude: std::collections::BTreeSet<PathBuf> =
+        crate::ai_guard::workspace_discovery::discover_per_repo(
+            &effective.claude_code_workspaces,
+            ".claude/settings.json",
+        )
+        .into_iter()
+        .collect();
+    let new_codex: std::collections::BTreeSet<PathBuf> =
+        crate::ai_guard::workspace_discovery::discover_per_repo(
+            &effective.codex_workspaces,
+            ".codex/config.toml",
+        )
+        .into_iter()
+        .collect();
 
-    let (added_repos, removed_repos): (Vec<PathBuf>, Vec<PathBuf>) = {
+    let (
+        continue_added,
+        continue_removed,
+        claude_added,
+        claude_removed,
+        codex_added,
+        codex_removed,
+    ) = {
         let mut guard = ctx.parsers.write();
-        let mut old_repos: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
-        guard.retain(|p| {
-            if p.tool() == sigil_core::event::AiTool::ContinueDev {
-                if let sigil_core::event::AiGuardScope::Project { path } = p.scope() {
-                    old_repos.insert(path.clone());
-                    return new_repos.contains(&path);
-                }
-            }
-            true
-        });
-        let added: Vec<PathBuf> = new_repos.difference(&old_repos).cloned().collect();
-        let removed: Vec<PathBuf> = old_repos.difference(&new_repos).cloned().collect();
-        for repo_root in &added {
-            guard.push(Arc::new(crate::ai_guard::ContinueDevProjectParser {
-                repo_root: repo_root.clone(),
-            }));
-        }
-        (added, removed)
+        let (a1, r1) = reconcile_per_repo(
+            &mut guard,
+            &ctx.ai_guard_state,
+            sigil_core::event::AiTool::ContinueDev,
+            &new_continue,
+            |p| crate::ai_guard::ContinueDevProjectParser { repo_root: p },
+        );
+        let (a2, r2) = reconcile_per_repo(
+            &mut guard,
+            &ctx.ai_guard_state,
+            sigil_core::event::AiTool::ClaudeCode,
+            &new_claude,
+            |p| crate::ai_guard::ClaudeCodeProjectParser { repo_root: p },
+        );
+        let (a3, r3) = reconcile_per_repo(
+            &mut guard,
+            &ctx.ai_guard_state,
+            sigil_core::event::AiTool::Codex,
+            &new_codex,
+            |p| crate::ai_guard::CodexProjectParser { repo_root: p },
+        );
+        (a1, r1, a2, r2, a3, r3)
     };
 
-    // State map cleanup so stale (continue_dev, Project{path}) entries don't
-    // accumulate across reloads.
-    if !removed_repos.is_empty() {
-        let mut state = ctx.ai_guard_state.write();
-        for repo_root in &removed_repos {
-            let key = (
-                sigil_core::event::AiTool::ContinueDev,
-                sigil_core::event::AiGuardScope::Project {
-                    path: repo_root.clone(),
-                },
-            );
-            state.remove(&key);
-        }
+    // Synthetic WatchTargets — in-memory only; never persisted.
+    for repo_root in &new_continue {
+        crate::runtime::push_continue_synthetic_target(&mut effective, repo_root);
     }
-
-    // Synthetic WatchTarget entries — in-memory only; never persisted to the
-    // signed policy envelope on disk. The watcher subgraph picks up changes
-    // to these config.json files and re-evaluates the corresponding parser.
-    for repo_root in &new_repos {
-        let config = repo_root.join(".continue").join("config.json");
-        let id_suffix = {
-            let hex = blake3::hash(repo_root.to_string_lossy().as_bytes()).to_hex();
-            hex.as_str()[..8].to_string()
-        };
-        effective.targets.push(sigil_core::policy::WatchTarget {
-            id: format!("continue-project-{id_suffix}"),
-            description: format!("Phase 3b.6.1 synthetic: {}", repo_root.display()),
-            tier: sigil_core::policy::Tier::Critical,
-            platform: sigil_core::policy::Platform::Any,
-            paths: vec![config.to_string_lossy().to_string()],
-            recursive: false,
-            follow_symlinks: false,
-            disabled: false,
-        });
+    for repo_root in &new_claude {
+        crate::runtime::push_claude_code_synthetic_targets(&mut effective, repo_root);
+    }
+    for repo_root in &new_codex {
+        crate::runtime::push_codex_synthetic_target(&mut effective, repo_root);
     }
 
     tracing::info!(
-        continue_added = added_repos.len(),
-        continue_removed = removed_repos.len(),
-        "policy reload: per-repo Continue parsers reconciled"
+        continue_added = continue_added.len(),
+        continue_removed = continue_removed.len(),
+        claude_code_added = claude_added.len(),
+        claude_code_removed = claude_removed.len(),
+        codex_added = codex_added.len(),
+        codex_removed = codex_removed.len(),
+        "policy reload: per-repo parsers reconciled"
     );
 
     let (expanded_paths, new_roots) = crate::runtime::expand_targets(&effective, plat);
@@ -534,5 +585,81 @@ mod tests {
                 "state map entry for removed repo should be cleaned"
             );
         }
+    }
+
+    // Phase 3b.6.2 — per-repo Claude Code + Codex parser hot-reload reconciliation.
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_adds_claude_code_per_repo_parser_when_workspace_root_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        let repo_a = workspace.join("repoA");
+        std::fs::create_dir_all(repo_a.join(".claude")).unwrap();
+        std::fs::write(repo_a.join(".claude").join("settings.json"), r#"{}"#).unwrap();
+        let canonical_a = dunce::canonicalize(&repo_a).unwrap();
+
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
+        let (mut ctx, plat, _trx, parsers, _state) =
+            build_ctx_with_parsers(dir.path(), initial);
+        reload(&mut ctx, &plat);
+        assert!(parsers.read().iter().all(|p| !matches!(
+            (p.tool(), p.scope()),
+            (
+                sigil_core::event::AiTool::ClaudeCode,
+                sigil_core::event::AiGuardScope::Project { .. }
+            )
+        )));
+
+        let updated = format!(
+            "version: 1\nhost_id_strategy: machine_id\nclaude_code_workspaces:\n  - '{}'\ntargets: []\n",
+            workspace.display()
+        );
+        std::fs::write(&ctx.policy_yaml_path, &updated).unwrap();
+        reload(&mut ctx, &plat);
+        let has = parsers.read().iter().any(|p| {
+            p.tool() == sigil_core::event::AiTool::ClaudeCode
+                && matches!(
+                    p.scope(),
+                    sigil_core::event::AiGuardScope::Project { ref path } if path == &canonical_a
+                )
+        });
+        assert!(has, "expected ClaudeCodeProjectParser for repoA after reload");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_adds_codex_per_repo_parser_when_workspace_root_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        let repo_a = workspace.join("repoA");
+        std::fs::create_dir_all(repo_a.join(".codex")).unwrap();
+        std::fs::write(repo_a.join(".codex").join("config.toml"), "").unwrap();
+        let canonical_a = dunce::canonicalize(&repo_a).unwrap();
+
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
+        let (mut ctx, plat, _trx, parsers, _state) =
+            build_ctx_with_parsers(dir.path(), initial);
+        reload(&mut ctx, &plat);
+        assert!(parsers.read().iter().all(|p| !matches!(
+            (p.tool(), p.scope()),
+            (
+                sigil_core::event::AiTool::Codex,
+                sigil_core::event::AiGuardScope::Project { .. }
+            )
+        )));
+
+        let updated = format!(
+            "version: 1\nhost_id_strategy: machine_id\ncodex_workspaces:\n  - '{}'\ntargets: []\n",
+            workspace.display()
+        );
+        std::fs::write(&ctx.policy_yaml_path, &updated).unwrap();
+        reload(&mut ctx, &plat);
+        let has = parsers.read().iter().any(|p| {
+            p.tool() == sigil_core::event::AiTool::Codex
+                && matches!(
+                    p.scope(),
+                    sigil_core::event::AiGuardScope::Project { ref path } if path == &canonical_a
+                )
+        });
+        assert!(has, "expected CodexProjectParser for repoA after reload");
     }
 }
