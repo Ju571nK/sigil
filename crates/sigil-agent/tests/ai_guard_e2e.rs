@@ -422,9 +422,7 @@ targets: []
         .await
         .expect("expected AiGuardRiskAssessed for claude_code repoB");
     let reasons_b = ev_b["evidence"]["reasons"].as_array().expect("reasons");
-    assert!(reasons_b
-        .iter()
-        .any(|r| r["kind"] == "broad_matcher"));
+    assert!(reasons_b.iter().any(|r| r["kind"] == "broad_matcher"));
 
     agent.join.abort();
 }

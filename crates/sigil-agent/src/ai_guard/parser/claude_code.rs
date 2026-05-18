@@ -320,10 +320,7 @@ impl AiGuardParser for ClaudeCodeProjectParser {
         if base.is_none() && local.is_none() {
             return Ok(Vec::new());
         }
-        let merged = merge_overlay(
-            base.unwrap_or(Value::Object(Default::default())),
-            local,
-        );
+        let merged = merge_overlay(base.unwrap_or(Value::Object(Default::default())), local);
         let hooks_dir = cd.join("hooks");
         let mut out = Vec::new();
         emit_hook_reasons(&merged, &hooks_dir, &mut out)?;
@@ -708,7 +705,10 @@ mod tests {
         let p = ClaudeCodeProjectParser {
             repo_root: dir.path().to_path_buf(),
         };
-        assert!(p.assess(std::path::Path::new("/unused")).unwrap().is_empty());
+        assert!(p
+            .assess(std::path::Path::new("/unused"))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

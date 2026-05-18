@@ -5,10 +5,10 @@
 //! `Evidence::AiGuardRiskAssessed` events on file change + on a 24h heartbeat.
 //! Sigil measures, does not block.
 
-pub mod workspace_discovery;
 pub mod parser;
 pub mod rubric;
 pub mod task;
+pub mod workspace_discovery;
 
 pub use parser::claude_code::{ClaudeCodeParser, ClaudeCodeProjectParser};
 pub use parser::claude_desktop::ClaudeDesktopParser;

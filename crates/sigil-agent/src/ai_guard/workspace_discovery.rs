@@ -26,7 +26,9 @@ const DISCOVERY_WARN_THRESHOLD: usize = 50;
 pub fn discover_per_repo(roots: &[String], marker_subpath: &str) -> Vec<PathBuf> {
     let mut out = std::collections::BTreeSet::new();
     for raw in roots {
-        let Some(root) = expand_and_canonicalize(raw) else { continue };
+        let Some(root) = expand_and_canonicalize(raw) else {
+            continue;
+        };
         let entries = match std::fs::read_dir(&root) {
             Ok(it) => it,
             Err(e) => {

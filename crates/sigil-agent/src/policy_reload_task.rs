@@ -599,8 +599,7 @@ mod tests {
         let canonical_a = dunce::canonicalize(&repo_a).unwrap();
 
         let initial = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
-        let (mut ctx, plat, _trx, parsers, _state) =
-            build_ctx_with_parsers(dir.path(), initial);
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
         reload(&mut ctx, &plat);
         assert!(parsers.read().iter().all(|p| !matches!(
             (p.tool(), p.scope()),
@@ -623,7 +622,10 @@ mod tests {
                     sigil_core::event::AiGuardScope::Project { ref path } if path == &canonical_a
                 )
         });
-        assert!(has, "expected ClaudeCodeProjectParser for repoA after reload");
+        assert!(
+            has,
+            "expected ClaudeCodeProjectParser for repoA after reload"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -636,8 +638,7 @@ mod tests {
         let canonical_a = dunce::canonicalize(&repo_a).unwrap();
 
         let initial = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
-        let (mut ctx, plat, _trx, parsers, _state) =
-            build_ctx_with_parsers(dir.path(), initial);
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
         reload(&mut ctx, &plat);
         assert!(parsers.read().iter().all(|p| !matches!(
             (p.tool(), p.scope()),
