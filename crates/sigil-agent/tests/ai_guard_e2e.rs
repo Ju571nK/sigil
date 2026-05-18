@@ -350,3 +350,163 @@ targets: []
 
     agent.join.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_code_per_repo_discovery_emits_distinct_project_events() {
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
+    std::env::set_var("HOME", &home);
+
+    let workspace = home.join("work");
+    let repo_a = workspace.join("repoA");
+    let repo_b = workspace.join("repoB");
+    std::fs::create_dir_all(repo_a.join(".claude")).unwrap();
+    std::fs::create_dir_all(repo_b.join(".claude")).unwrap();
+    // repoA: destructive PreToolUse hook
+    std::fs::write(
+        repo_a.join(".claude").join("settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rm -rf /tmp/sigil-3b6.2-cc-a"}]}]}}"#,
+    )
+    .unwrap();
+    // repoB: broad matcher (".*")
+    std::fs::write(
+        repo_b.join(".claude").join("settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":".*","hooks":[{"type":"command","command":"echo hi"}]}]}}"#,
+    )
+    .unwrap();
+
+    let workspace_str = workspace.display().to_string();
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+claude_code_workspaces:
+  - "{workspace_str}"
+targets: []
+"#
+    );
+
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
+
+    let canonical_a = dunce::canonicalize(&repo_a).unwrap().display().to_string();
+    let canonical_b = dunce::canonicalize(&repo_b).unwrap().display().to_string();
+
+    let ev_a = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "claude_code"
+                    && v["evidence"]["scope"]["kind"] == "project"
+                    && v["evidence"]["scope"]["path"] == canonical_a.as_str()
+            },
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("expected AiGuardRiskAssessed for claude_code repoA");
+    let reasons_a = ev_a["evidence"]["reasons"].as_array().expect("reasons");
+    assert!(reasons_a
+        .iter()
+        .any(|r| r["kind"] == "destructive_in_inline_command"));
+
+    let ev_b = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "claude_code"
+                    && v["evidence"]["scope"]["kind"] == "project"
+                    && v["evidence"]["scope"]["path"] == canonical_b.as_str()
+            },
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("expected AiGuardRiskAssessed for claude_code repoB");
+    let reasons_b = ev_b["evidence"]["reasons"].as_array().expect("reasons");
+    assert!(reasons_b
+        .iter()
+        .any(|r| r["kind"] == "broad_matcher"));
+
+    agent.join.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_per_repo_discovery_emits_distinct_project_events() {
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
+    std::env::set_var("HOME", &home);
+
+    let workspace = home.join("work");
+    let repo_a = workspace.join("repoA");
+    let repo_b = workspace.join("repoB");
+    std::fs::create_dir_all(repo_a.join(".codex")).unwrap();
+    std::fs::create_dir_all(repo_b.join(".codex")).unwrap();
+    // repoA: sandbox disabled
+    std::fs::write(
+        repo_a.join(".codex").join("config.toml"),
+        "sandbox_mode = \"danger-full-access\"\n",
+    )
+    .unwrap();
+    // repoB: destructive hook command
+    std::fs::write(
+        repo_b.join(".codex").join("config.toml"),
+        r#"[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "rm -rf /tmp/sigil-3b6.2-cdx-b"
+"#,
+    )
+    .unwrap();
+
+    let workspace_str = workspace.display().to_string();
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+codex_workspaces:
+  - "{workspace_str}"
+targets: []
+"#
+    );
+
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
+
+    let canonical_a = dunce::canonicalize(&repo_a).unwrap().display().to_string();
+    let canonical_b = dunce::canonicalize(&repo_b).unwrap().display().to_string();
+
+    let ev_a = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "codex"
+                    && v["evidence"]["scope"]["kind"] == "project"
+                    && v["evidence"]["scope"]["path"] == canonical_a.as_str()
+            },
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("expected AiGuardRiskAssessed for codex repoA");
+    let reasons_a = ev_a["evidence"]["reasons"].as_array().expect("reasons");
+    assert!(reasons_a.iter().any(|r| r["kind"] == "sandbox_disabled"));
+
+    let ev_b = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "codex"
+                    && v["evidence"]["scope"]["kind"] == "project"
+                    && v["evidence"]["scope"]["path"] == canonical_b.as_str()
+            },
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("expected AiGuardRiskAssessed for codex repoB");
+    let reasons_b = ev_b["evidence"]["reasons"].as_array().expect("reasons");
+    assert!(reasons_b
+        .iter()
+        .any(|r| r["kind"] == "destructive_in_inline_command"));
+
+    agent.join.abort();
+}
