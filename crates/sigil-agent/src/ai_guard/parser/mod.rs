@@ -31,6 +31,15 @@ pub trait AiGuardParser: Send + Sync {
     /// Missing primary config file = empty Vec (operator hasn't enabled the
     /// tool — not a finding). I/O / parse errors bubble up.
     fn assess(&self, home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError>;
+
+    /// Phase 3b.7 — downcast hook for hot-reload reconciliation. Default
+    /// returns a static unit reference; only RulePackParser overrides to
+    /// return `self` so policy_reload_task can identify rule pack parsers
+    /// and reconcile them by id. Existing hardcoded parsers don't need
+    /// downcasting (they're identified structurally by tool+scope).
+    fn as_any(&self) -> &dyn std::any::Any {
+        &()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
