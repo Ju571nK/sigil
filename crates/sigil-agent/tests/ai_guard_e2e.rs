@@ -587,3 +587,114 @@ async fn cursor_default_rule_pack_emits_remote_mcp() {
 
     agent.join.abort();
 }
+
+/// Phase 3b.3 regression coverage: an external (non-convention-dir) hook
+/// script referenced from Claude Code settings.json must be discovered at
+/// boot, scanned via `ext_script::scan_external_script`, and reported as
+/// `DestructiveInHookScript` (not `ExternalScriptUnscanned`).
+///
+/// This verifies the full boot-scan lifecycle end-to-end:
+///   - runtime boot synthesizes a WatchTarget+registry entry for the script
+///   - parser's `assess()` follows the external command → script_path
+///   - ext_script reads the file (256 KB cap, binary detect, dunce symlink
+///     resolution), matches a destructive regex, and emits the variant
+///
+/// We assert on the reason `kind` (variant discriminant) only — the
+/// `pattern` field is the regex source per the rubric contract, asserted by
+/// Tasks 2-4 unit tests in `parser/claude_code.rs`, `parser/codex.rs`, and
+/// `parser/continue_dev.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ext_script_boot_scan_emits_destructive_in_hook_script() {
+    use std::io::Write;
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
+    std::env::set_var("HOME", &home);
+
+    // 1) Write the external script FIRST so the boot scan sees it on disk.
+    //    Located outside any convention dir (~/.claude/hooks) to exercise
+    //    the external-script discovery path specifically.
+    let ext_dir = home.join("sigil-3b3-ext");
+    std::fs::create_dir_all(&ext_dir).unwrap();
+    let ext_script = ext_dir.join("destructive.sh");
+    {
+        let mut f = std::fs::File::create(&ext_script).unwrap();
+        f.write_all(b"#!/bin/bash\nrm -rf /tmp/sigil-3b3-target\n")
+            .unwrap();
+        f.flush().unwrap();
+    }
+    // Canonicalize to match what the parser will resolve at runtime
+    // (macOS /var → /private/var symlink resolution).
+    let ext_script_canon = dunce::canonicalize(&ext_script).unwrap();
+
+    // 2) Write Claude Code settings.json referencing the external script
+    //    as a PreToolUse hook command.
+    let claude = home.join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    let settings = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": ".*",
+                "hooks": [{
+                    "type": "command",
+                    "command": ext_script_canon.to_str().unwrap()
+                }]
+            }]
+        }
+    });
+    std::fs::write(
+        claude.join("settings.json"),
+        serde_json::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+
+    // 3) User-policy with absolute tempdir paths — same pattern as the
+    //    first test in this file (built-in ~ expansion ignores HOME override).
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+targets:
+  - id: e2e-test-3b3-ext-script-abs
+    description: Claude Code guard surface for 3b.3 ext-script boot scan
+    tier: critical
+    platform: any
+    paths:
+      - "{home}/.claude/settings.json"
+      - "{home}/.claude/settings.local.json"
+      - "{home}/.claude/hooks"
+    recursive: true
+    follow_symlinks: false
+"#,
+        home = home.display()
+    );
+
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
+
+    // 4) Wait for the first AiGuardRiskAssessed event for claude_code and
+    //    verify it carries a DestructiveInHookScript reason whose script_path
+    //    points at our external script (proves the external-script branch
+    //    actually fired, not just an inline-command match).
+    let ev = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "claude_code"
+            },
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("expected an AiGuardRiskAssessed event for claude_code");
+
+    let reasons = ev["evidence"]["reasons"].as_array().expect("reasons array");
+    let ext_script_str = ext_script_canon.display().to_string();
+    assert!(
+        reasons.iter().any(|r| {
+            r["kind"] == "destructive_in_hook_script"
+                && r["script_path"].as_str() == Some(ext_script_str.as_str())
+        }),
+        "expected destructive_in_hook_script with script_path={ext_script_str} in {reasons:?}"
+    );
+
+    agent.join.abort();
+}
