@@ -59,6 +59,46 @@ pub enum HostIdStrategy {
     Static(String),
 }
 
+/// Phase 3b.7 — declarative rule pack. See
+/// docs/superpowers/specs/2026-05-19-phase-3b7-declarative-rule-pack-architecture-design.html
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RulePack {
+    pub id: String,
+    pub pack_version: u32,
+    pub tool: crate::event::AiTool,
+    pub scope: crate::event::AiGuardScope,
+    pub watched_paths: Vec<String>,
+    #[serde(default)]
+    pub platforms: Option<Vec<Platform>>,
+    pub rules: Vec<RuleEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RuleEntry {
+    pub id: String,
+    pub on_file: String,
+    pub format: RuleFormat,
+    pub selector: String,
+    pub matcher: Matcher,
+    pub emit: crate::event::AiGuardReason,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleFormat {
+    Json,
+    Toml,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Matcher {
+    Exists,
+    Equals { value: String },
+    NotEquals { value: String },
+    Regex { pattern: String },
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Override {
     pub id: String,
@@ -91,6 +131,10 @@ pub struct PolicyDocument {
     /// `<subdir>/.codex/config.toml` marker.
     #[serde(default)]
     pub codex_workspaces: Vec<String>,
+    /// Phase 3b.7 — operator-supplied rule packs (declarative scan rules).
+    /// Wire-additive; merged by id with sigil-rules-basic defaults.
+    #[serde(default)]
+    pub rule_packs: Vec<RulePack>,
 }
 
 fn default_host_id_strategy() -> HostIdStrategy {
@@ -155,6 +199,7 @@ pub struct EffectivePolicy {
     pub continue_workspaces: Vec<String>,
     pub claude_code_workspaces: Vec<String>,
     pub codex_workspaces: Vec<String>,
+    pub rule_packs: Vec<RulePack>,
 }
 
 /// Merge a defaults document and a user-override document into an effective policy.
@@ -218,12 +263,29 @@ pub fn merge(
         .map(|u| u.codex_workspaces.clone())
         .unwrap_or_default();
 
+    // Phase 3b.7 — id-keyed reconciliation: start with defaults' packs;
+    // user packs replace by id or append.
+    let rule_packs: Vec<RulePack> = {
+        let mut packs = defaults.rule_packs.clone();
+        if let Some(ref u) = user {
+            for upack in &u.rule_packs {
+                if let Some(idx) = packs.iter().position(|p| p.id == upack.id) {
+                    packs[idx] = upack.clone();
+                } else {
+                    packs.push(upack.clone());
+                }
+            }
+        }
+        packs
+    };
+
     Ok(EffectivePolicy {
         host_id_strategy: strategy,
         targets: by_id,
         continue_workspaces,
         claude_code_workspaces,
         codex_workspaces,
+        rule_packs,
     })
 }
 
@@ -247,6 +309,7 @@ pub fn defaults() -> Result<PolicyDocument, PolicyError> {
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         }),
     }
 }
@@ -366,6 +429,7 @@ targets:
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         }
     }
 
@@ -390,6 +454,7 @@ targets:
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         };
         let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
         let ids: Vec<&str> = eff.targets.iter().map(|t| t.id.as_str()).collect();
@@ -410,6 +475,7 @@ targets:
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         };
         let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
         assert_eq!(eff.targets[0].tier, Tier::Standard);
@@ -429,6 +495,7 @@ targets:
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         };
         let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::UnknownOverrideId(_)));
@@ -444,6 +511,7 @@ targets:
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         };
         let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::DuplicateId(_)));
@@ -463,6 +531,7 @@ targets:
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         };
         let err = merge(defaults, None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::EmptyTargets));
@@ -579,5 +648,106 @@ targets: []
         let eff = merge(defaults().unwrap(), Some(user), current_platform()).unwrap();
         assert_eq!(eff.claude_code_workspaces, vec!["~/forks"]);
         assert_eq!(eff.codex_workspaces, vec!["~/work"]);
+    }
+
+    #[test]
+    fn rule_pack_round_trip_serde() {
+        let yaml = r#"
+id: test-pack
+pack_version: 1
+tool: gemini
+scope:
+  kind: user_global
+watched_paths:
+  - "~/.gemini/settings.json"
+rules:
+  - id: r1
+    on_file: "~/.gemini/settings.json"
+    format: json
+    selector: "$.sandbox"
+    matcher:
+      kind: equals
+      value: "false"
+    emit:
+      kind: sandbox_disabled
+"#;
+        let pack: RulePack = serde_yaml::from_str(yaml).expect("parse");
+        assert_eq!(pack.id, "test-pack");
+        assert_eq!(pack.pack_version, 1);
+        assert_eq!(pack.tool, crate::event::AiTool::Gemini);
+        assert!(matches!(pack.scope, crate::event::AiGuardScope::UserGlobal));
+        assert_eq!(pack.rules.len(), 1);
+        assert_eq!(pack.rules[0].format, RuleFormat::Json);
+        let back = serde_yaml::to_string(&pack).unwrap();
+        let again: RulePack = serde_yaml::from_str(&back).expect("re-parse");
+        assert_eq!(again.id, pack.id);
+    }
+
+    #[test]
+    fn policy_doc_with_rule_packs_round_trip() {
+        let yaml = r#"version: 1
+host_id_strategy: machine_id
+targets: []
+rule_packs:
+  - id: mycorp-cursor
+    pack_version: 1
+    tool: cursor
+    scope:
+      kind: user_global
+    watched_paths:
+      - "~/.cursor/mcp.json"
+    rules:
+      - id: r1
+        on_file: "~/.cursor/mcp.json"
+        format: json
+        selector: "$.mcpServers.*.url"
+        matcher:
+          kind: exists
+        emit:
+          kind: mcp_server_remote
+          server_name: "<selector-key>"
+          url: ""
+"#;
+        let doc: PolicyDocument = parse(yaml).expect("parse");
+        assert_eq!(doc.rule_packs.len(), 1);
+        assert_eq!(doc.rule_packs[0].id, "mycorp-cursor");
+    }
+
+    #[test]
+    fn policy_doc_backward_compat_no_rule_packs_field() {
+        let yaml = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: minimal\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\n";
+        let doc: PolicyDocument = parse(yaml).expect("parse");
+        assert!(doc.rule_packs.is_empty());
+    }
+
+    #[test]
+    fn merge_rule_packs_user_overrides_default_by_id() {
+        let defaults_doc = parse(
+            "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\nrule_packs:\n  - id: gemini-default\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: [\"/orig\"]\n    rules: []\n",
+        )
+        .unwrap();
+        let user = parse(
+            "version: 1\nhost_id_strategy: machine_id\ntargets: []\nrule_packs:\n  - id: gemini-default\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: [\"~/override/path\"]\n    rules: []\n",
+        )
+        .unwrap();
+        let eff = merge(defaults_doc, Some(user), current_platform()).unwrap();
+        assert_eq!(eff.rule_packs.len(), 1);
+        assert_eq!(eff.rule_packs[0].watched_paths, vec!["~/override/path"]);
+    }
+
+    #[test]
+    fn merge_rule_packs_user_new_id_appends() {
+        let defaults_doc = parse(
+            "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\nrule_packs:\n  - id: gemini-default\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n",
+        )
+        .unwrap();
+        let user = parse(
+            "version: 1\nhost_id_strategy: machine_id\ntargets: []\nrule_packs:\n  - id: mycorp-tool\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n",
+        )
+        .unwrap();
+        let eff = merge(defaults_doc, Some(user), current_platform()).unwrap();
+        assert_eq!(eff.rule_packs.len(), 2);
+        assert!(eff.rule_packs.iter().any(|p| p.id == "mycorp-tool"));
+        assert!(eff.rule_packs.iter().any(|p| p.id == "gemini-default"));
     }
 }

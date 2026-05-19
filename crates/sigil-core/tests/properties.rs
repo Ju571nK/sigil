@@ -38,6 +38,7 @@ proptest! {
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         };
         let r1 = merge(defaults.clone(), None, Platform::Any).unwrap();
         let r2 = merge(defaults, None, Platform::Any).unwrap();
@@ -61,6 +62,7 @@ proptest! {
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         };
         let user = PolicyDocument {
             version: 1,
@@ -70,6 +72,7 @@ proptest! {
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            rule_packs: vec![],
         };
         let res = merge(defaults, Some(user), Platform::Any);
         prop_assert!(res.is_err());
