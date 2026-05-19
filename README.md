@@ -161,19 +161,37 @@ one operator CLI, and three shared libraries.
 
 ```mermaid
 flowchart LR
+    %% External actors & systems
+    operator(["Operator"])
     FS[("Filesystem<br/>policy targets")]
     SIEM[("Your SIEM<br/>endpoint")]
 
-    subgraph agent["sigil-agent (bin: sigil)"]
-        direction TB
-        a_pipe["watcher · debouncer<br/>normalizer · hasher<br/>sink_task · state_task"]
-        a_ctrl["supervisor · policy_apply<br/>cli · doctor · show"]
+    %% Optional downstream
+    manager["sigil-manager<br/>fleet UI<br/>(optional)"]:::optional
+
+    %% Operator-side keystore tool
+    subgraph signer["sigil-signer (bin: sigil-sign)"]
+        signermods["keygen · sign · verify · inspect"]
     end
 
+    %% Host daemon
+    subgraph agent["sigil-agent (bin: sigil)"]
+        direction TB
+        a_pipe["watcher · debouncer · normalizer<br/>hasher · sink_task · state_task"]
+        a_aiguard["ai_guard<br/>parsers · rule_packs · ext_script<br/>per-repo discovery · rubric"]
+        a_ctrl["supervisor · policy_apply<br/>policy_reload · doctor · show"]
+    end
+
+    %% Uploader
     subgraph sender["sigil-sender (bin: sigil-sender)"]
         direction TB
         s_pipe["batch_reader · manifest<br/>transport (HTTPS + rustls)"]
         s_ctrl["control_task · agent_ipc<br/>dead_letter · heartbeat"]
+    end
+
+    %% OSS reference receiver (alternative to BYO SIEM)
+    subgraph server["sigil-server (bin: sigil-server)"]
+        servermods["mTLS event ingest<br/>signed envelope serve<br/>bearer-gated read API"]
     end
 
     subgraph spool["sigil-spool (JSONL=IPC)"]
@@ -181,22 +199,38 @@ flowchart LR
     end
 
     subgraph core["sigil-core (pure domain)"]
-        coremods["event · policy · state<br/>host_id · host_meta · hashing<br/>debounce · ratelimit · sink · stats"]
+        coremods["event · policy · state · hashing<br/>host_id · host_meta<br/>debounce · ratelimit · sink · stats"]
     end
 
     subgraph rules["sigil-rules-basic"]
-        rulesmods["compile-time YAML<br/>(macOS / Windows defaults)"]
+        rulesmods["compile-time YAML defaults<br/>+ default rule packs"]
     end
 
+    %% Data plane
     FS --> a_pipe
+    FS --> a_aiguard
     a_pipe -- "writes JSONL" --> spool
+    a_aiguard -- "writes JSONL" --> spool
     spool -- "reads JSONL" --> s_pipe
     s_pipe -- "HTTPS" --> SIEM
-    s_ctrl -. "apply_policy IPC" .-> a_ctrl
+    s_pipe -- "mTLS (alt)" --> server
 
+    %% Control plane
+    s_ctrl -. "apply_policy IPC" .-> a_ctrl
+    operator -- "signs envelope" --> signer
+    signer -. "envelope deployed" .-> server
+    server -. "signed envelope" .-> sender
+
+    %% Optional consumer
+    server -. "read API" .-> manager
+
+    %% Library deps
     agent -. uses .-> core
     sender -. uses .-> core
+    server -. uses .-> core
     agent -. embeds .-> rules
+
+    classDef optional stroke-dasharray: 5 5,fill:#f5f5f5,stroke:#999,color:#666
 ```
 
 ## Status
