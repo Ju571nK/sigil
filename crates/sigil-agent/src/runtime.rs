@@ -153,6 +153,78 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         push_codex_synthetic_target(&mut effective, repo_root);
     }
 
+    // Phase 3b.6.1 — build the shared parsers list BEFORE the policy_reload
+    // task and ai_guard task so both can share an `Arc<RwLock<..>>` and reload
+    // can mutate the live parser set on hot-reload.
+    //
+    // Phase 3b.3 Task 7 — this block (parsers vec, ai_guard_parsers Arc,
+    // ext_scripts_registry + discover_and_register_ext_scripts) is hoisted
+    // ABOVE expand_targets so that the synthetic WatchTargets pushed into
+    // `effective.targets` by ext-script discovery are visible to
+    // `expand_targets` → `watch_roots` → `spawn_watcher` at boot. Otherwise
+    // the OS watcher never subscribes to ext-script paths until the first
+    // hot-reload. Per-repo synth above follows the same ordering rule.
+    let mut parsers_vec: Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>> = vec![
+        Arc::new(crate::ai_guard::ClaudeCodeParser),
+        Arc::new(crate::ai_guard::CodexParser),
+        Arc::new(crate::ai_guard::ClaudeDesktopParser),
+        Arc::new(crate::ai_guard::ContinueDevParser),
+    ];
+    for repo_root in continue_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser {
+            repo_root,
+        }));
+    }
+    for repo_root in claude_code_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::ClaudeCodeProjectParser {
+            repo_root,
+        }));
+    }
+    for repo_root in codex_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::CodexProjectParser { repo_root }));
+    }
+    // Phase 3b.7 — declarative rule packs (sigil-rules-basic defaults +
+    // operator overlay from signed envelope, already merged into
+    // effective.rule_packs by sigil_core::policy::merge).
+    for pack in &effective.rule_packs {
+        if !crate::ai_guard::rule_pack::pack_is_loadable(pack) {
+            continue;
+        }
+        match crate::ai_guard::rule_pack::parser::RulePackParser::new(pack.clone()) {
+            Ok(p) => parsers_vec.push(Arc::new(p)),
+            Err(e) => tracing::warn!(
+                id = %pack.id, error = ?e,
+                "rule_pack: load failed; skipping"
+            ),
+        }
+    }
+    let ai_guard_parsers: Arc<
+        parking_lot::RwLock<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
+    > = Arc::new(parking_lot::RwLock::new(parsers_vec));
+
+    // Phase 3b.3 Task 6 — resolve `home_dir` once (shared by ext-script
+    // discovery + ai_guard TaskCtx below) and discover external hook-script
+    // paths for every parser. Synthesizes one in-memory WatchTarget per
+    // unique canonical path so the OS watcher subscribes, and populates an
+    // `ExtScriptRegistry` keyed by (AiTool, AiGuardScope) so the dispatcher
+    // can route fsnotify events on script paths to the right parser.
+    // Synthetic targets are in-memory only — never written back to disk.
+    let home_dir = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let ext_scripts_registry = crate::ai_guard::empty_ext_script_registry();
+    {
+        let parsers_snapshot: Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>> =
+            ai_guard_parsers.read().clone();
+        discover_and_register_ext_scripts(
+            &parsers_snapshot,
+            &home_dir,
+            &ext_scripts_registry,
+            &mut effective,
+        );
+    }
+
     // 2. Expand paths per user → watch paths + watch roots.
     let (expanded_paths, watch_roots) = expand_targets(&effective, &plat);
 
@@ -357,70 +429,6 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             }
         }),
     );
-
-    // Phase 3b.6.1 — build the shared parsers list BEFORE the policy_reload
-    // task and ai_guard task so both can share an `Arc<RwLock<..>>` and reload
-    // can mutate the live parser set on hot-reload.
-    let mut parsers_vec: Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>> = vec![
-        Arc::new(crate::ai_guard::ClaudeCodeParser),
-        Arc::new(crate::ai_guard::CodexParser),
-        Arc::new(crate::ai_guard::ClaudeDesktopParser),
-        Arc::new(crate::ai_guard::ContinueDevParser),
-    ];
-    for repo_root in continue_repos {
-        parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser {
-            repo_root,
-        }));
-    }
-    for repo_root in claude_code_repos {
-        parsers_vec.push(Arc::new(crate::ai_guard::ClaudeCodeProjectParser {
-            repo_root,
-        }));
-    }
-    for repo_root in codex_repos {
-        parsers_vec.push(Arc::new(crate::ai_guard::CodexProjectParser { repo_root }));
-    }
-    // Phase 3b.7 — declarative rule packs (sigil-rules-basic defaults +
-    // operator overlay from signed envelope, already merged into
-    // effective.rule_packs by sigil_core::policy::merge).
-    for pack in &effective.rule_packs {
-        if !crate::ai_guard::rule_pack::pack_is_loadable(pack) {
-            continue;
-        }
-        match crate::ai_guard::rule_pack::parser::RulePackParser::new(pack.clone()) {
-            Ok(p) => parsers_vec.push(Arc::new(p)),
-            Err(e) => tracing::warn!(
-                id = %pack.id, error = ?e,
-                "rule_pack: load failed; skipping"
-            ),
-        }
-    }
-    let ai_guard_parsers: Arc<
-        parking_lot::RwLock<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
-    > = Arc::new(parking_lot::RwLock::new(parsers_vec));
-
-    // Phase 3b.3 Task 6 — resolve `home_dir` once (shared by ext-script
-    // discovery + ai_guard TaskCtx below) and discover external hook-script
-    // paths for every parser. Synthesizes one in-memory WatchTarget per
-    // unique canonical path so the OS watcher subscribes, and populates an
-    // `ExtScriptRegistry` keyed by (AiTool, AiGuardScope) so the dispatcher
-    // can route fsnotify events on script paths to the right parser.
-    // Synthetic targets are in-memory only — never written back to disk.
-    let home_dir = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/"));
-    let ext_scripts_registry = crate::ai_guard::empty_ext_script_registry();
-    {
-        let parsers_snapshot: Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>> =
-            ai_guard_parsers.read().clone();
-        discover_and_register_ext_scripts(
-            &parsers_snapshot,
-            &home_dir,
-            &ext_scripts_registry,
-            &mut effective,
-        );
-    }
 
     // Live policy reload: on a successful `apply_policy`, re-derive watch
     // targets/roots from the new policy.yaml and apply them to the running
