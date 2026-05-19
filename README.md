@@ -271,7 +271,7 @@ flowchart LR
   `/v1/meta`, `/v1/policy/meta`, `/v1/fleet/hosts` + detail, `/v1/fleet/risk`,
   `/v1/fleet/compliance`, `/v1/events` + lookup). In-memory per-host
   index rebuilt from JSONL on boot, updated inline on each `POST /v1/events`.
-- **Phase 3b.5 — shipped <SHIP_SHA>.** `sigil doctor` gains an AI Guard
+- **Phase 3b.5 — shipped d00b958.** `sigil doctor` gains an AI Guard
   diagnostic section showing active parsers, per-repo discoveries (3b.6.x),
   loaded rule packs (3b.7), ext-script watch (3b.3), latest risk per
   (tool, scope), and the effective rubric table. Operator can tune rubric
