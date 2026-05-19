@@ -455,6 +455,10 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             heartbeat_interval: std::time::Duration::from_secs(24 * 3600),
             home_dir,
             host_id: host_id.clone(),
+            // Phase 3b.3 Task 5 — registry initialized empty here. Task 6 will
+            // populate it from parser configs at boot and pass the same handle
+            // to policy_reload_task so hot-reload can refresh script paths.
+            ext_scripts: crate::ai_guard::empty_ext_script_registry(),
         };
         sup.track(
             "ai_guard",

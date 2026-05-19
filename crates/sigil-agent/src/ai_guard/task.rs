@@ -59,6 +59,10 @@ pub struct TaskCtx {
     pub heartbeat_interval: Duration,
     pub home_dir: PathBuf,
     pub host_id: String,
+    /// Phase 3b.3 — shared registry of external hook-script paths per parser
+    /// (tool, scope). Populated by runtime/reload; read by the dispatch loop
+    /// to route fsnotify events on script paths.
+    pub ext_scripts: crate::ai_guard::ExtScriptRegistry,
 }
 
 /// Main task loop. Boots, then selects between file-change broadcasts and
@@ -84,13 +88,20 @@ pub async fn run(mut ctx: TaskCtx) {
                 match recv {
                     Ok(path) => {
                         // Snapshot per cycle so reload mutations between cycles take effect.
+                        // Clone the ext-script HashMap once so the parking_lot read guard is
+                        // dropped before any `.await` — guards are NOT Send across await.
                         let snapshot: Vec<Arc<dyn AiGuardParser>> = ctx.parsers.read().clone();
+                        let ext_map = ctx.ext_scripts.read().clone();
                         for parser in &snapshot {
-                            if parser
+                            let in_watched = parser
                                 .watched_paths(&ctx.home_dir)
                                 .iter()
-                                .any(|p| path_matches(&path, p))
-                            {
+                                .any(|p| path_matches(&path, p));
+                            let in_ext_script = ext_map
+                                .get(&(parser.tool(), parser.scope()))
+                                .map(|v| v.iter().any(|p| path_matches(&path, p)))
+                                .unwrap_or(false);
+                            if in_watched || in_ext_script {
                                 eval_and_maybe_emit(parser.as_ref(), &ctx, false).await;
                             }
                         }
@@ -253,6 +264,7 @@ mod tests {
                 heartbeat_interval: hb,
                 home_dir: PathBuf::from("/tmp/test-home"),
                 host_id: "test-host".into(),
+                ext_scripts: crate::ai_guard::empty_ext_script_registry(),
             },
             rx,
         )
@@ -409,6 +421,7 @@ mod tests {
             heartbeat_interval: Duration::from_secs(24 * 3600),
             home_dir: PathBuf::from("/tmp"),
             host_id: "h".into(),
+            ext_scripts: crate::ai_guard::empty_ext_script_registry(),
         };
         let h = tokio::spawn(run(ctx));
         tokio::task::yield_now().await;
