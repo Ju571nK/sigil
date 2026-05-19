@@ -160,6 +160,9 @@ pub struct ReloadCtx {
     /// and synthesizes ext-script WatchTargets into the freshly-merged
     /// effective.
     pub ext_scripts: crate::ai_guard::ExtScriptRegistry,
+    /// Phase 3b.5 — shared rubric handle. reload() rebuilds from
+    /// EffectivePolicy.rubric_overrides and atomic-swaps via write lock.
+    pub rubric: crate::ai_guard::RubricHandle,
 }
 
 pub async fn run(mut ctx: ReloadCtx) {
@@ -326,6 +329,25 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         );
     }
 
+    // Phase 3b.5 — rebuild + atomic-swap the rubric to reflect any
+    // change in EffectivePolicy.rubric_overrides. Unknown keys are
+    // warn-logged by with_overrides and accumulated into the new
+    // Rubric's unknown_override_keys.
+    {
+        let new_rubric =
+            crate::ai_guard::rubric::Rubric::defaults().with_overrides(&effective.rubric_overrides);
+        let overridden_count = new_rubric.overridden.len();
+        let unknown_count = new_rubric.unknown_override_keys.len();
+        *ctx.rubric.write() = new_rubric;
+        if overridden_count > 0 || unknown_count > 0 {
+            tracing::info!(
+                applied = overridden_count,
+                unknown = unknown_count,
+                "rubric: reload reconciled"
+            );
+        }
+    }
+
     let (expanded_paths, new_roots) = crate::runtime::expand_targets(&effective, plat);
 
     // Re-seed the critical-tier warmup cache (idempotent — overwrites).
@@ -440,6 +462,7 @@ mod tests {
                     parking_lot::RwLock::new(std::collections::HashMap::new()),
                 ),
                 ext_scripts: crate::ai_guard::empty_ext_script_registry(),
+                rubric: crate::ai_guard::default_rubric_handle(),
             },
             plat,
             targets_rx,
@@ -495,6 +518,7 @@ mod tests {
                 parsers: parsers.clone(),
                 ai_guard_state: state.clone(),
                 ext_scripts: crate::ai_guard::empty_ext_script_registry(),
+                rubric: crate::ai_guard::default_rubric_handle(),
             },
             plat,
             targets_rx,

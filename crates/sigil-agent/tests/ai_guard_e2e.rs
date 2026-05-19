@@ -698,3 +698,109 @@ targets:
 
     agent.join.abort();
 }
+
+/// Phase 3b.5 Task 6: end-to-end verification that an operator rubric
+/// override in `policy.yaml` is applied to the emitted event's `score`
+/// field at boot.
+///
+/// Setup: a Claude Code settings.json with a single PreToolUse hook running
+/// `rm -rf /tmp/...`. The default rubric typically emits:
+///   - `NoSandbox` (host_shell exposure)              → weight 2.0
+///   - `DestructiveInInlineCommand` (the `rm -rf …`)  → weight 4.0 (default)
+///   - `PermissionsDenyEmpty` (no explicit denies)    → weight 1.0
+/// Total with defaults: ~7.0 (critical bucket).
+///
+/// With `rubric_overrides: { destructive_in_inline_command: 2.0 }`, the
+/// destructive reason's weight drops to 2.0, total ~5.0. We assert
+/// `score < 6.0` as a robust bound that proves the override took effect
+/// without coupling the test to incidental rubric companions (NoSandbox,
+/// PermissionsDenyEmpty) or future bucket-threshold tweaks. The delta we
+/// actually verify is 2.0 (the override on a single destructive reason);
+/// the default-rubric companion reasons stay constant across both branches.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rubric_override_changes_emitted_score() {
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
+    std::env::set_var("HOME", &home);
+
+    // Pre-seed Claude Code settings.json with a destructive inline command
+    // (NO matcher → no BroadMatcher reason, keeping the score math clean).
+    let claude = home.join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    std::fs::write(
+        claude.join("settings.json"),
+        r#"{
+          "hooks": {
+            "PreToolUse": [
+              {"hooks": [
+                {"type": "command", "command": "rm -rf /tmp/sigil-3b5-override-test"}
+              ]}
+            ]
+          }
+        }"#,
+    )
+    .unwrap();
+
+    // Policy: override destructive_in_inline_command 4.0 → 2.0, plus an
+    // absolute-path target (same pattern as the other tests in this file —
+    // built-in `~` expansion ignores HOME override).
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+rubric_overrides:
+  destructive_in_inline_command: 2.0
+targets:
+  - id: e2e-test-3b5-override-abs
+    description: Claude Code surface for 3b.5 rubric-override e2e
+    tier: critical
+    platform: any
+    paths:
+      - "{home}/.claude/settings.json"
+      - "{home}/.claude/settings.local.json"
+      - "{home}/.claude/hooks"
+    recursive: true
+    follow_symlinks: false
+"#,
+        home = home.display()
+    );
+
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
+
+    let ev = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "claude_code"
+            },
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("expected an AiGuardRiskAssessed event for claude_code");
+
+    // Sanity: the destructive reason must be present, otherwise our score
+    // delta proves nothing about the override path.
+    let reasons = ev["evidence"]["reasons"].as_array().expect("reasons array");
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r["kind"] == "destructive_in_inline_command"),
+        "expected destructive_in_inline_command reason in {reasons:?}"
+    );
+
+    let score = ev["evidence"]["score"]
+        .as_f64()
+        .expect("score must be a number");
+    // Default rubric for this config emits ~7.0 (4.0 destructive + 2.0
+    // no_sandbox + 1.0 permissions_deny_empty). With the override, the
+    // destructive reason contributes 2.0 instead of 4.0 → total ~5.0.
+    // Bound at 6.0 catches the override (delta = 2.0) without coupling
+    // to incidental companion reasons or future repeat surcharges.
+    assert!(
+        score < 6.0,
+        "override should pull score below 6.0 (default would emit ~7.0); got {score}. reasons={reasons:?}"
+    );
+
+    agent.join.abort();
+}

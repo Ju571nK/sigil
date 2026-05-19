@@ -4,7 +4,7 @@ use proptest::prelude::*;
 use sigil_core::debounce::Debouncer;
 use sigil_core::event::{Event, FileChangeKind};
 use sigil_core::policy::{merge, HostIdStrategy, Platform, PolicyDocument, Tier, WatchTarget};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 fn make_target(id: &str, tier: Tier, platform: Platform) -> WatchTarget {
@@ -39,6 +39,7 @@ proptest! {
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
         };
         let r1 = merge(defaults.clone(), None, Platform::Any).unwrap();
         let r2 = merge(defaults, None, Platform::Any).unwrap();
@@ -63,6 +64,7 @@ proptest! {
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
         };
         let user = PolicyDocument {
             version: 1,
@@ -73,6 +75,7 @@ proptest! {
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
         };
         let res = merge(defaults, Some(user), Platform::Any);
         prop_assert!(res.is_err());

@@ -206,6 +206,36 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
         }
     }
 
+    #[cfg(feature = "operator-cli")]
+    {
+        println!();
+        println!("──────────────  AI Guard  ──────────────");
+        match crate::control_client::query(&crate::control::Request::DoctorAiGuardReport) {
+            Ok(resp) => match resp.doctor_ai_guard {
+                Some(rep) => {
+                    print_ai_guard_live(&rep);
+                    if !rep.unknown_override_keys.is_empty() {
+                        for k in &rep.unknown_override_keys {
+                            println!("[WARN] rubric override ignored — unknown reason kind: '{k}'");
+                            warn_count += 1;
+                        }
+                    }
+                }
+                None => {
+                    println!(
+                        "[INFO] daemon returned no AI Guard report; falling back to static rubric"
+                    );
+                    print_static_rubric(&effective);
+                }
+            },
+            Err(_e) => {
+                println!("[INFO] sigil agent not running on control socket; live AI Guard state unavailable");
+                println!("       (printing static rubric from disk policy only)");
+                print_static_rubric(&effective);
+            }
+        }
+    }
+
     println!("─────────────────────────────────────────────");
     if error_count > 0 {
         println!("{error_count} error(s); daemon will not start.");
@@ -216,6 +246,132 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
     } else {
         println!("All checks passed.");
         0
+    }
+}
+
+#[cfg(feature = "operator-cli")]
+fn print_ai_guard_live(rep: &crate::control::DoctorAiGuardReport) {
+    println!(
+        "[OK]   active parsers: {} ({})",
+        rep.parsers.len(),
+        format_parsers_summary(&rep.parsers)
+    );
+    println!(
+        "[OK]   discovered per-repo: continue={}, claude_code={}, codex={}",
+        rep.per_repo.continue_dev, rep.per_repo.claude_code, rep.per_repo.codex
+    );
+    if rep.rule_packs.is_empty() {
+        println!("[OK]   loaded rule packs: 0");
+    } else {
+        let ids: Vec<&str> = rep.rule_packs.iter().map(|p| p.id.as_str()).collect();
+        println!(
+            "[OK]   loaded rule packs: {} ({})",
+            rep.rule_packs.len(),
+            ids.join(", ")
+        );
+    }
+    println!(
+        "[OK]   ext-script watch: {} unique paths across {} parsers",
+        rep.ext_scripts.unique_paths, rep.ext_scripts.parser_entries
+    );
+    if rep.latest_risk.is_empty() {
+        println!("[INFO] latest risk: (no assessments yet)");
+    } else {
+        println!("[INFO] latest risk:");
+        for r in &rep.latest_risk {
+            let tool_str = match r.tool {
+                sigil_core::event::AiTool::ClaudeCode => "claude_code",
+                sigil_core::event::AiTool::Codex => "codex",
+                sigil_core::event::AiTool::ClaudeDesktop => "claude_desktop",
+                sigil_core::event::AiTool::ContinueDev => "continue_dev",
+                sigil_core::event::AiTool::Gemini => "gemini",
+                sigil_core::event::AiTool::Cursor => "cursor",
+            };
+            let scope_str = match &r.scope {
+                sigil_core::event::AiGuardScope::UserGlobal => "user_global".to_string(),
+                sigil_core::event::AiGuardScope::Project { path } => {
+                    format!("project:{}", path.display())
+                }
+                sigil_core::event::AiGuardScope::Application { app } => {
+                    format!("application:{app}")
+                }
+            };
+            let bucket_str = serde_json::to_string(&r.bucket)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string();
+            println!(
+                "         {} / {}    score {:.1}  bucket={}   reasons={}",
+                tool_str, scope_str, r.score, bucket_str, r.reasons_count
+            );
+        }
+    }
+
+    println!();
+    println!("────────────  Effective Rubric  ────────────");
+    println!("  {:<36}  weight", "kind_key");
+    for entry in &rep.effective_rubric {
+        let marker = if entry.overridden { " *" } else { "" };
+        println!("  {:<36}  {:.1}{}", entry.kind_key, entry.weight, marker);
+    }
+    println!("  (* = operator override)");
+}
+
+#[cfg(feature = "operator-cli")]
+fn format_parsers_summary(parsers: &[crate::control::ParserInfo]) -> String {
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for p in parsers {
+        let key = match p.tool {
+            sigil_core::event::AiTool::ClaudeCode => "claude_code",
+            sigil_core::event::AiTool::Codex => "codex",
+            sigil_core::event::AiTool::ClaudeDesktop => "claude_desktop",
+            sigil_core::event::AiTool::ContinueDev => "continue_dev",
+            sigil_core::event::AiTool::Gemini => "gemini",
+            sigil_core::event::AiTool::Cursor => "cursor",
+        };
+        *counts.entry(key.to_string()).or_insert(0) += 1;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (k, v) in counts {
+        if v == 1 {
+            parts.push(k);
+        } else {
+            parts.push(format!("{k}:{v}"));
+        }
+    }
+    parts.join(", ")
+}
+
+#[cfg(feature = "operator-cli")]
+fn print_static_rubric(effective: &sigil_core::policy::EffectivePolicy) {
+    use crate::ai_guard::rubric::Rubric;
+    let rubric = Rubric::defaults().with_overrides(&effective.rubric_overrides);
+
+    println!();
+    println!("────────────  Effective Rubric (static)  ────────────");
+    println!("  {:<36}  weight", "kind_key");
+    let mut entries: Vec<(&'static str, f32, bool)> = rubric
+        .weights
+        .iter()
+        .map(|(k, w)| (*k, *w, rubric.overridden.contains(k)))
+        .collect();
+    // Sort: weight DESC then kind_key alpha — matches Task 4's IPC ordering.
+    entries.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(b.0))
+    });
+    for (k, w, overridden) in &entries {
+        let marker = if *overridden { " *" } else { "" };
+        println!("  {:<36}  {:.1}{}", k, w, marker);
+    }
+    println!("  (* = operator override)");
+
+    if !rubric.unknown_override_keys.is_empty() {
+        for k in &rubric.unknown_override_keys {
+            println!("[WARN] rubric override ignored — unknown reason kind: '{k}'");
+        }
     }
 }
 

@@ -36,3 +36,15 @@ pub type ExtScriptRegistry = std::sync::Arc<
 pub fn empty_ext_script_registry() -> ExtScriptRegistry {
     std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new()))
 }
+
+/// Phase 3b.5 — shared handle for the operator-tunable rubric. Built at
+/// boot from EffectivePolicy.rubric_overrides; atomically swapped on
+/// policy reload. The dispatcher snapshot-clones via a short read guard
+/// before any `.await`.
+pub type RubricHandle = std::sync::Arc<parking_lot::RwLock<rubric::Rubric>>;
+
+/// Construct a RubricHandle holding defaults() only. Used by tests +
+/// fallback paths. Production runtime builds with overrides applied.
+pub fn default_rubric_handle() -> RubricHandle {
+    std::sync::Arc::new(parking_lot::RwLock::new(rubric::Rubric::defaults()))
+}

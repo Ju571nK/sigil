@@ -1,7 +1,7 @@
 //! Watchlist policy: parsing, merging, expansion.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -108,7 +108,7 @@ pub struct Override {
     pub tier: Option<Tier>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PolicyDocument {
     pub version: u32,
     #[serde(default = "default_host_id_strategy")]
@@ -135,6 +135,12 @@ pub struct PolicyDocument {
     /// Wire-additive; merged by id with sigil-rules-basic defaults.
     #[serde(default)]
     pub rule_packs: Vec<RulePack>,
+    /// Phase 3b.5 — operator-tunable rubric weights.
+    /// Keys are snake_case `rubric::kind_key()` output (e.g.,
+    /// `"destructive_in_hook_script"`). Unknown keys are logged + ignored at
+    /// runtime. Absent field = no overrides.
+    #[serde(default)]
+    pub rubric_overrides: HashMap<String, f32>,
 }
 
 fn default_host_id_strategy() -> HostIdStrategy {
@@ -191,7 +197,7 @@ pub fn current_platform() -> Platform {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EffectivePolicy {
     pub host_id_strategy: HostIdStrategy,
     pub targets: Vec<WatchTarget>,
@@ -200,6 +206,9 @@ pub struct EffectivePolicy {
     pub claude_code_workspaces: Vec<String>,
     pub codex_workspaces: Vec<String>,
     pub rule_packs: Vec<RulePack>,
+    /// Phase 3b.5 — operator-tunable rubric weights (merged from user
+    /// PolicyDocument; defaults map is empty).
+    pub rubric_overrides: HashMap<String, f32>,
 }
 
 /// Merge a defaults document and a user-override document into an effective policy.
@@ -279,6 +288,11 @@ pub fn merge(
         packs
     };
 
+    let rubric_overrides = user
+        .as_ref()
+        .map(|u| u.rubric_overrides.clone())
+        .unwrap_or_default();
+
     Ok(EffectivePolicy {
         host_id_strategy: strategy,
         targets: by_id,
@@ -286,6 +300,7 @@ pub fn merge(
         claude_code_workspaces,
         codex_workspaces,
         rule_packs,
+        rubric_overrides,
     })
 }
 
@@ -315,6 +330,7 @@ pub fn defaults() -> Result<PolicyDocument, PolicyError> {
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs,
+            rubric_overrides: HashMap::new(),
         }),
     }
 }
@@ -446,6 +462,7 @@ targets:
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
         }
     }
 
@@ -471,6 +488,7 @@ targets:
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
         };
         let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
         let ids: Vec<&str> = eff.targets.iter().map(|t| t.id.as_str()).collect();
@@ -492,6 +510,7 @@ targets:
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
         };
         let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
         assert_eq!(eff.targets[0].tier, Tier::Standard);
@@ -512,6 +531,7 @@ targets:
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
         };
         let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::UnknownOverrideId(_)));
@@ -528,6 +548,7 @@ targets:
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
         };
         let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::DuplicateId(_)));
@@ -548,6 +569,7 @@ targets:
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
             rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
         };
         let err = merge(defaults, None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::EmptyTargets));
@@ -809,5 +831,61 @@ rule_packs:
         assert_eq!(eff.rule_packs.len(), 2);
         assert!(eff.rule_packs.iter().any(|p| p.id == "mycorp-tool"));
         assert!(eff.rule_packs.iter().any(|p| p.id == "gemini-default"));
+    }
+
+    #[test]
+    fn policy_document_round_trips_rubric_overrides() {
+        let yaml = r#"
+version: 1
+host_id_strategy: hostname
+rubric_overrides:
+  destructive_in_hook_script: 5.0
+  broad_matcher_other: 0.0
+"#;
+        let doc: PolicyDocument = parse(yaml).unwrap();
+        assert_eq!(doc.rubric_overrides.len(), 2);
+        assert_eq!(
+            doc.rubric_overrides.get("destructive_in_hook_script"),
+            Some(&5.0_f32)
+        );
+        assert_eq!(
+            doc.rubric_overrides.get("broad_matcher_other"),
+            Some(&0.0_f32)
+        );
+    }
+
+    #[test]
+    fn policy_document_absent_rubric_overrides_is_empty_map() {
+        let yaml = r#"
+version: 1
+host_id_strategy: hostname
+"#;
+        let doc: PolicyDocument = parse(yaml).unwrap();
+        assert!(doc.rubric_overrides.is_empty());
+    }
+
+    #[test]
+    fn merge_forwards_user_rubric_overrides() {
+        let defaults = defaults().unwrap();
+        // PolicyDocument doesn't derive Default (HostIdStrategy has no Default
+        // variant), so construct explicitly.
+        let mut user = PolicyDocument {
+            version: 1,
+            host_id_strategy: HostIdStrategy::MachineId,
+            overrides: vec![],
+            targets: vec![],
+            continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
+            rule_packs: vec![],
+            rubric_overrides: HashMap::new(),
+        };
+        user.rubric_overrides
+            .insert("destructive_in_hook_script".into(), 5.5);
+        let eff = merge(defaults, Some(user), current_platform()).unwrap();
+        assert_eq!(
+            eff.rubric_overrides.get("destructive_in_hook_script"),
+            Some(&5.5_f32)
+        );
     }
 }
