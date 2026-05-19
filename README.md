@@ -224,8 +224,6 @@ flowchart LR
   for **Claude Code + Codex** hooks, permissions, sandbox boundaries, and
   MCP servers. Emits `ai_guard_risk_assessed` evidence variants alongside
   the underlying `file_change` events; `sigil show risk` operator CLI.
-- **Phase 3b.2 — planned.** Add **Gemini CLI + Cursor** parsers, reusing
-  the rubric and schema from 3b.1.
 - **Phase 3b.3 — planned.** Dynamic hook-script watch (settings.json
   parsing → watch arbitrary script paths).
 - **Phase 3b.4 — shipped.** Server-side fleet aggregation on
@@ -255,6 +253,13 @@ flowchart LR
   `codex_workspaces: [path, ...]` in the signed policy envelope.
   Discovery logic generalized into a shared
   `workspace_discovery::discover_per_repo` helper.
+- **Phase 3b.7 — shipped.** Declarative rule pack architecture (MVP).
+  New `rule_packs:` field in the signed policy envelope lets operators
+  declare scan rules without recompiling sigil-agent. Tier 1 DSL: file
+  path + JSON/TOML selector + matcher → `AiGuardReason` emit. OSS
+  defaults shipped for **Gemini CLI** (`~/.gemini/settings.json`) and
+  **Cursor** (`~/.cursor/mcp.json`) — replaces the originally-planned
+  hardcoded Phase 3b.2.
 - **Phase 3c — planned.** Reproducible-build attestation; additional
   posture signals.
 
