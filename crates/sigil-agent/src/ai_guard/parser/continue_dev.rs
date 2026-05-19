@@ -31,6 +31,19 @@ impl AiGuardParser for ContinueDevParser {
         vec![home_dir.join(".continue").join("config.json")]
     }
 
+    fn collect_external_script_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
+        let cd = home_dir.join(".continue");
+        let config_path = cd.join("config.json");
+        let Ok(s) = std::fs::read_to_string(&config_path) else {
+            return Vec::new();
+        };
+        let Ok(val) = serde_json::from_str::<Value>(&s) else {
+            return Vec::new();
+        };
+        let hooks_dir = cd.join("hooks");
+        collect_external_script_paths_from_settings(&val, &hooks_dir)
+    }
+
     fn assess(&self, home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
         let path = home_dir.join(".continue").join("config.json");
         let text = match std::fs::read_to_string(&path) {
@@ -183,11 +196,52 @@ fn classify_script_path(s: &str, hook_event: &str, hooks_dir: &Path, out: &mut V
                 });
             }
         }
+    } else if let Some(r) =
+        crate::ai_guard::ext_script::scan_external_script(&candidate, hook_event)
+    {
+        out.push(r);
+    }
+}
+
+/// Phase 3b.3 — walk Continue.dev's slashCommands and return every `step`
+/// path classified as external (outside the convention hooks_dir). Mirrors
+/// the path-detection used inside `classify_script_path`. Caller is
+/// responsible for canonicalizing the returned paths before registering.
+pub(crate) fn collect_external_script_paths_from_settings(
+    settings: &Value,
+    hooks_dir: &Path,
+) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(arr) = settings.get("slashCommands").and_then(Value::as_array) {
+        for entry in arr {
+            if let Some(step) = entry.get("step").and_then(Value::as_str) {
+                if let Some(p) = external_path_from_command(step, hooks_dir) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Returns Some(path) if `cmd`'s first token is a path that lies OUTSIDE
+/// `hooks_dir`. Mirrors the path-detection logic of `classify_script_path`.
+fn external_path_from_command(cmd: &str, hooks_dir: &Path) -> Option<PathBuf> {
+    let first_token = cmd.split_whitespace().next().unwrap_or("");
+    let has_shell_meta = first_token.contains('|') || first_token.contains('&');
+    let looks_pathish = !has_shell_meta
+        && (std::path::Path::new(first_token).is_absolute()
+            || first_token.starts_with('~')
+            || first_token.contains('/')
+            || first_token.contains('\\'));
+    if !looks_pathish {
+        return None;
+    }
+    let candidate = PathBuf::from(first_token);
+    if path_is_inside(&candidate, hooks_dir) {
+        None
     } else {
-        out.push(AiGuardReason::ExternalScriptUnscanned {
-            hook_event: hook_event.to_string(),
-            script_path: candidate,
-        });
+        Some(candidate)
     }
 }
 
@@ -244,6 +298,19 @@ impl AiGuardParser for ContinueDevProjectParser {
 
     fn watched_paths(&self, _home_dir: &Path) -> Vec<PathBuf> {
         vec![self.repo_root.join(".continue").join("config.json")]
+    }
+
+    fn collect_external_script_paths(&self, _home_dir: &Path) -> Vec<PathBuf> {
+        let cd = self.repo_root.join(".continue");
+        let config_path = cd.join("config.json");
+        let Ok(s) = std::fs::read_to_string(&config_path) else {
+            return Vec::new();
+        };
+        let Ok(val) = serde_json::from_str::<Value>(&s) else {
+            return Vec::new();
+        };
+        let hooks_dir = cd.join("hooks");
+        collect_external_script_paths_from_settings(&val, &hooks_dir)
     }
 
     fn assess(&self, _home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
@@ -477,6 +544,75 @@ mod tests {
             repo_root: std::path::PathBuf::from("/x"),
         };
         assert_eq!(p.tool(), AiTool::ContinueDev);
+    }
+
+    #[test]
+    fn external_slash_command_destructive_emits_destructive_in_hook_script() {
+        use std::io::Write;
+        let mut ext = tempfile::NamedTempFile::new().unwrap();
+        ext.write_all(b"#!/bin/bash\nrm -rf /tmp/sigil-3b3-cd\n").unwrap();
+        ext.flush().unwrap();
+        let ext_path = ext.path().to_str().unwrap().to_string();
+
+        let hooks_dir = std::path::PathBuf::from("/nonexistent/.continue/hooks");
+        let settings = serde_json::json!({
+            "slashCommands": [{
+                "name": "lint",
+                "step": ext_path
+            }]
+        });
+        let mut out = Vec::new();
+        emit_slash_command_reasons(&settings, &hooks_dir, &mut out);
+        assert!(
+            out.iter().any(|r| matches!(
+                r,
+                AiGuardReason::DestructiveInHookScript { .. }
+            )),
+            "expected DestructiveInHookScript for external slash command, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn external_slash_command_safe_emits_nothing() {
+        use std::io::Write;
+        let mut ext = tempfile::NamedTempFile::new().unwrap();
+        ext.write_all(b"#!/bin/bash\necho hi\n").unwrap();
+        ext.flush().unwrap();
+        let ext_path = ext.path().to_str().unwrap().to_string();
+
+        let hooks_dir = std::path::PathBuf::from("/nonexistent/.continue/hooks");
+        let settings = serde_json::json!({
+            "slashCommands": [{
+                "name": "lint",
+                "step": ext_path
+            }]
+        });
+        let mut out = Vec::new();
+        emit_slash_command_reasons(&settings, &hooks_dir, &mut out);
+        assert!(
+            !out.iter().any(|r| matches!(
+                r,
+                AiGuardReason::DestructiveInHookScript { .. }
+                    | AiGuardReason::ExternalScriptUnscanned { .. }
+            )),
+            "expected no hook-script reason for safe external slash command, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn collect_external_script_paths_continue() {
+        let hooks_dir = std::path::PathBuf::from("/nonexistent/.continue/hooks");
+        let settings = serde_json::json!({
+            "slashCommands": [
+                {"name": "lint", "step": "/opt/sigil-tools/lint.sh"},
+                {"name": "inline", "run": "echo hi"},
+                {"name": "internal", "step": "/nonexistent/.continue/hooks/foo.sh"}
+            ]
+        });
+        let mut paths = collect_external_script_paths_from_settings(&settings, &hooks_dir);
+        paths.sort();
+        let expected = vec![std::path::PathBuf::from("/opt/sigil-tools/lint.sh")];
+        assert_eq!(paths, expected);
     }
 
     #[test]
