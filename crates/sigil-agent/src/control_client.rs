@@ -100,6 +100,8 @@ mod tests {
                 policy_status: None,
                 targets: None,
                 risk: None,
+                #[cfg(feature = "operator-cli")]
+                doctor_ai_guard: None,
                 error: None,
             };
             let mut bytes = serde_json::to_vec(&resp).unwrap();
@@ -149,6 +151,7 @@ mod tests {
                     }],
                 }),
                 risk: None,
+                doctor_ai_guard: None,
                 error: None,
             };
             let mut bytes = serde_json::to_vec(&resp).unwrap();

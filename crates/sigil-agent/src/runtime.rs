@@ -362,6 +362,12 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         targets_rx: targets_rx.clone(),
         #[cfg(feature = "operator-cli")]
         ai_guard_state: ai_guard_state.clone(),
+        #[cfg(feature = "operator-cli")]
+        parsers: ai_guard_parsers.clone(),
+        #[cfg(feature = "operator-cli")]
+        ext_scripts: ext_scripts_registry.clone(),
+        #[cfg(feature = "operator-cli")]
+        rubric: rubric_handle.clone(),
     });
 
     // Watcher (notify → raw events → tx_norm via normalizer wrapper).

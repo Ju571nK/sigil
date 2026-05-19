@@ -55,6 +55,10 @@ pub enum Request {
     Risk {
         tool: Option<sigil_core::event::AiTool>,
     },
+    /// Operator introspection: returns a snapshot of the AI Guard
+    /// subsystem state for `sigil doctor`. Phase 3b.5.
+    #[cfg(feature = "operator-cli")]
+    DoctorAiGuardReport,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -69,6 +73,9 @@ pub struct Response {
     pub targets: Option<TargetsPayload>,
     /// Present iff the request was `Risk`.
     pub risk: Option<RiskPayload>,
+    /// Present iff the request was `DoctorAiGuardReport`. Phase 3b.5.
+    #[cfg(feature = "operator-cli")]
+    pub doctor_ai_guard: Option<DoctorAiGuardReport>,
     pub error: Option<String>,
 }
 
@@ -131,6 +138,73 @@ pub struct RiskSummary {
     pub last_assessed_ts: String,
 }
 
+/// Phase 3b.5 — serializable snapshot of the agent's AI Guard subsystem
+/// state, returned by `Request::DoctorAiGuardReport` for `sigil doctor`.
+#[derive(Serialize, Deserialize, Debug)]
+#[cfg(feature = "operator-cli")]
+pub struct DoctorAiGuardReport {
+    /// Active parser instances. One entry per (tool, scope) pair.
+    pub parsers: Vec<ParserInfo>,
+    /// Discovered per-repo workspaces, count per tool.
+    pub per_repo: PerRepoSummary,
+    /// Loaded rule packs (3b.7). Skipped packs are not currently retained;
+    /// only loaded ones are reported. Future enhancement may surface skip
+    /// reasons from the loader.
+    pub rule_packs: Vec<RulePackInfo>,
+    /// External hook scripts (3b.3) currently being watched.
+    pub ext_scripts: ExtScriptSummary,
+    /// Latest risk assessment per (tool, scope) from ai_guard_state cache.
+    pub latest_risk: Vec<RiskSummary>,
+    /// Effective rubric — every kind_key with current weight + whether it
+    /// came from an operator override.
+    pub effective_rubric: Vec<RubricEntry>,
+    /// Snake_case override keys the envelope referenced but didn't match
+    /// any known kind. Surfaced by doctor as `[WARN]`.
+    pub unknown_override_keys: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[cfg(feature = "operator-cli")]
+pub struct ParserInfo {
+    pub tool: sigil_core::event::AiTool,
+    pub scope: sigil_core::event::AiGuardScope,
+    pub watched_path_count: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[cfg(feature = "operator-cli")]
+pub struct PerRepoSummary {
+    pub continue_dev: usize,
+    pub claude_code: usize,
+    pub codex: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[cfg(feature = "operator-cli")]
+pub struct RulePackInfo {
+    pub id: String,
+    pub loaded: bool,
+    /// `None` when loaded. Reserved for future surfacing of skip reasons.
+    pub skip_reason: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[cfg(feature = "operator-cli")]
+pub struct ExtScriptSummary {
+    /// Total unique canonical script paths across all parsers.
+    pub unique_paths: usize,
+    /// Number of (tool, scope) entries that have at least one ext-script.
+    pub parser_entries: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[cfg(feature = "operator-cli")]
+pub struct RubricEntry {
+    pub kind_key: String,
+    pub weight: f32,
+    pub overridden: bool,
+}
+
 /// Shared context bundle passed to both platform `serve` functions.
 pub struct ControlContext {
     pub stats: Arc<Stats>,
@@ -145,6 +219,15 @@ pub struct ControlContext {
         tokio::sync::watch::Receiver<std::sync::Arc<Vec<crate::normalizer::CompiledTarget>>>,
     #[cfg(feature = "operator-cli")]
     pub ai_guard_state: std::sync::Arc<parking_lot::RwLock<crate::ai_guard::StateMap>>,
+    /// Phase 3b.5 — needed by DoctorAiGuardReport handler.
+    #[cfg(feature = "operator-cli")]
+    pub parsers: std::sync::Arc<
+        parking_lot::RwLock<Vec<std::sync::Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
+    >,
+    #[cfg(feature = "operator-cli")]
+    pub ext_scripts: crate::ai_guard::ExtScriptRegistry,
+    #[cfg(feature = "operator-cli")]
+    pub rubric: crate::ai_guard::RubricHandle,
 }
 
 /// Shared dispatch logic. Returns the `Response` for a given `Request`.
@@ -158,6 +241,8 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
             policy_status: None,
             targets: None,
             risk: None,
+            #[cfg(feature = "operator-cli")]
+            doctor_ai_guard: None,
             error: None,
         },
         Request::ApplyPolicy { response } => {
@@ -174,6 +259,8 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     policy_status: None,
                     targets: None,
                     risk: None,
+                    #[cfg(feature = "operator-cli")]
+                    doctor_ai_guard: None,
                     error: None,
                 },
                 ApplyOutcome::Rejected { reason } => Response {
@@ -183,6 +270,8 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     policy_status: None,
                     targets: None,
                     risk: None,
+                    #[cfg(feature = "operator-cli")]
+                    doctor_ai_guard: None,
                     error: None,
                 },
                 ApplyOutcome::Internal { detail } => Response {
@@ -192,6 +281,8 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     policy_status: None,
                     targets: None,
                     risk: None,
+                    #[cfg(feature = "operator-cli")]
+                    doctor_ai_guard: None,
                     error: Some(format!("internal: {detail}")),
                 },
             }
@@ -223,6 +314,8 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 }),
                 targets: None,
                 risk: None,
+                #[cfg(feature = "operator-cli")]
+                doctor_ai_guard: None,
                 error: None,
             }
         }
@@ -244,6 +337,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 policy_status: None,
                 targets: Some(TargetsPayload { targets: summaries }),
                 risk: None,
+                doctor_ai_guard: None,
                 error: None,
             }
         }
@@ -259,6 +353,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 policy_status: None,
                 targets: None,
                 risk: None,
+                doctor_ai_guard: None,
                 error: None,
             }
         }
@@ -298,6 +393,134 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 policy_status: None,
                 targets: None,
                 risk: Some(RiskPayload { assessments }),
+                doctor_ai_guard: None,
+                error: None,
+            }
+        }
+        #[cfg(feature = "operator-cli")]
+        Request::DoctorAiGuardReport => {
+            // Parsers snapshot (clone the Arc list — small).
+            let parsers_snapshot: Vec<std::sync::Arc<dyn crate::ai_guard::parser::AiGuardParser>> =
+                ctx.parsers.read().clone();
+            // Resolve home_dir consistently with runtime + reload.
+            let home_dir = std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("/"));
+            let parsers: Vec<ParserInfo> = parsers_snapshot
+                .iter()
+                .map(|p| ParserInfo {
+                    tool: p.tool(),
+                    scope: p.scope(),
+                    watched_path_count: p.watched_paths(&home_dir).len(),
+                })
+                .collect();
+
+            // Per-repo summary — derive from parsers' scopes.
+            let mut per_repo = PerRepoSummary::default();
+            for p in &parsers_snapshot {
+                if let sigil_core::event::AiGuardScope::Project { .. } = p.scope() {
+                    match p.tool() {
+                        sigil_core::event::AiTool::ContinueDev => per_repo.continue_dev += 1,
+                        sigil_core::event::AiTool::ClaudeCode => per_repo.claude_code += 1,
+                        sigil_core::event::AiTool::Codex => per_repo.codex += 1,
+                        _ => {}
+                    }
+                }
+            }
+
+            // Rule packs — downcast via as_any() to identify RulePackParser.
+            let mut rule_packs: Vec<RulePackInfo> = Vec::new();
+            for p in &parsers_snapshot {
+                if let Some(rpp) = p
+                    .as_any()
+                    .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                {
+                    rule_packs.push(RulePackInfo {
+                        id: rpp.pack.id.clone(),
+                        loaded: true,
+                        skip_reason: None,
+                    });
+                }
+            }
+
+            // Ext-script summary.
+            let ext_map = ctx.ext_scripts.read();
+            let mut unique: std::collections::BTreeSet<std::path::PathBuf> =
+                std::collections::BTreeSet::new();
+            let parser_entries = ext_map.len();
+            for v in ext_map.values() {
+                for p in v {
+                    unique.insert(p.clone());
+                }
+            }
+            drop(ext_map);
+            let ext_scripts_summary = ExtScriptSummary {
+                unique_paths: unique.len(),
+                parser_entries,
+            };
+
+            // Latest risk — same shape as Risk handler.
+            let snapshot = ctx.ai_guard_state.read();
+            let mut latest_risk: Vec<RiskSummary> = snapshot
+                .iter()
+                .map(|((t, scope), cached)| {
+                    let last = cached
+                        .last_assessed_ts
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_default();
+                    RiskSummary {
+                        tool: *t,
+                        scope: scope.clone(),
+                        score: cached.score,
+                        bucket: cached.bucket,
+                        reasons_count: cached.reasons_count,
+                        last_assessed_ts: last,
+                    }
+                })
+                .collect();
+            drop(snapshot);
+            latest_risk.sort_by(|a, b| {
+                serde_json::to_string(&a.tool)
+                    .unwrap_or_default()
+                    .cmp(&serde_json::to_string(&b.tool).unwrap_or_default())
+            });
+
+            // Effective rubric.
+            let rubric_snapshot = ctx.rubric.read().clone();
+            let mut effective_rubric: Vec<RubricEntry> = rubric_snapshot
+                .weights
+                .iter()
+                .map(|(k, w)| RubricEntry {
+                    kind_key: k.to_string(),
+                    weight: *w,
+                    overridden: rubric_snapshot.overridden.contains(k),
+                })
+                .collect();
+            // Sort: weight DESC then kind_key alpha for stable display.
+            effective_rubric.sort_by(|a, b| {
+                b.weight
+                    .partial_cmp(&a.weight)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.kind_key.cmp(&b.kind_key))
+            });
+
+            Response {
+                ok: true,
+                stats: None,
+                apply_policy: None,
+                policy_status: None,
+                targets: None,
+                risk: None,
+                doctor_ai_guard: Some(DoctorAiGuardReport {
+                    parsers,
+                    per_repo,
+                    rule_packs,
+                    ext_scripts: ext_scripts_summary,
+                    latest_risk,
+                    effective_rubric,
+                    unknown_override_keys: rubric_snapshot.unknown_override_keys.clone(),
+                }),
                 error: None,
             }
         }
@@ -342,6 +565,8 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
                     policy_status: None,
                     targets: None,
                     risk: None,
+                    #[cfg(feature = "operator-cli")]
+                    doctor_ai_guard: None,
                     error: Some(e.to_string()),
                 },
             };
@@ -382,6 +607,8 @@ pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result
                     policy_status: None,
                     targets: None,
                     risk: None,
+                    #[cfg(feature = "operator-cli")]
+                    doctor_ai_guard: None,
                     error: Some(e.to_string()),
                 },
             };
@@ -451,6 +678,8 @@ mod tests {
             policy_status: None,
             targets: None,
             risk: None,
+            #[cfg(feature = "operator-cli")]
+            doctor_ai_guard: None,
             error: None,
         };
         let s = serde_json::to_string(&r).unwrap();
@@ -469,6 +698,8 @@ mod tests {
             policy_status: None,
             targets: None,
             risk: None,
+            #[cfg(feature = "operator-cli")]
+            doctor_ai_guard: None,
             error: None,
         };
         let s = serde_json::to_string(&r).unwrap();
@@ -490,6 +721,8 @@ mod tests {
                 }],
             }),
             risk: None,
+            #[cfg(feature = "operator-cli")]
+            doctor_ai_guard: None,
             error: None,
         };
         let s = serde_json::to_string(&resp).unwrap();
@@ -571,6 +804,7 @@ mod tests {
                     last_assessed_ts: "2026-05-16T06:00:00Z".into(),
                 }],
             }),
+            doctor_ai_guard: None,
             error: None,
         };
         let s = serde_json::to_string(&resp).unwrap();
