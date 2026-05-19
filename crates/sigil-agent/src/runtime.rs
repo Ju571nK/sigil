@@ -446,6 +446,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 shutdown: cancel.clone(),
                 parsers: ai_guard_parsers.clone(),
                 ai_guard_state: ai_guard_state.clone(),
+                ext_scripts: ext_scripts_registry.clone(),
             },
         )),
     );

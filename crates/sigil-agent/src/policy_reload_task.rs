@@ -155,6 +155,11 @@ pub struct ReloadCtx {
     /// stale `(continue_dev, Project{path})` state entries for repos that
     /// were dropped from `continue_workspaces`.
     pub ai_guard_state: Arc<parking_lot::RwLock<crate::ai_guard::task::StateMap>>,
+    /// Phase 3b.3 — shared registry of external hook-script paths per
+    /// parser (tool, scope). Reload rebuilds this on every policy change
+    /// and synthesizes ext-script WatchTargets into the freshly-merged
+    /// effective.
+    pub ext_scripts: crate::ai_guard::ExtScriptRegistry,
 }
 
 pub async fn run(mut ctx: ReloadCtx) {
@@ -300,6 +305,27 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         "policy reload: per-repo parsers + rule packs reconciled"
     );
 
+    // Phase 3b.3 — rebuild ExtScriptRegistry and synthesize ext-script
+    // WatchTargets into freshly-merged effective. Stale synth targets are
+    // automatically dropped because `effective` is rebuilt each cycle.
+    // The reconcile_per_repo / reconcile_rule_packs write guard on
+    // `ctx.parsers` was released above (end of the let-block at the
+    // `reconcile_rule_packs` call), so taking a read guard here is safe.
+    {
+        let parsers_snapshot: Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>> =
+            ctx.parsers.read().clone();
+        let home_dir = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        crate::runtime::discover_and_register_ext_scripts(
+            &parsers_snapshot,
+            &home_dir,
+            &ctx.ext_scripts,
+            &mut effective,
+        );
+    }
+
     let (expanded_paths, new_roots) = crate::runtime::expand_targets(&effective, plat);
 
     // Re-seed the critical-tier warmup cache (idempotent — overwrites).
@@ -413,6 +439,7 @@ mod tests {
                 ai_guard_state: Arc::new(
                     parking_lot::RwLock::new(std::collections::HashMap::new()),
                 ),
+                ext_scripts: crate::ai_guard::empty_ext_script_registry(),
             },
             plat,
             targets_rx,
@@ -467,6 +494,7 @@ mod tests {
                 shutdown: CancellationToken::new(),
                 parsers: parsers.clone(),
                 ai_guard_state: state.clone(),
+                ext_scripts: crate::ai_guard::empty_ext_script_registry(),
             },
             plat,
             targets_rx,
