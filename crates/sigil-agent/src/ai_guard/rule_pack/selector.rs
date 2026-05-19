@@ -64,9 +64,7 @@ impl Selector {
         let mut rest = &s[1..]; // skip '$'
         while !rest.is_empty() {
             if let Some(after_dot) = rest.strip_prefix('.') {
-                let end = after_dot
-                    .find(['.', '['])
-                    .unwrap_or(after_dot.len());
+                let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
                 let segment_str = &after_dot[..end];
                 if segment_str.is_empty() {
                     return Err(SelectorError::EmptySegment);
@@ -254,13 +252,19 @@ mod tests {
     #[test]
     fn selector_parse_nested_key() {
         let s = Selector::parse("$.foo.bar").unwrap();
-        assert_eq!(s.segments, vec![Segment::Key("foo".into()), Segment::Key("bar".into())]);
+        assert_eq!(
+            s.segments,
+            vec![Segment::Key("foo".into()), Segment::Key("bar".into())]
+        );
     }
 
     #[test]
     fn selector_parse_object_wildcard() {
         let s = Selector::parse("$.foo.*").unwrap();
-        assert_eq!(s.segments, vec![Segment::Key("foo".into()), Segment::ObjectWildcard]);
+        assert_eq!(
+            s.segments,
+            vec![Segment::Key("foo".into()), Segment::ObjectWildcard]
+        );
     }
 
     #[test]
@@ -279,12 +283,18 @@ mod tests {
     #[test]
     fn selector_parse_array_wildcard() {
         let s = Selector::parse("$.foo[*]").unwrap();
-        assert_eq!(s.segments, vec![Segment::Key("foo".into()), Segment::ArrayWildcard]);
+        assert_eq!(
+            s.segments,
+            vec![Segment::Key("foo".into()), Segment::ArrayWildcard]
+        );
     }
 
     #[test]
     fn selector_rejects_recursive_descent() {
-        assert!(matches!(Selector::parse("$..foo"), Err(SelectorError::RecursiveDescent)));
+        assert!(matches!(
+            Selector::parse("$..foo"),
+            Err(SelectorError::RecursiveDescent)
+        ));
     }
 
     #[test]
@@ -297,12 +307,18 @@ mod tests {
 
     #[test]
     fn selector_rejects_bracketed_string_key() {
-        assert!(matches!(Selector::parse("$['foo']"), Err(SelectorError::BracketedStringKey)));
+        assert!(matches!(
+            Selector::parse("$['foo']"),
+            Err(SelectorError::BracketedStringKey)
+        ));
     }
 
     #[test]
     fn selector_rejects_array_index() {
-        assert!(matches!(Selector::parse("$.foo[0]"), Err(SelectorError::OnlyArrayWildcard)));
+        assert!(matches!(
+            Selector::parse("$.foo[0]"),
+            Err(SelectorError::OnlyArrayWildcard)
+        ));
     }
 
     #[test]
@@ -350,7 +366,12 @@ mod tests {
 
     #[test]
     fn eval_toml_top_level_string() {
-        let m = eval_toml(r#"sandbox_mode = "danger-full-access""#, "$.sandbox_mode", &p()).unwrap();
+        let m = eval_toml(
+            r#"sandbox_mode = "danger-full-access""#,
+            "$.sandbox_mode",
+            &p(),
+        )
+        .unwrap();
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].value, "danger-full-access");
     }

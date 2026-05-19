@@ -770,7 +770,10 @@ rule_packs:
             .unwrap();
         assert_eq!(gemini.pack_version, 1);
         assert_eq!(gemini.tool, crate::event::AiTool::Gemini);
-        assert!(matches!(gemini.scope, crate::event::AiGuardScope::UserGlobal));
+        assert!(matches!(
+            gemini.scope,
+            crate::event::AiGuardScope::UserGlobal
+        ));
         assert_eq!(gemini.watched_paths, vec!["~/.gemini/settings.json"]);
         assert!(gemini.rules.iter().any(|r| r.id == "sandbox-disabled"));
     }
@@ -785,7 +788,10 @@ rule_packs:
             .unwrap();
         assert_eq!(cursor.pack_version, 1);
         assert_eq!(cursor.tool, crate::event::AiTool::Cursor);
-        assert!(matches!(cursor.scope, crate::event::AiGuardScope::UserGlobal));
+        assert!(matches!(
+            cursor.scope,
+            crate::event::AiGuardScope::UserGlobal
+        ));
         assert_eq!(cursor.watched_paths, vec!["~/.cursor/mcp.json"]);
     }
 

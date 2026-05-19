@@ -172,7 +172,10 @@ pub enum AiGuardReason {
     /// MCP server using a local command (stdio transport) was added.
     /// Phase 3b.7 — rule pack engine emits this when a `command:` key is
     /// found under `mcpServers.*` in Gemini/Cursor settings files.
-    McpServerLocalCommand { server_name: String, command: String },
+    McpServerLocalCommand {
+        server_name: String,
+        command: String,
+    },
 }
 
 /// Phase 3b.4-pre — full host identity / OS / network snapshot, emitted by
@@ -896,7 +899,13 @@ mod tests {
         assert_eq!(g, AiTool::Gemini);
         let c: AiTool = serde_json::from_value(serde_json::json!("cursor")).unwrap();
         assert_eq!(c, AiTool::Cursor);
-        assert_eq!(serde_json::to_value(AiTool::Gemini).unwrap(), serde_json::json!("gemini"));
-        assert_eq!(serde_json::to_value(AiTool::Cursor).unwrap(), serde_json::json!("cursor"));
+        assert_eq!(
+            serde_json::to_value(AiTool::Gemini).unwrap(),
+            serde_json::json!("gemini")
+        );
+        assert_eq!(
+            serde_json::to_value(AiTool::Cursor).unwrap(),
+            serde_json::json!("cursor")
+        );
     }
 }

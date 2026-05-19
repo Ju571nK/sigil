@@ -33,13 +33,15 @@ pub fn compile_pack_regexes(
     rules
         .iter()
         .map(|r| match &r.matcher {
-            Matcher::Regex { pattern } => regex::Regex::new(pattern)
-                .map(Some)
-                .map_err(|source| CompileError {
-                    rule_id: r.id.clone(),
-                    pattern: pattern.clone(),
-                    source,
-                }),
+            Matcher::Regex { pattern } => {
+                regex::Regex::new(pattern)
+                    .map(Some)
+                    .map_err(|source| CompileError {
+                        rule_id: r.id.clone(),
+                        pattern: pattern.clone(),
+                        source,
+                    })
+            }
             _ => Ok(None),
         })
         .collect()
@@ -72,7 +74,9 @@ mod tests {
     #[test]
     fn equals_true_on_exact_match() {
         assert!(matches_value(
-            &Matcher::Equals { value: "danger".into() },
+            &Matcher::Equals {
+                value: "danger".into()
+            },
             &mv("danger"),
             None,
         ));
@@ -81,7 +85,9 @@ mod tests {
     #[test]
     fn equals_false_on_mismatch() {
         assert!(!matches_value(
-            &Matcher::Equals { value: "danger".into() },
+            &Matcher::Equals {
+                value: "danger".into()
+            },
             &mv("safe"),
             None,
         ));
@@ -90,7 +96,9 @@ mod tests {
     #[test]
     fn not_equals_true_on_mismatch() {
         assert!(matches_value(
-            &Matcher::NotEquals { value: "safe".into() },
+            &Matcher::NotEquals {
+                value: "safe".into()
+            },
             &mv("danger"),
             None,
         ));
@@ -100,7 +108,9 @@ mod tests {
     fn regex_true_on_pattern_match() {
         let r = regex::Regex::new("^https://").unwrap();
         assert!(matches_value(
-            &Matcher::Regex { pattern: "^https://".into() },
+            &Matcher::Regex {
+                pattern: "^https://".into()
+            },
             &mv("https://example.com"),
             Some(&r),
         ));
@@ -110,7 +120,9 @@ mod tests {
     fn regex_false_on_pattern_mismatch() {
         let r = regex::Regex::new("^https://").unwrap();
         assert!(!matches_value(
-            &Matcher::Regex { pattern: "^https://".into() },
+            &Matcher::Regex {
+                pattern: "^https://".into()
+            },
             &mv("http://insecure"),
             Some(&r),
         ));
@@ -132,7 +144,9 @@ mod tests {
                 on_file: "x".into(),
                 format: sigil_core::policy::RuleFormat::Json,
                 selector: "$.x".into(),
-                matcher: Matcher::Regex { pattern: "^http".into() },
+                matcher: Matcher::Regex {
+                    pattern: "^http".into(),
+                },
                 emit: sigil_core::event::AiGuardReason::SandboxDisabled,
             },
         ];
@@ -149,7 +163,9 @@ mod tests {
             on_file: "x".into(),
             format: sigil_core::policy::RuleFormat::Json,
             selector: "$.x".into(),
-            matcher: Matcher::Regex { pattern: "[unclosed".into() },
+            matcher: Matcher::Regex {
+                pattern: "[unclosed".into(),
+            },
             emit: sigil_core::event::AiGuardReason::SandboxDisabled,
         }];
         let err = compile_pack_regexes(&rules).unwrap_err();

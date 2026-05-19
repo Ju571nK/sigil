@@ -47,11 +47,7 @@ impl AiGuardParser for RulePackParser {
             .watched_paths
             .iter()
             .filter_map(|raw| {
-                sigil_core::policy::expand::expand(
-                    raw,
-                    &sigil_core::policy::expand::EnvLookup,
-                )
-                .ok()
+                sigil_core::policy::expand::expand(raw, &sigil_core::policy::expand::EnvLookup).ok()
             })
             .collect()
     }
@@ -156,7 +152,11 @@ mod tests {
     #[test]
     fn missing_watched_file_returns_empty() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("missing.json").to_string_lossy().to_string();
+        let path = dir
+            .path()
+            .join("missing.json")
+            .to_string_lossy()
+            .to_string();
         let pack = pack_with_one_rule(
             &path,
             "$.foo",
@@ -175,7 +175,9 @@ mod tests {
         let pack = pack_with_one_rule(
             file.to_str().unwrap(),
             "$.sandbox",
-            Matcher::Equals { value: "false".into() },
+            Matcher::Equals {
+                value: "false".into(),
+            },
             AiGuardReason::SandboxDisabled,
         );
         let p = RulePackParser::new(pack).unwrap();
@@ -188,11 +190,7 @@ mod tests {
     fn interpolation_substitutes_selector_key_in_emit() {
         let dir = tempdir().unwrap();
         let file = dir.path().join("mcp.json");
-        std::fs::write(
-            &file,
-            r#"{"mcpServers": {"alpha": {"url": "https://a"}}}"#,
-        )
-        .unwrap();
+        std::fs::write(&file, r#"{"mcpServers": {"alpha": {"url": "https://a"}}}"#).unwrap();
         // McpServerRemote has 2 required fields: server_name + url. Use
         // distinct tokens to verify both interpolate independently.
         let pack = pack_with_one_rule(
@@ -246,7 +244,9 @@ mod tests {
                 on_file: "/tmp/x".into(),
                 format: RuleFormat::Json,
                 selector: "$.x".into(),
-                matcher: Matcher::Regex { pattern: "[unclosed".into() },
+                matcher: Matcher::Regex {
+                    pattern: "[unclosed".into(),
+                },
                 emit: AiGuardReason::SandboxDisabled,
             }],
         };

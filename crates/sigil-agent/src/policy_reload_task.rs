@@ -743,8 +743,7 @@ mod tests {
     async fn reload_adds_rule_pack_when_user_adds_one() {
         let dir = tempfile::tempdir().unwrap();
         let initial = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\n";
-        let (mut ctx, plat, _trx, parsers, _state) =
-            build_ctx_with_parsers(dir.path(), initial);
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
         reload(&mut ctx, &plat);
 
         // Defaults loaded — 2 packs (gemini-default, cursor-default).
@@ -777,8 +776,7 @@ mod tests {
     async fn reload_removes_user_rule_pack_when_dropped() {
         let dir = tempfile::tempdir().unwrap();
         let initial = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\nrule_packs:\n  - id: my-extra\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n";
-        let (mut ctx, plat, _trx, parsers, _state) =
-            build_ctx_with_parsers(dir.path(), initial);
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
         reload(&mut ctx, &plat);
 
         // Confirm my-extra loaded.

@@ -579,9 +579,9 @@ async fn cursor_default_rule_pack_emits_remote_mcp() {
         .expect("expected AiGuardRiskAssessed for cursor");
     let reasons = ev["evidence"]["reasons"].as_array().expect("reasons");
     assert!(
-        reasons.iter().any(|r| {
-            r["kind"] == "mcp_server_remote" && r["server_name"] == "foo"
-        }),
+        reasons
+            .iter()
+            .any(|r| { r["kind"] == "mcp_server_remote" && r["server_name"] == "foo" }),
         "expected mcp_server_remote with server_name=foo in {reasons:?}"
     );
 
