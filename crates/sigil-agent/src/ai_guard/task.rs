@@ -63,6 +63,10 @@ pub struct TaskCtx {
     /// (tool, scope). Populated by runtime/reload; read by the dispatch loop
     /// to route fsnotify events on script paths.
     pub ext_scripts: crate::ai_guard::ExtScriptRegistry,
+    /// Phase 3b.5 — shared rubric (operator-tunable weights). Snapshot-
+    /// cloned on each assess cycle before any await; rebuilt + swapped
+    /// by policy_reload_task on envelope changes.
+    pub rubric: crate::ai_guard::RubricHandle,
 }
 
 /// Main task loop. Boots, then selects between file-change broadcasts and
@@ -151,7 +155,10 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
             return;
         }
     };
-    let score = rubric::score(&reasons);
+    // Phase 3b.5 — snapshot-clone the Rubric BEFORE any subsequent await.
+    // Cheap: weights is a small HashMap.
+    let rubric_snapshot = ctx.rubric.read().clone();
+    let score = rubric_snapshot.score(&reasons);
     let bucket = rubric::bucket(score);
     let reasons_hash = rubric::canonical_hash(&reasons);
     let key = (parser.tool(), parser.scope());
@@ -265,6 +272,7 @@ mod tests {
                 home_dir: PathBuf::from("/tmp/test-home"),
                 host_id: "test-host".into(),
                 ext_scripts: crate::ai_guard::empty_ext_script_registry(),
+                rubric: crate::ai_guard::default_rubric_handle(),
             },
             rx,
         )
@@ -422,6 +430,7 @@ mod tests {
             home_dir: PathBuf::from("/tmp"),
             host_id: "h".into(),
             ext_scripts: crate::ai_guard::empty_ext_script_registry(),
+            rubric: crate::ai_guard::default_rubric_handle(),
         };
         let h = tokio::spawn(run(ctx));
         tokio::task::yield_now().await;

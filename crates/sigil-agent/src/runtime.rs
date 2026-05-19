@@ -225,6 +225,15 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         );
     }
 
+    // Phase 3b.5 — build the operator-tunable rubric from
+    // EffectivePolicy.rubric_overrides. Unknown override keys are
+    // warn-logged at build time. Shared handle is passed to TaskCtx
+    // (dispatcher reads per cycle) and ReloadCtx (rebuilds on reload).
+    let rubric_handle = std::sync::Arc::new(parking_lot::RwLock::new(
+        crate::ai_guard::rubric::Rubric::defaults()
+            .with_overrides(&effective.rubric_overrides),
+    ));
+
     // 2. Expand paths per user → watch paths + watch roots.
     let (expanded_paths, watch_roots) = expand_targets(&effective, &plat);
 
@@ -447,6 +456,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 parsers: ai_guard_parsers.clone(),
                 ai_guard_state: ai_guard_state.clone(),
                 ext_scripts: ext_scripts_registry.clone(),
+                rubric: rubric_handle.clone(),
             },
         )),
     );
@@ -487,6 +497,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             // boot above. Task 7 will share the same handle with
             // policy_reload_task so hot-reload can refresh script paths.
             ext_scripts: ext_scripts_registry.clone(),
+            // Phase 3b.5 — shared operator-tunable rubric. Built above
+            // from EffectivePolicy.rubric_overrides; reload swaps it.
+            rubric: rubric_handle.clone(),
         };
         sup.track(
             "ai_guard",
