@@ -1,7 +1,11 @@
 //! Phase 3b.1 — pure scoring + canonicalization. No I/O. No side effects.
+//! Phase 3b.5 — `Rubric` struct introduced for operator-tunable weights.
+//! The free `pub fn score()` is preserved as a back-compat shim that
+//! delegates to `Rubric::defaults().score()` so existing callers (tests,
+//! doctor static-fallback path) keep working unchanged.
 
 use sigil_core::event::{AiGuardBucket, AiGuardReason};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 
 /// CVSS-style cap.
@@ -10,24 +14,6 @@ const SCORE_MAX: f32 = 10.0;
 /// the base weight (the second is `+25%`, third `+50%`, etc.). Surcharge,
 /// not discount — repeats make the score worse, not better.
 const REPEAT_WEIGHT_STEP: f32 = 0.25;
-
-/// Returns the rubric weight for one occurrence of `reason`.
-/// `BroadMatcher` weights branch on `hook_event` (PreToolUse vs other).
-fn weight_for(reason: &AiGuardReason) -> f32 {
-    match reason {
-        AiGuardReason::DestructiveInInlineCommand { .. } => 4.0,
-        AiGuardReason::DestructiveInHookScript { .. } => 4.0,
-        AiGuardReason::SandboxDisabled => 3.0,
-        AiGuardReason::NoSandbox { .. } => 2.0,
-        AiGuardReason::PermissionsAllowBroad { .. } => 2.0,
-        AiGuardReason::ExternalScriptUnscanned { .. } => 1.5,
-        AiGuardReason::BroadMatcher { hook_event, .. } if hook_event == "PreToolUse" => 1.5,
-        AiGuardReason::BroadMatcher { .. } => 0.5,
-        AiGuardReason::PermissionsDenyEmpty => 1.0,
-        AiGuardReason::McpServerRemote { .. } => 1.0,
-        AiGuardReason::McpServerLocalCommand { .. } => 0.5,
-    }
-}
 
 /// `discriminant`-style key used for "same kind" grouping in the discount math.
 fn kind_key(reason: &AiGuardReason) -> &'static str {
@@ -48,22 +34,120 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
     }
 }
 
-/// Total score for a reason set. Within each kind: first reason at full
-/// weight, second at +25%, third at +50%, etc. Then sum across kinds and
-/// clamp to [0.0, 10.0].
-pub fn score(reasons: &[AiGuardReason]) -> f32 {
-    let mut by_kind: BTreeMap<&'static str, Vec<&AiGuardReason>> = BTreeMap::new();
-    for r in reasons {
-        by_kind.entry(kind_key(r)).or_default().push(r);
-    }
-    let mut total = 0.0_f32;
-    for (_kind, group) in by_kind {
-        let base = weight_for(group[0]);
-        for (i, _r) in group.iter().enumerate() {
-            total += base * (1.0 + REPEAT_WEIGHT_STEP * (i as f32));
+/// Phase 3b.5 — operator-tunable rubric. Holds the active weights and
+/// metadata about which entries came from operator overrides. Built once
+/// at boot and on each policy reload; consulted by the score() pipeline.
+#[derive(Debug, Clone)]
+pub struct Rubric {
+    /// kind_key → weight. Keys are static strings owned by the rubric
+    /// module (returned by `kind_key()`). Defaults populate all 11 known
+    /// kinds; with_overrides() may replace values but never adds keys.
+    pub weights: HashMap<&'static str, f32>,
+    /// Subset of `weights` whose value came from an operator override
+    /// (vs hardcoded default). Used by doctor to display `*` marker.
+    pub overridden: HashSet<&'static str>,
+    /// Snake_case keys the operator override referenced but didn't match
+    /// any known kind. Surfaced by doctor as `[WARN] rubric override
+    /// ignored — unknown reason kind: '...'`.
+    pub unknown_override_keys: Vec<String>,
+}
+
+impl Rubric {
+    /// Build the canonical hardcoded weights — single source of truth for
+    /// defaults. Must match the historical `weight_for()` match arms for
+    /// all 11 kinds.
+    pub fn defaults() -> Self {
+        let mut w: HashMap<&'static str, f32> = HashMap::new();
+        w.insert("destructive_in_inline_command", 4.0);
+        w.insert("destructive_in_hook_script", 4.0);
+        w.insert("sandbox_disabled", 3.0);
+        w.insert("no_sandbox", 2.0);
+        w.insert("permissions_allow_broad", 2.0);
+        w.insert("external_script_unscanned", 1.5);
+        w.insert("broad_matcher_pre_tool_use", 1.5);
+        w.insert("broad_matcher_other", 0.5);
+        w.insert("permissions_deny_empty", 1.0);
+        w.insert("mcp_server_remote", 1.0);
+        w.insert("mcp_server_local_command", 0.5);
+        Rubric {
+            weights: w,
+            overridden: HashSet::new(),
+            unknown_override_keys: Vec::new(),
         }
     }
-    total.min(SCORE_MAX)
+
+    /// Apply operator overrides. Known keys (preloaded by `defaults()`) get
+    /// their weight replaced; the key is added to `overridden`. Unknown
+    /// keys are logged via `tracing::warn!` and accumulated into
+    /// `unknown_override_keys` (surfaced by doctor).
+    pub fn with_overrides(mut self, overrides: &HashMap<String, f32>) -> Self {
+        for (key, weight) in overrides {
+            let matched: Option<&'static str> = self
+                .weights
+                .keys()
+                .copied()
+                .find(|k| *k == key.as_str());
+            match matched {
+                Some(static_key) => {
+                    self.weights.insert(static_key, *weight);
+                    self.overridden.insert(static_key);
+                }
+                None => {
+                    tracing::warn!(
+                        key = %key,
+                        weight = %weight,
+                        "rubric override: unknown reason kind, ignoring"
+                    );
+                    self.unknown_override_keys.push(key.clone());
+                }
+            }
+        }
+        self
+    }
+
+    /// Weight for one occurrence of `reason`. Delegates to the existing
+    /// free `kind_key()` to determine the lookup key. Returns 0.0 (with a
+    /// `debug_assert!` for visibility in debug builds) if the kind is
+    /// unknown — defensive fallback so a future AiGuardReason variant
+    /// added without updating `Rubric::defaults()` doesn't panic in
+    /// release.
+    pub fn weight_for(&self, reason: &AiGuardReason) -> f32 {
+        let key = kind_key(reason);
+        match self.weights.get(key).copied() {
+            Some(w) => w,
+            None => {
+                debug_assert!(false, "Rubric::weight_for: unknown kind_key '{key}'");
+                0.0
+            }
+        }
+    }
+
+    /// Total score for a reason set. Mirrors the existing free `score()`
+    /// math exactly: per-kind grouping, first occurrence at full weight,
+    /// each repeat at +REPEAT_WEIGHT_STEP*i surcharge, sum across kinds,
+    /// clamp to [0.0, SCORE_MAX].
+    pub fn score(&self, reasons: &[AiGuardReason]) -> f32 {
+        let mut by_kind: BTreeMap<&'static str, Vec<&AiGuardReason>> = BTreeMap::new();
+        for r in reasons {
+            by_kind.entry(kind_key(r)).or_default().push(r);
+        }
+        let mut total = 0.0_f32;
+        for (_kind, group) in by_kind {
+            let base = self.weight_for(group[0]);
+            for (i, _r) in group.iter().enumerate() {
+                total += base * (1.0 + REPEAT_WEIGHT_STEP * (i as f32));
+            }
+        }
+        total.min(SCORE_MAX)
+    }
+}
+
+/// Back-compat shim — Phase 3b.5 introduced `Rubric` for tunable weights.
+/// Callers without access to a `RubricHandle` (e.g., tests, doctor's static
+/// fallback) keep this entry point. Live agent code uses
+/// `ctx.rubric.read().score(reasons)` via the handle.
+pub fn score(reasons: &[AiGuardReason]) -> f32 {
+    Rubric::defaults().score(reasons)
 }
 
 /// Map a score to its bucket per spec thresholds.
@@ -321,5 +405,112 @@ mod tests {
             script_path: PathBuf::from("/usr/local/bin/x.sh"),
         }];
         assert_eq!(score(&r), 1.5);
+    }
+
+    #[test]
+    fn rubric_defaults_produces_eleven_known_weights() {
+        let r = Rubric::defaults();
+        assert_eq!(r.weights.get("destructive_in_inline_command"), Some(&4.0));
+        assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&4.0));
+        assert_eq!(r.weights.get("sandbox_disabled"), Some(&3.0));
+        assert_eq!(r.weights.get("no_sandbox"), Some(&2.0));
+        assert_eq!(r.weights.get("permissions_allow_broad"), Some(&2.0));
+        assert_eq!(r.weights.get("external_script_unscanned"), Some(&1.5));
+        assert_eq!(r.weights.get("broad_matcher_pre_tool_use"), Some(&1.5));
+        assert_eq!(r.weights.get("broad_matcher_other"), Some(&0.5));
+        assert_eq!(r.weights.get("permissions_deny_empty"), Some(&1.0));
+        assert_eq!(r.weights.get("mcp_server_remote"), Some(&1.0));
+        assert_eq!(r.weights.get("mcp_server_local_command"), Some(&0.5));
+        assert_eq!(r.weights.len(), 11);
+    }
+
+    #[test]
+    fn rubric_with_overrides_replaces_known_keys() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("destructive_in_hook_script".to_string(), 5.5);
+        overrides.insert("broad_matcher_other".to_string(), 0.0);
+        let r = Rubric::defaults().with_overrides(&overrides);
+        assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&5.5));
+        assert_eq!(r.weights.get("broad_matcher_other"), Some(&0.0));
+        assert!(r.overridden.contains("destructive_in_hook_script"));
+        assert!(r.overridden.contains("broad_matcher_other"));
+        assert!(r.unknown_override_keys.is_empty());
+    }
+
+    #[test]
+    fn rubric_with_overrides_records_unknown_keys() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("unknown_key_test".to_string(), 3.0);
+        overrides.insert("destructive_in_hook_script".to_string(), 5.0);
+        let r = Rubric::defaults().with_overrides(&overrides);
+        assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&5.0));
+        assert_eq!(r.unknown_override_keys, vec!["unknown_key_test".to_string()]);
+    }
+
+    #[test]
+    fn rubric_with_overrides_empty_map_no_change() {
+        let r = Rubric::defaults().with_overrides(&std::collections::HashMap::new());
+        assert_eq!(r.weights, Rubric::defaults().weights);
+        assert!(r.overridden.is_empty());
+        assert!(r.unknown_override_keys.is_empty());
+    }
+
+    #[test]
+    fn rubric_score_matches_free_score_for_defaults() {
+        let reasons = vec![
+            AiGuardReason::DestructiveInInlineCommand {
+                pattern: "rm -rf".into(),
+                hook_event: "PreToolUse".into(),
+                snippet: "rm -rf /tmp".into(),
+            },
+            AiGuardReason::SandboxDisabled,
+        ];
+        assert_eq!(Rubric::defaults().score(&reasons), score(&reasons));
+    }
+
+    #[test]
+    fn rubric_score_with_override_changes_result() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("destructive_in_hook_script".to_string(), 0.0);
+        let r = Rubric::defaults().with_overrides(&overrides);
+        let reasons = vec![AiGuardReason::DestructiveInHookScript {
+            pattern: "rm -rf".into(),
+            hook_event: "PreToolUse".into(),
+            script_path: std::path::PathBuf::from("/tmp/h.sh"),
+            snippet: "rm -rf /tmp".into(),
+        }];
+        assert_eq!(r.score(&reasons), 0.0);
+    }
+
+    #[test]
+    fn rubric_weight_for_unknown_kind_returns_zero() {
+        // Defensive: build a Rubric with an empty weights map and assert
+        // weight_for returns 0.0 (with debug_assert! firing in debug mode,
+        // but this test runs in release config too — the assertion is
+        // skipped in release, the 0.0 fallback still applies).
+        //
+        // We can't easily test debug_assert separately, so we just check
+        // the fallback value here.
+        let r = Rubric {
+            weights: std::collections::HashMap::new(),
+            overridden: std::collections::HashSet::new(),
+            unknown_override_keys: vec![],
+        };
+        // Use a real variant so we don't have to construct anything weird —
+        // an empty weights map means kind_key() will return a string that
+        // isn't in r.weights, so weight_for returns 0.0.
+        // In a debug build the debug_assert will fire BEFORE returning 0.0,
+        // which fails the test. Wrap in std::panic::catch_unwind so the
+        // test passes in both debug and release builds.
+        let reason = AiGuardReason::SandboxDisabled;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            r.weight_for(&reason)
+        }));
+        match result {
+            Ok(w) => assert_eq!(w, 0.0, "release build: weight_for returns 0.0 for unknown kind"),
+            Err(_) => {
+                // Debug build: debug_assert! panicked. That's expected behavior.
+            }
+        }
     }
 }
