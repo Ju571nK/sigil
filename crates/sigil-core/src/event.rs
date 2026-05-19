@@ -97,6 +97,10 @@ pub enum AiTool {
     ClaudeDesktop,
     /// Phase 3b.6 — Continue.dev VSCode/JetBrains extension.
     ContinueDev,
+    /// Phase 3b.7 — Gemini CLI (google-gemini/gemini-cli). Wire string: "gemini".
+    Gemini,
+    /// Phase 3b.7 — Cursor IDE. Wire string: "cursor".
+    Cursor,
 }
 
 /// Phase 3b.1 — where the assessment applies on the host.
@@ -880,5 +884,15 @@ mod tests {
         assert_eq!(j, r#"{"kind":"application","app":"claude_desktop"}"#);
         let back: AiGuardScope = serde_json::from_str(&j).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn ai_tool_gemini_cursor_serde_round_trip() {
+        let g: AiTool = serde_json::from_value(serde_json::json!("gemini")).unwrap();
+        assert_eq!(g, AiTool::Gemini);
+        let c: AiTool = serde_json::from_value(serde_json::json!("cursor")).unwrap();
+        assert_eq!(c, AiTool::Cursor);
+        assert_eq!(serde_json::to_value(AiTool::Gemini).unwrap(), serde_json::json!("gemini"));
+        assert_eq!(serde_json::to_value(AiTool::Cursor).unwrap(), serde_json::json!("cursor"));
     }
 }

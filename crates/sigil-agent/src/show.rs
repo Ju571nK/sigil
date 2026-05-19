@@ -527,8 +527,10 @@ fn show_risk(tool: Option<String>, pretty: bool) -> anyhow::Result<i32> {
         None => None,
         Some("claude-code") | Some("claude_code") => Some(sigil_core::event::AiTool::ClaudeCode),
         Some("codex") => Some(sigil_core::event::AiTool::Codex),
+        Some("gemini") => Some(sigil_core::event::AiTool::Gemini),
+        Some("cursor") => Some(sigil_core::event::AiTool::Cursor),
         Some(other) => {
-            eprintln!("sigil show risk: unknown --tool '{other}' (expected: claude-code, codex)");
+            eprintln!("sigil show risk: unknown --tool '{other}' (expected: claude-code, codex, gemini, cursor)");
             return Ok(2);
         }
     };
@@ -580,6 +582,8 @@ fn write_risk_pretty(w: &mut impl Write, p: &RiskPayload) -> io::Result<()> {
             sigil_core::event::AiTool::Codex => "codex",
             sigil_core::event::AiTool::ClaudeDesktop => "claude-desktop",
             sigil_core::event::AiTool::ContinueDev => "continue-dev",
+            sigil_core::event::AiTool::Gemini => "gemini",
+            sigil_core::event::AiTool::Cursor => "cursor",
         };
         // Use the serde wire string (snake_case) rather than Debug. Robust
         // against future multi-word AiGuardBucket variants (e.g., "very_high")
