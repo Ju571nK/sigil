@@ -27,6 +27,25 @@ impl AiGuardParser for ClaudeCodeParser {
         ]
     }
 
+    fn collect_external_script_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
+        let claude = home_dir.join(".claude");
+        let base = read_json_optional(&claude.join("settings.json"))
+            .ok()
+            .flatten();
+        let local = read_json_optional(&claude.join("settings.local.json"))
+            .ok()
+            .flatten();
+        if base.is_none() && local.is_none() {
+            return Vec::new();
+        }
+        let merged = merge_overlay(
+            base.unwrap_or(serde_json::Value::Object(Default::default())),
+            local,
+        );
+        let hooks_dir = claude.join("hooks");
+        collect_external_script_paths_from_settings(&merged, &hooks_dir)
+    }
+
     fn assess(&self, home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
         let claude = home_dir.join(".claude");
         let base_path = claude.join("settings.json");
@@ -179,10 +198,15 @@ fn classify_command(
                 }
             }
         } else {
-            out.push(AiGuardReason::ExternalScriptUnscanned {
-                hook_event: event_name.to_string(),
-                script_path: candidate,
-            });
+            // Phase 3b.3 — external path: read script + scan via ext_script
+            // module. Falls back to ExternalScriptUnscanned when content
+            // can't be safely scanned (unreadable, too big, binary).
+            if let Some(r) = crate::ai_guard::ext_script::scan_external_script(
+                &candidate,
+                event_name,
+            ) {
+                out.push(r);
+            }
         }
         return Ok(());
     }
@@ -202,6 +226,62 @@ fn path_is_inside(candidate: &Path, root: &Path) -> bool {
     let c = dunce::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
     let r = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     c.starts_with(&r)
+}
+
+/// Phase 3b.3 — walk the `hooks` table of a Claude Code settings.json (or
+/// merged settings+local overlay) and return every command path that's
+/// classified as external (outside the convention hooks_dir). Caller is
+/// responsible for canonicalizing the returned paths before registering.
+pub(crate) fn collect_external_script_paths_from_settings(
+    settings: &serde_json::Value,
+    hooks_dir: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Some(hooks) = settings.get("hooks").and_then(serde_json::Value::as_object) else {
+        return out;
+    };
+    for (_event_name, entries) in hooks {
+        let Some(entries_arr) = entries.as_array() else { continue };
+        for entry in entries_arr {
+            let Some(inner) = entry.get("hooks").and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            for h in inner {
+                let Some(cmd) = h.get("command").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                if let Some(p) = external_path_from_command(cmd, hooks_dir) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Returns Some(path) if `cmd`'s first token is a path that lies OUTSIDE
+/// `hooks_dir` (i.e., would be classified as external by `classify_command`).
+/// Mirrors the path-detection logic of `classify_command` exactly.
+fn external_path_from_command(
+    cmd: &str,
+    hooks_dir: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let first_token = cmd.split_whitespace().next().unwrap_or("");
+    let has_shell_meta = first_token.contains('|') || first_token.contains('&');
+    let looks_pathish = !has_shell_meta
+        && (std::path::Path::new(first_token).is_absolute()
+            || first_token.starts_with('~')
+            || first_token.contains('/')
+            || first_token.contains('\\'));
+    if !looks_pathish {
+        return None;
+    }
+    let candidate = std::path::PathBuf::from(first_token);
+    if path_is_inside(&candidate, hooks_dir) {
+        None
+    } else {
+        Some(candidate)
+    }
 }
 
 /// Truncate command for inclusion in evidence (max 80 chars, sanitize NULs).
@@ -311,6 +391,25 @@ impl AiGuardParser for ClaudeCodeProjectParser {
             cd.join("settings.local.json"),
             cd.join("hooks"),
         ]
+    }
+
+    fn collect_external_script_paths(&self, _home_dir: &Path) -> Vec<PathBuf> {
+        let claude = self.repo_root.join(".claude");
+        let base = read_json_optional(&claude.join("settings.json"))
+            .ok()
+            .flatten();
+        let local = read_json_optional(&claude.join("settings.local.json"))
+            .ok()
+            .flatten();
+        if base.is_none() && local.is_none() {
+            return Vec::new();
+        }
+        let merged = merge_overlay(
+            base.unwrap_or(serde_json::Value::Object(Default::default())),
+            local,
+        );
+        let hooks_dir = claude.join("hooks");
+        collect_external_script_paths_from_settings(&merged, &hooks_dir)
     }
 
     fn assess(&self, _home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
@@ -760,5 +859,108 @@ mod tests {
         };
         let err = p.assess(std::path::Path::new("/unused")).unwrap_err();
         assert!(matches!(err, AssessError::Parse { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn external_script_destructive_emits_destructive_in_hook_script() {
+        use std::io::Write;
+
+        let mut ext = tempfile::NamedTempFile::new().unwrap();
+        ext.write_all(b"#!/bin/bash\nrm -rf /tmp/sigil-3b3\n").unwrap();
+        ext.flush().unwrap();
+        let ext_path = ext.path().to_path_buf();
+
+        let hooks_dir = std::path::PathBuf::from("/nonexistent/.claude/hooks");
+        let settings = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": ext_path.to_str().unwrap()
+                    }]
+                }]
+            }
+        });
+        let mut out = Vec::new();
+        emit_hook_reasons(&settings, &hooks_dir, &mut out).unwrap();
+        assert!(
+            out.iter().any(|r| matches!(
+                r,
+                AiGuardReason::DestructiveInHookScript { .. }
+            )),
+            "expected DestructiveInHookScript for external script, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn external_script_safe_emits_nothing() {
+        use std::io::Write;
+        let mut ext = tempfile::NamedTempFile::new().unwrap();
+        ext.write_all(b"#!/bin/bash\necho hello\n").unwrap();
+        ext.flush().unwrap();
+        let ext_path = ext.path().to_path_buf();
+
+        let hooks_dir = std::path::PathBuf::from("/nonexistent/.claude/hooks");
+        let settings = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": ext_path.to_str().unwrap()
+                    }]
+                }]
+            }
+        });
+        let mut out = Vec::new();
+        emit_hook_reasons(&settings, &hooks_dir, &mut out).unwrap();
+        assert!(
+            !out.iter().any(|r| matches!(
+                r,
+                AiGuardReason::DestructiveInHookScript { .. }
+                    | AiGuardReason::ExternalScriptUnscanned { .. }
+            )),
+            "expected no hook-script reason for safe external script, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn external_script_missing_emits_unscanned_fallback() {
+        let hooks_dir = std::path::PathBuf::from("/nonexistent/.claude/hooks");
+        let settings = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "/tmp/sigil-3b3-missing-script-abc123"
+                    }]
+                }]
+            }
+        });
+        let mut out = Vec::new();
+        emit_hook_reasons(&settings, &hooks_dir, &mut out).unwrap();
+        assert!(
+            out.iter().any(|r| matches!(
+                r,
+                AiGuardReason::ExternalScriptUnscanned { .. }
+            )),
+            "expected ExternalScriptUnscanned for missing external script, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn collect_external_script_paths_helper_returns_path() {
+        let settings = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "/opt/sigil-tools/pre.sh"
+                    }]
+                }]
+            }
+        });
+        let hooks_dir = std::path::PathBuf::from("/nonexistent/.claude/hooks");
+        let paths = collect_external_script_paths_from_settings(&settings, &hooks_dir);
+        assert_eq!(paths, vec![std::path::PathBuf::from("/opt/sigil-tools/pre.sh")]);
     }
 }

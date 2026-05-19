@@ -40,6 +40,19 @@ pub trait AiGuardParser: Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any {
         &()
     }
+
+    /// Phase 3b.3 — return the external (non-convention-dir) hook script paths
+    /// referenced by this parser's config. Default: empty. Implementations
+    /// re-read their config and extract path strings (caller will canonicalize).
+    ///
+    /// Called by runtime boot + policy_reload_task to populate
+    /// `ExtScriptRegistry`. Paths are also pushed to `effective.targets` as
+    /// synthetic WatchTarget entries so the OS watcher subscribes.
+    fn collect_external_script_paths(&self, _home_dir: &std::path::Path)
+        -> Vec<std::path::PathBuf>
+    {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
