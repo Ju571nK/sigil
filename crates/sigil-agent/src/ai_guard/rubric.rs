@@ -82,11 +82,8 @@ impl Rubric {
     /// `unknown_override_keys` (surfaced by doctor).
     pub fn with_overrides(mut self, overrides: &HashMap<String, f32>) -> Self {
         for (key, weight) in overrides {
-            let matched: Option<&'static str> = self
-                .weights
-                .keys()
-                .copied()
-                .find(|k| *k == key.as_str());
+            let matched: Option<&'static str> =
+                self.weights.keys().copied().find(|k| *k == key.as_str());
             match matched {
                 Some(static_key) => {
                     self.weights.insert(static_key, *weight);
@@ -444,7 +441,10 @@ mod tests {
         overrides.insert("destructive_in_hook_script".to_string(), 5.0);
         let r = Rubric::defaults().with_overrides(&overrides);
         assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&5.0));
-        assert_eq!(r.unknown_override_keys, vec!["unknown_key_test".to_string()]);
+        assert_eq!(
+            r.unknown_override_keys,
+            vec!["unknown_key_test".to_string()]
+        );
     }
 
     #[test]
@@ -503,11 +503,13 @@ mod tests {
         // which fails the test. Wrap in std::panic::catch_unwind so the
         // test passes in both debug and release builds.
         let reason = AiGuardReason::SandboxDisabled;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            r.weight_for(&reason)
-        }));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.weight_for(&reason)));
         match result {
-            Ok(w) => assert_eq!(w, 0.0, "release build: weight_for returns 0.0 for unknown kind"),
+            Ok(w) => assert_eq!(
+                w, 0.0,
+                "release build: weight_for returns 0.0 for unknown kind"
+            ),
             Err(_) => {
                 // Debug build: debug_assert! panicked. That's expected behavior.
             }

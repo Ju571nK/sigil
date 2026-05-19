@@ -230,8 +230,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // warn-logged at build time. Shared handle is passed to TaskCtx
     // (dispatcher reads per cycle) and ReloadCtx (rebuilds on reload).
     let rubric_handle = std::sync::Arc::new(parking_lot::RwLock::new(
-        crate::ai_guard::rubric::Rubric::defaults()
-            .with_overrides(&effective.rubric_overrides),
+        crate::ai_guard::rubric::Rubric::defaults().with_overrides(&effective.rubric_overrides),
     ));
 
     // 2. Expand paths per user → watch paths + watch roots.

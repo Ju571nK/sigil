@@ -40,8 +40,7 @@ fn doctor_prints_ai_guard_section_when_agent_down() {
         "doctor output missing AI Guard section header. Output:\n{stdout}"
     );
     assert!(
-        stdout.contains("sigil agent not running")
-            || stdout.contains("Effective Rubric (static)"),
+        stdout.contains("sigil agent not running") || stdout.contains("Effective Rubric (static)"),
         "doctor missing fallback indicator. Output:\n{stdout}"
     );
 }
@@ -95,9 +94,9 @@ rubric_overrides:
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Find the row "destructive_in_hook_script ... 5.0 *"
-    let found = stdout.lines().any(|l| {
-        l.contains("destructive_in_hook_script") && l.contains("5.0") && l.contains('*')
-    });
+    let found = stdout
+        .lines()
+        .any(|l| l.contains("destructive_in_hook_script") && l.contains("5.0") && l.contains('*'));
     assert!(
         found,
         "doctor missing override marker for destructive_in_hook_script. Output:\n{stdout}"

@@ -334,8 +334,8 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     // warn-logged by with_overrides and accumulated into the new
     // Rubric's unknown_override_keys.
     {
-        let new_rubric = crate::ai_guard::rubric::Rubric::defaults()
-            .with_overrides(&effective.rubric_overrides);
+        let new_rubric =
+            crate::ai_guard::rubric::Rubric::defaults().with_overrides(&effective.rubric_overrides);
         let overridden_count = new_rubric.overridden.len();
         let unknown_count = new_rubric.unknown_override_keys.len();
         *ctx.rubric.write() = new_rubric;

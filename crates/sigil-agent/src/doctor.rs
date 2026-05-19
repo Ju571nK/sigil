@@ -222,7 +222,9 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
                     }
                 }
                 None => {
-                    println!("[INFO] daemon returned no AI Guard report; falling back to static rubric");
+                    println!(
+                        "[INFO] daemon returned no AI Guard report; falling back to static rubric"
+                    );
                     print_static_rubric(&effective);
                 }
             },
