@@ -25,6 +25,7 @@ fn weight_for(reason: &AiGuardReason) -> f32 {
         AiGuardReason::BroadMatcher { .. } => 0.5,
         AiGuardReason::PermissionsDenyEmpty => 1.0,
         AiGuardReason::McpServerRemote { .. } => 1.0,
+        AiGuardReason::McpServerLocalCommand { .. } => 0.5,
     }
 }
 
@@ -43,6 +44,7 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
         AiGuardReason::BroadMatcher { .. } => "broad_matcher_other",
         AiGuardReason::PermissionsDenyEmpty => "permissions_deny_empty",
         AiGuardReason::McpServerRemote { .. } => "mcp_server_remote",
+        AiGuardReason::McpServerLocalCommand { .. } => "mcp_server_local_command",
     }
 }
 

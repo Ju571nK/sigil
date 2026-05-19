@@ -169,6 +169,10 @@ pub enum AiGuardReason {
     SandboxDisabled,
     /// MCP server pointing at a remote URL was added.
     McpServerRemote { server_name: String, url: String },
+    /// MCP server using a local command (stdio transport) was added.
+    /// Phase 3b.7 — rule pack engine emits this when a `command:` key is
+    /// found under `mcpServers.*` in Gemini/Cursor settings files.
+    McpServerLocalCommand { server_name: String, command: String },
 }
 
 /// Phase 3b.4-pre — full host identity / OS / network snapshot, emitted by

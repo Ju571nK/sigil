@@ -297,8 +297,13 @@ pub fn merge(
 /// transport — they are NOT linked into the OSS binary at build time.
 /// See `LICENSING.md` for the rationale.
 pub fn defaults() -> Result<PolicyDocument, PolicyError> {
+    let rule_packs = parse_default_rule_packs()?;
     match sigil_rules_basic::defaults_for_current_os() {
-        Some(yaml) => parse(yaml),
+        Some(yaml) => {
+            let mut doc = parse(yaml)?;
+            doc.rule_packs = rule_packs;
+            Ok(doc)
+        }
         None => Ok(PolicyDocument {
             // Platforms with no built-in baseline (anything other than
             // macOS / Windows / Linux): empty until an operator policy loads.
@@ -309,9 +314,20 @@ pub fn defaults() -> Result<PolicyDocument, PolicyError> {
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
-            rule_packs: vec![],
+            rule_packs,
         }),
     }
+}
+
+/// Phase 3b.7 — parse the compile-time-embedded default rule pack YAMLs
+/// from sigil-rules-basic into RulePack instances. Failure here is a
+/// build-time bug in the OSS defaults (malformed YAML or schema drift)
+/// and surfaces as PolicyError::Parse at startup.
+fn parse_default_rule_packs() -> Result<Vec<RulePack>, PolicyError> {
+    sigil_rules_basic::DEFAULT_RULE_PACKS
+        .iter()
+        .map(|yaml| serde_yaml::from_str::<RulePack>(yaml).map_err(PolicyError::from))
+        .collect()
 }
 
 // Silence unused-import warning when `PathBuf` is only used via submodules.
@@ -733,6 +749,44 @@ rule_packs:
         let eff = merge(defaults_doc, Some(user), current_platform()).unwrap();
         assert_eq!(eff.rule_packs.len(), 1);
         assert_eq!(eff.rule_packs[0].watched_paths, vec!["~/override/path"]);
+    }
+
+    #[test]
+    fn defaults_includes_two_rule_packs() {
+        let doc = defaults().expect("defaults parse");
+        assert_eq!(doc.rule_packs.len(), 2);
+        let ids: Vec<&str> = doc.rule_packs.iter().map(|p| p.id.as_str()).collect();
+        assert!(ids.contains(&"gemini-default"));
+        assert!(ids.contains(&"cursor-default"));
+    }
+
+    #[test]
+    fn default_rule_pack_gemini_has_expected_shape() {
+        let doc = defaults().expect("defaults");
+        let gemini = doc
+            .rule_packs
+            .iter()
+            .find(|p| p.id == "gemini-default")
+            .unwrap();
+        assert_eq!(gemini.pack_version, 1);
+        assert_eq!(gemini.tool, crate::event::AiTool::Gemini);
+        assert!(matches!(gemini.scope, crate::event::AiGuardScope::UserGlobal));
+        assert_eq!(gemini.watched_paths, vec!["~/.gemini/settings.json"]);
+        assert!(gemini.rules.iter().any(|r| r.id == "sandbox-disabled"));
+    }
+
+    #[test]
+    fn default_rule_pack_cursor_has_expected_shape() {
+        let doc = defaults().expect("defaults");
+        let cursor = doc
+            .rule_packs
+            .iter()
+            .find(|p| p.id == "cursor-default")
+            .unwrap();
+        assert_eq!(cursor.pack_version, 1);
+        assert_eq!(cursor.tool, crate::event::AiTool::Cursor);
+        assert!(matches!(cursor.scope, crate::event::AiGuardScope::UserGlobal));
+        assert_eq!(cursor.watched_paths, vec!["~/.cursor/mcp.json"]);
     }
 
     #[test]
