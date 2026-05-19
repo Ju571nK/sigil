@@ -399,6 +399,29 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         parking_lot::RwLock<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
     > = Arc::new(parking_lot::RwLock::new(parsers_vec));
 
+    // Phase 3b.3 Task 6 — resolve `home_dir` once (shared by ext-script
+    // discovery + ai_guard TaskCtx below) and discover external hook-script
+    // paths for every parser. Synthesizes one in-memory WatchTarget per
+    // unique canonical path so the OS watcher subscribes, and populates an
+    // `ExtScriptRegistry` keyed by (AiTool, AiGuardScope) so the dispatcher
+    // can route fsnotify events on script paths to the right parser.
+    // Synthetic targets are in-memory only — never written back to disk.
+    let home_dir = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let ext_scripts_registry = crate::ai_guard::empty_ext_script_registry();
+    {
+        let parsers_snapshot: Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>> =
+            ai_guard_parsers.read().clone();
+        discover_and_register_ext_scripts(
+            &parsers_snapshot,
+            &home_dir,
+            &ext_scripts_registry,
+            &mut effective,
+        );
+    }
+
     // Live policy reload: on a successful `apply_policy`, re-derive watch
     // targets/roots from the new policy.yaml and apply them to the running
     // pipeline + watcher (no restart). Owns the watcher handle + targets sender.
@@ -443,22 +466,18 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // Phase 3b.6.1 — `parsers` is shared with `policy_reload_task` via an
     // `Arc<RwLock<..>>` so hot-reload can mutate the live parser set.
     {
-        let home_dir = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("/"));
         let ctx = crate::ai_guard::TaskCtx {
             parsers: ai_guard_parsers,
             fc_rx: ai_guard_fc_tx.subscribe(),
             event_tx: tx_sink.clone(),
             state: ai_guard_state.clone(),
             heartbeat_interval: std::time::Duration::from_secs(24 * 3600),
-            home_dir,
+            home_dir: home_dir.clone(),
             host_id: host_id.clone(),
-            // Phase 3b.3 Task 5 — registry initialized empty here. Task 6 will
-            // populate it from parser configs at boot and pass the same handle
-            // to policy_reload_task so hot-reload can refresh script paths.
-            ext_scripts: crate::ai_guard::empty_ext_script_registry(),
+            // Phase 3b.3 Task 6 — registry populated from parser configs at
+            // boot above. Task 7 will share the same handle with
+            // policy_reload_task so hot-reload can refresh script paths.
+            ext_scripts: ext_scripts_registry.clone(),
         };
         sup.track(
             "ai_guard",
@@ -913,4 +932,109 @@ pub(crate) fn push_codex_synthetic_target(
         follow_symlinks: false,
         disabled: false,
     });
+}
+
+/// Phase 3b.3 — push ONE synthetic WatchTarget for an external hook-script
+/// path. The id encodes the owning tool's display name and a blake3 hash of
+/// the canonical path. In-memory only; never written back to disk.
+pub(crate) fn push_ext_script_synthetic_target(
+    effective: &mut sigil_core::policy::EffectivePolicy,
+    tool_display: &str,
+    canonical_script_path: &std::path::Path,
+) {
+    let h = synthetic_target_id_suffix(canonical_script_path);
+    effective.targets.push(sigil_core::policy::WatchTarget {
+        id: format!("{tool_display}-extscript-{h}"),
+        description: format!(
+            "Phase 3b.3 synthetic ext-script: {}",
+            canonical_script_path.display()
+        ),
+        tier: sigil_core::policy::Tier::Critical,
+        platform: sigil_core::policy::Platform::Any,
+        paths: vec![canonical_script_path.to_string_lossy().to_string()],
+        recursive: false,
+        follow_symlinks: false,
+        disabled: false,
+    });
+}
+
+/// Phase 3b.3 — map `AiTool` to the display string used in synthetic
+/// WatchTarget ids for ext-scripts. Matches the existing per-repo naming
+/// convention (`continue`, `claude_code`, `codex`).
+pub(crate) fn tool_display_for_extscript(tool: sigil_core::event::AiTool) -> &'static str {
+    use sigil_core::event::AiTool;
+    match tool {
+        AiTool::ClaudeCode => "claude_code",
+        AiTool::Codex => "codex",
+        AiTool::ContinueDev => "continue",
+        AiTool::ClaudeDesktop => "claude_desktop",
+        AiTool::Gemini => "gemini",
+        AiTool::Cursor => "cursor",
+    }
+}
+
+/// Phase 3b.3 — best-effort expansion of `~` and `$VAR` in a script path.
+/// Uses the existing sigil-core expand machinery (with the `EnvLookup` unit
+/// type that defers to `std::env`) for parity with policy expansion. Falls
+/// back to the original path on any error.
+pub(crate) fn expand_user_path_for_ext_script(p: &std::path::Path) -> std::path::PathBuf {
+    let raw = p.to_string_lossy();
+    match sigil_core::policy::expand::expand(&raw, &EnvLookup) {
+        Ok(pb) => pb,
+        Err(_) => p.to_path_buf(),
+    }
+}
+
+/// Phase 3b.3 — for every parser in `parsers`, call
+/// `collect_external_script_paths`, expand + canonicalize each path,
+/// deduplicate across parsers, register results in `registry`, and push one
+/// synthetic WatchTarget per unique canonical path. Skips paths that fail
+/// to expand or canonicalize (e.g., the script is not yet installed on
+/// disk — registry will pick it up on the next reload after the operator
+/// drops the file in).
+pub(crate) fn discover_and_register_ext_scripts(
+    parsers: &[std::sync::Arc<dyn crate::ai_guard::parser::AiGuardParser>],
+    home_dir: &std::path::Path,
+    registry: &crate::ai_guard::ExtScriptRegistry,
+    effective: &mut sigil_core::policy::EffectivePolicy,
+) {
+    use std::collections::{BTreeSet, HashMap};
+
+    let mut per_parser: HashMap<
+        (sigil_core::event::AiTool, sigil_core::event::AiGuardScope),
+        Vec<std::path::PathBuf>,
+    > = HashMap::new();
+
+    let mut already_synthesized: BTreeSet<std::path::PathBuf> = BTreeSet::new();
+
+    for parser in parsers {
+        let raw_paths = parser.collect_external_script_paths(home_dir);
+        if raw_paths.is_empty() {
+            continue;
+        }
+        let mut canon_paths = Vec::with_capacity(raw_paths.len());
+        for raw in raw_paths {
+            let expanded = expand_user_path_for_ext_script(&raw);
+            let Ok(canon) = dunce::canonicalize(&expanded) else {
+                continue;
+            };
+            if already_synthesized.insert(canon.clone()) {
+                let display = tool_display_for_extscript(parser.tool());
+                push_ext_script_synthetic_target(effective, display, &canon);
+            }
+            canon_paths.push(canon);
+        }
+        if !canon_paths.is_empty() {
+            per_parser
+                .entry((parser.tool(), parser.scope()))
+                .or_default()
+                .extend(canon_paths);
+        }
+    }
+
+    let mut w = registry.write();
+    w.clear();
+    for (k, v) in per_parser {
+        w.insert(k, v);
+    }
 }
