@@ -69,6 +69,73 @@ where
     (added, removed)
 }
 
+/// Phase 3b.7 — reconcile rule pack parsers during hot-reload. Downcasts
+/// existing parsers via `as_any()` to identify rule pack parsers by id, diffs
+/// the old id set against the new (loadable) one, drops removed packs (and
+/// cleans up their (tool, scope) entries from the ai_guard state map), and
+/// pushes freshly-compiled parsers for newly-added packs. Returns
+/// (added_ids, removed_ids) for tracing + observability.
+fn reconcile_rule_packs(
+    guard: &mut parking_lot::RwLockWriteGuard<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
+    state: &Arc<parking_lot::RwLock<crate::ai_guard::task::StateMap>>,
+    new_packs: &[sigil_core::policy::RulePack],
+) -> (Vec<String>, Vec<String>) {
+    use std::collections::HashSet;
+
+    let new_ids: HashSet<String> = new_packs
+        .iter()
+        .filter(|p| crate::ai_guard::rule_pack::pack_is_loadable(p))
+        .map(|p| p.id.clone())
+        .collect();
+
+    let mut old_ids: HashSet<String> = HashSet::new();
+    let mut removed_scopes: Vec<(sigil_core::event::AiTool, sigil_core::event::AiGuardScope)> =
+        Vec::new();
+
+    guard.retain(|p| {
+        if let Some(rpp) = p
+            .as_any()
+            .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+        {
+            let id = rpp.pack.id.clone();
+            old_ids.insert(id.clone());
+            if new_ids.contains(&id) {
+                true
+            } else {
+                removed_scopes.push((rpp.pack.tool, rpp.pack.scope.clone()));
+                false
+            }
+        } else {
+            true
+        }
+    });
+
+    let added: Vec<String> = new_ids.difference(&old_ids).cloned().collect();
+    let removed: Vec<String> = old_ids.difference(&new_ids).cloned().collect();
+
+    for pack in new_packs.iter().filter(|p| added.contains(&p.id)) {
+        if !crate::ai_guard::rule_pack::pack_is_loadable(pack) {
+            continue;
+        }
+        match crate::ai_guard::rule_pack::parser::RulePackParser::new(pack.clone()) {
+            Ok(p) => guard.push(Arc::new(p)),
+            Err(e) => tracing::warn!(
+                id = %pack.id, error = ?e,
+                "rule_pack: reload load failed; skipping"
+            ),
+        }
+    }
+
+    if !removed_scopes.is_empty() {
+        let mut s = state.write();
+        for (tool, scope) in &removed_scopes {
+            s.remove(&(*tool, scope.clone()));
+        }
+    }
+
+    (added, removed)
+}
+
 /// Inputs for the reload task. The `WatcherHandle` lives here for the task's
 /// lifetime (so the OS watcher stays alive); `watched_roots` is the diff base
 /// for the next reconcile (start it equal to the roots `run` registered).
@@ -180,6 +247,8 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         claude_removed,
         codex_added,
         codex_removed,
+        rule_packs_added,
+        rule_packs_removed,
     ) = {
         let mut guard = ctx.parsers.write();
         let (a1, r1) = reconcile_per_repo(
@@ -203,7 +272,9 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
             &new_codex,
             |p| crate::ai_guard::CodexProjectParser { repo_root: p },
         );
-        (a1, r1, a2, r2, a3, r3)
+        let (rp_added, rp_removed) =
+            reconcile_rule_packs(&mut guard, &ctx.ai_guard_state, &effective.rule_packs);
+        (a1, r1, a2, r2, a3, r3, rp_added, rp_removed)
     };
 
     // Synthetic WatchTargets — in-memory only; never persisted.
@@ -224,7 +295,9 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         claude_code_removed = claude_removed.len(),
         codex_added = codex_added.len(),
         codex_removed = codex_removed.len(),
-        "policy reload: per-repo parsers reconciled"
+        rule_packs_added = rule_packs_added.len(),
+        rule_packs_removed = rule_packs_removed.len(),
+        "policy reload: per-repo parsers + rule packs reconciled"
     );
 
     let (expanded_paths, new_roots) = crate::runtime::expand_targets(&effective, plat);
@@ -662,5 +735,83 @@ mod tests {
                 )
         });
         assert!(has, "expected CodexProjectParser for repoA after reload");
+    }
+
+    // Phase 3b.7 — rule pack parser hot-reload reconciliation.
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_adds_rule_pack_when_user_adds_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\n";
+        let (mut ctx, plat, _trx, parsers, _state) =
+            build_ctx_with_parsers(dir.path(), initial);
+        reload(&mut ctx, &plat);
+
+        // Defaults loaded — 2 packs (gemini-default, cursor-default).
+        let default_count = parsers
+            .read()
+            .iter()
+            .filter(|p| {
+                p.as_any()
+                    .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                    .is_some()
+            })
+            .count();
+        assert_eq!(default_count, 2);
+
+        // Add a custom user rule pack.
+        let updated = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\nrule_packs:\n  - id: my-extra\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n";
+        std::fs::write(&ctx.policy_yaml_path, updated).unwrap();
+        reload(&mut ctx, &plat);
+
+        let has_extra = parsers.read().iter().any(|p| {
+            p.as_any()
+                .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                .map(|rpp| rpp.pack.id == "my-extra")
+                .unwrap_or(false)
+        });
+        assert!(has_extra, "expected my-extra rule pack after reload");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_removes_user_rule_pack_when_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\nrule_packs:\n  - id: my-extra\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n";
+        let (mut ctx, plat, _trx, parsers, _state) =
+            build_ctx_with_parsers(dir.path(), initial);
+        reload(&mut ctx, &plat);
+
+        // Confirm my-extra loaded.
+        assert!(parsers.read().iter().any(|p| {
+            p.as_any()
+                .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                .map(|rpp| rpp.pack.id == "my-extra")
+                .unwrap_or(false)
+        }));
+
+        // Drop the user pack — should leave just the 2 defaults.
+        let updated = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\n";
+        std::fs::write(&ctx.policy_yaml_path, updated).unwrap();
+        reload(&mut ctx, &plat);
+
+        let still_present = parsers.read().iter().any(|p| {
+            p.as_any()
+                .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                .map(|rpp| rpp.pack.id == "my-extra")
+                .unwrap_or(false)
+        });
+        assert!(!still_present, "my-extra should be removed after reload");
+
+        // Defaults still there.
+        let default_count = parsers
+            .read()
+            .iter()
+            .filter(|p| {
+                p.as_any()
+                    .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                    .is_some()
+            })
+            .count();
+        assert_eq!(default_count, 2);
     }
 }

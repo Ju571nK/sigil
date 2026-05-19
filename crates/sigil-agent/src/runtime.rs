@@ -380,6 +380,21 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     for repo_root in codex_repos {
         parsers_vec.push(Arc::new(crate::ai_guard::CodexProjectParser { repo_root }));
     }
+    // Phase 3b.7 — declarative rule packs (sigil-rules-basic defaults +
+    // operator overlay from signed envelope, already merged into
+    // effective.rule_packs by sigil_core::policy::merge).
+    for pack in &effective.rule_packs {
+        if !crate::ai_guard::rule_pack::pack_is_loadable(pack) {
+            continue;
+        }
+        match crate::ai_guard::rule_pack::parser::RulePackParser::new(pack.clone()) {
+            Ok(p) => parsers_vec.push(Arc::new(p)),
+            Err(e) => tracing::warn!(
+                id = %pack.id, error = ?e,
+                "rule_pack: load failed; skipping"
+            ),
+        }
+    }
     let ai_guard_parsers: Arc<
         parking_lot::RwLock<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
     > = Arc::new(parking_lot::RwLock::new(parsers_vec));
