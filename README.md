@@ -224,7 +224,7 @@ flowchart LR
   for **Claude Code + Codex** hooks, permissions, sandbox boundaries, and
   MCP servers. Emits `ai_guard_risk_assessed` evidence variants alongside
   the underlying `file_change` events; `sigil show risk` operator CLI.
-- **Phase 3b.3 — shipped <SHIP_SHA>.** Dynamic hook-script watch:
+- **Phase 3b.3 — shipped 053bbe3.** Dynamic hook-script watch:
   external (non-convention-dir) hook scripts referenced by claude_code /
   codex / continue_dev configs are now read + scanned for destructive
   patterns (256 KB cap, binary detection, follow symlinks via dunce).
