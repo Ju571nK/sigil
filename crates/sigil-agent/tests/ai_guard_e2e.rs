@@ -508,3 +508,82 @@ targets: []
 
     agent.join.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gemini_default_rule_pack_emits_sandbox_disabled() {
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
+    std::env::set_var("HOME", &home);
+
+    std::fs::create_dir_all(home.join(".gemini")).unwrap();
+    std::fs::write(
+        home.join(".gemini").join("settings.json"),
+        r#"{"sandbox": false}"#,
+    )
+    .unwrap();
+
+    // Empty policy.yaml — defaults (gemini-default + cursor-default rule packs)
+    // are loaded automatically via sigil_core::policy::defaults().
+    let policy_yaml = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
+    let agent = TestAgentBuilder::new().policy(policy_yaml).start().await;
+
+    let ev = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "gemini"
+                    && v["evidence"]["scope"]["kind"] == "user_global"
+            },
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("expected AiGuardRiskAssessed for gemini");
+    let reasons = ev["evidence"]["reasons"].as_array().expect("reasons");
+    assert!(
+        reasons.iter().any(|r| r["kind"] == "sandbox_disabled"),
+        "expected sandbox_disabled in {reasons:?}"
+    );
+
+    agent.join.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cursor_default_rule_pack_emits_remote_mcp() {
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    std::env::set_var("HOME", &home);
+
+    std::fs::create_dir_all(home.join(".cursor")).unwrap();
+    std::fs::write(
+        home.join(".cursor").join("mcp.json"),
+        r#"{"mcpServers": {"foo": {"url": "https://example.com"}}}"#,
+    )
+    .unwrap();
+
+    let policy_yaml = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
+    let agent = TestAgentBuilder::new().policy(policy_yaml).start().await;
+
+    let ev = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "cursor"
+                    && v["evidence"]["scope"]["kind"] == "user_global"
+            },
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("expected AiGuardRiskAssessed for cursor");
+    let reasons = ev["evidence"]["reasons"].as_array().expect("reasons");
+    assert!(
+        reasons.iter().any(|r| {
+            r["kind"] == "mcp_server_remote" && r["server_name"] == "foo"
+        }),
+        "expected mcp_server_remote with server_name=foo in {reasons:?}"
+    );
+
+    agent.join.abort();
+}
