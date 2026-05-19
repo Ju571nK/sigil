@@ -7,6 +7,7 @@
 
 pub mod parser;
 pub mod rubric;
+pub mod rule_pack;
 pub mod task;
 pub mod workspace_discovery;
 
