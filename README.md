@@ -224,8 +224,14 @@ flowchart LR
   for **Claude Code + Codex** hooks, permissions, sandbox boundaries, and
   MCP servers. Emits `ai_guard_risk_assessed` evidence variants alongside
   the underlying `file_change` events; `sigil show risk` operator CLI.
-- **Phase 3b.3 — planned.** Dynamic hook-script watch (settings.json
-  parsing → watch arbitrary script paths).
+- **Phase 3b.3 — shipped <SHIP_SHA>.** Dynamic hook-script watch:
+  external (non-convention-dir) hook scripts referenced by claude_code /
+  codex / continue_dev configs are now read + scanned for destructive
+  patterns (256 KB cap, binary detection, follow symlinks via dunce).
+  Synthetic in-memory WatchTargets make fsnotify fire on script changes
+  between policy reloads; reconcile_ext_scripts diffs the registry on
+  reload. Wire-additive — no new AiGuardReason variants. Also closes a
+  pre-existing gap where codex convention-dir scripts were never read.
 - **Phase 3b.4 — shipped.** Server-side fleet aggregation on
   `sigil-server`: bearer-gated read API (9 endpoints — `/v1/healthz`,
   `/v1/meta`, `/v1/policy/meta`, `/v1/fleet/hosts` + detail, `/v1/fleet/risk`,

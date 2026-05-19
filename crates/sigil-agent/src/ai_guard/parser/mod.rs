@@ -48,9 +48,10 @@ pub trait AiGuardParser: Send + Sync {
     /// Called by runtime boot + policy_reload_task to populate
     /// `ExtScriptRegistry`. Paths are also pushed to `effective.targets` as
     /// synthetic WatchTarget entries so the OS watcher subscribes.
-    fn collect_external_script_paths(&self, _home_dir: &std::path::Path)
-        -> Vec<std::path::PathBuf>
-    {
+    fn collect_external_script_paths(
+        &self,
+        _home_dir: &std::path::Path,
+    ) -> Vec<std::path::PathBuf> {
         Vec::new()
     }
 }

@@ -34,7 +34,5 @@ pub type ExtScriptRegistry = std::sync::Arc<
 
 /// Construct an empty `ExtScriptRegistry`. Used by tests + runtime bootstrap.
 pub fn empty_ext_script_registry() -> ExtScriptRegistry {
-    std::sync::Arc::new(parking_lot::RwLock::new(
-        std::collections::HashMap::new(),
-    ))
+    std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new()))
 }

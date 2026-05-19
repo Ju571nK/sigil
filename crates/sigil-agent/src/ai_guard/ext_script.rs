@@ -47,7 +47,7 @@ pub fn looks_binary(prefix: &[u8]) -> bool {
 /// Returns:
 /// - `Some(DestructiveInHookScript { .. })` — content read, pattern matched
 /// - `Some(ExternalScriptUnscanned { .. })` — fallback (unreadable, too big,
-///    binary, or I/O error)
+///   binary, or I/O error)
 /// - `None` — content read and clean (no destructive pattern; no emission)
 pub fn scan_external_script(path: &Path, hook_event: &str) -> Option<AiGuardReason> {
     use std::io::Read;

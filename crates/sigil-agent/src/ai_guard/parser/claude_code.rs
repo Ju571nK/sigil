@@ -201,10 +201,9 @@ fn classify_command(
             // Phase 3b.3 — external path: read script + scan via ext_script
             // module. Falls back to ExternalScriptUnscanned when content
             // can't be safely scanned (unreadable, too big, binary).
-            if let Some(r) = crate::ai_guard::ext_script::scan_external_script(
-                &candidate,
-                event_name,
-            ) {
+            if let Some(r) =
+                crate::ai_guard::ext_script::scan_external_script(&candidate, event_name)
+            {
                 out.push(r);
             }
         }
@@ -241,7 +240,9 @@ pub(crate) fn collect_external_script_paths_from_settings(
         return out;
     };
     for (_event_name, entries) in hooks {
-        let Some(entries_arr) = entries.as_array() else { continue };
+        let Some(entries_arr) = entries.as_array() else {
+            continue;
+        };
         for entry in entries_arr {
             let Some(inner) = entry.get("hooks").and_then(serde_json::Value::as_array) else {
                 continue;
@@ -866,7 +867,8 @@ mod tests {
         use std::io::Write;
 
         let mut ext = tempfile::NamedTempFile::new().unwrap();
-        ext.write_all(b"#!/bin/bash\nrm -rf /tmp/sigil-3b3\n").unwrap();
+        ext.write_all(b"#!/bin/bash\nrm -rf /tmp/sigil-3b3\n")
+            .unwrap();
         ext.flush().unwrap();
         let ext_path = ext.path().to_path_buf();
 
@@ -884,10 +886,8 @@ mod tests {
         let mut out = Vec::new();
         emit_hook_reasons(&settings, &hooks_dir, &mut out).unwrap();
         assert!(
-            out.iter().any(|r| matches!(
-                r,
-                AiGuardReason::DestructiveInHookScript { .. }
-            )),
+            out.iter()
+                .any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })),
             "expected DestructiveInHookScript for external script, got {out:?}"
         );
     }
@@ -939,10 +939,8 @@ mod tests {
         let mut out = Vec::new();
         emit_hook_reasons(&settings, &hooks_dir, &mut out).unwrap();
         assert!(
-            out.iter().any(|r| matches!(
-                r,
-                AiGuardReason::ExternalScriptUnscanned { .. }
-            )),
+            out.iter()
+                .any(|r| matches!(r, AiGuardReason::ExternalScriptUnscanned { .. })),
             "expected ExternalScriptUnscanned for missing external script, got {out:?}"
         );
     }
@@ -961,6 +959,9 @@ mod tests {
         });
         let hooks_dir = std::path::PathBuf::from("/nonexistent/.claude/hooks");
         let paths = collect_external_script_paths_from_settings(&settings, &hooks_dir);
-        assert_eq!(paths, vec![std::path::PathBuf::from("/opt/sigil-tools/pre.sh")]);
+        assert_eq!(
+            paths,
+            vec![std::path::PathBuf::from("/opt/sigil-tools/pre.sh")]
+        );
     }
 }

@@ -550,7 +550,8 @@ mod tests {
     fn external_slash_command_destructive_emits_destructive_in_hook_script() {
         use std::io::Write;
         let mut ext = tempfile::NamedTempFile::new().unwrap();
-        ext.write_all(b"#!/bin/bash\nrm -rf /tmp/sigil-3b3-cd\n").unwrap();
+        ext.write_all(b"#!/bin/bash\nrm -rf /tmp/sigil-3b3-cd\n")
+            .unwrap();
         ext.flush().unwrap();
         let ext_path = ext.path().to_str().unwrap().to_string();
 
@@ -564,10 +565,8 @@ mod tests {
         let mut out = Vec::new();
         emit_slash_command_reasons(&settings, &hooks_dir, &mut out);
         assert!(
-            out.iter().any(|r| matches!(
-                r,
-                AiGuardReason::DestructiveInHookScript { .. }
-            )),
+            out.iter()
+                .any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })),
             "expected DestructiveInHookScript for external slash command, got {out:?}"
         );
     }
