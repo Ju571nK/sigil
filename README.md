@@ -266,7 +266,7 @@ flowchart LR
   between policy reloads; reconcile_ext_scripts diffs the registry on
   reload. Wire-additive — no new AiGuardReason variants. Also closes a
   pre-existing gap where codex convention-dir scripts were never read.
-- **Phase 3b.3.1 — in flight.** Recursive source/include hook script scan:
+- **Phase 3b.3.1 — shipped f5a80bd.** Recursive source/include hook script scan:
   walks `source X` / `. X` directives inside hook scripts (depth 5, file-count
   32, cycle-safe) so destructive patterns hidden in sourced helpers are caught.
   Adds `source_chain: Vec<PathBuf>` to `DestructiveInHookScript` events for
