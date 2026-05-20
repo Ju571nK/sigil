@@ -69,7 +69,11 @@ fn generate_license_id(customer_id: &str, now: OffsetDateTime) -> String {
         .map(|c| c.to_ascii_uppercase())
         .take(12)
         .collect();
-    let cust = if cust.is_empty() { "CUST".to_string() } else { cust };
+    let cust = if cust.is_empty() {
+        "CUST".to_string()
+    } else {
+        cust
+    };
     format!("SIGIL-{}-{}-{}", now.year(), cust, random_suffix())
 }
 
@@ -113,8 +117,7 @@ mod tests {
         // Verifier expects "ed25519:<base64>" entries keyed by id.
         let entry = format!("ed25519:{}", kf.ed25519_pubkey_b64);
         let keys = [(kf.id.as_str(), entry.as_str())];
-        let (doc, expired) =
-            verify_license_allow_expired_with_keys(&signed, now, &keys).unwrap();
+        let (doc, expired) = verify_license_allow_expired_with_keys(&signed, now, &keys).unwrap();
         assert!(!expired);
         assert_eq!(doc.customer_id, "ACME");
         assert_eq!(doc.max_hosts, 1000);
@@ -148,7 +151,9 @@ mod tests {
         let suffix = parts[3];
         assert_eq!(suffix.len(), 6, "got: {id}");
         assert!(
-            suffix.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
+            suffix
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
             "got: {id}"
         );
     }
