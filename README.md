@@ -310,6 +310,11 @@ flowchart LR
   defaults shipped for **Gemini CLI** (`~/.gemini/settings.json`) and
   **Cursor** (`~/.cursor/mcp.json`) — replaces the originally-planned
   hardcoded Phase 3b.2.
+- **License enforcement structure — in flight.** `sigil-server` verifies a
+  vendor-signed license, measures active fleet size against a free tier (200
+  active hosts) or licensed limit, surfaces `license` status on `/v1/meta`, and
+  writes an append-only `license-audit.jsonl` record. Structure for future
+  commercial licensing — no billing and no blocking (measures, doesn't block).
 - **Phase 3c — planned.** Reproducible-build attestation; additional
   posture signals.
 
