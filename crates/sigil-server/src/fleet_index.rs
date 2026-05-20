@@ -286,6 +286,16 @@ impl FleetIndex {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Count hosts whose `last_seen_ts` is within `window` of `now`.
+    /// Hosts with no `last_seen_ts` are excluded.
+    pub fn active_host_count(&self, now: time::OffsetDateTime, window: time::Duration) -> u32 {
+        self.inner
+            .read()
+            .values()
+            .filter(|h| h.last_seen_ts.is_some_and(|ts| now - ts <= window))
+            .count() as u32
+    }
 }
 
 #[cfg(test)]
@@ -366,5 +376,30 @@ mod index_tests {
         assert_eq!(idx.len(), 1);
         assert!(idx.get_host("h1").is_none());
         assert!(idx.get_host("h2").is_some());
+    }
+
+    #[test]
+    fn active_host_count_respects_window() {
+        use time::Duration;
+        let now = time::macros::datetime!(2026-05-20 12:00 UTC);
+        let idx = FleetIndex::default();
+        let mut fresh = std::collections::HashMap::new();
+
+        let mut recent = HostSummary::new("recent".into());
+        recent.last_seen_ts = Some(now - Duration::days(3));
+        let mut stale = HostSummary::new("stale".into());
+        stale.last_seen_ts = Some(now - Duration::days(10));
+        let mut boundary = HostSummary::new("boundary".into());
+        boundary.last_seen_ts = Some(now - Duration::days(7)); // exactly at window
+        let never = HostSummary::new("never".into()); // last_seen_ts == None
+
+        for h in [recent, stale, boundary, never] {
+            fresh.insert(h.host_id.clone(), h);
+        }
+        idx.replace(fresh);
+
+        let count = idx.active_host_count(now, Duration::days(7));
+        // recent (3d) + boundary (exactly 7d) = 2; stale (10d) and never (None) excluded.
+        assert_eq!(count, 2);
     }
 }
