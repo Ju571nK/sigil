@@ -20,6 +20,8 @@ fn state_in(dir: &std::path::Path, allowlist: Option<HashSet<String>>) -> Arc<Ap
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: ReadToken(None),
+        license_state: sigil_core::license::status::LicenseState::Free,
+        active_window_days: 7,
     })
 }
 
