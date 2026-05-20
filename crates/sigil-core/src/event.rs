@@ -148,6 +148,12 @@ pub enum AiGuardReason {
         hook_event: String,
         script_path: PathBuf,
         snippet: String,
+        /// 3b.3.1 — chain of script paths from the entry hook down to the
+        /// file where the pattern matched. Empty = match was in the entry
+        /// (back-compat with 3b.3 emissions). Populated form is
+        /// `[entry, ..., matched_file]`.
+        #[serde(default)]
+        source_chain: Vec<PathBuf>,
     },
     /// Hook command points to an external script we did NOT scan
     /// (path outside known convention dir). 3b.3 marker.
@@ -907,5 +913,57 @@ mod tests {
             serde_json::to_value(AiTool::Cursor).unwrap(),
             serde_json::json!("cursor")
         );
+    }
+
+    #[test]
+    fn destructive_in_hook_script_round_trip_empty_chain() {
+        let r = AiGuardReason::DestructiveInHookScript {
+            pattern: "rm -rf".into(),
+            hook_event: "PreToolUse".into(),
+            script_path: PathBuf::from("/tmp/hook.sh"),
+            snippet: "rm -rf /tmp/foo".into(),
+            source_chain: Vec::new(),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: AiGuardReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn destructive_in_hook_script_round_trip_populated_chain() {
+        let r = AiGuardReason::DestructiveInHookScript {
+            pattern: "rm -rf".into(),
+            hook_event: "PreToolUse".into(),
+            script_path: PathBuf::from("/tmp/entry.sh"),
+            snippet: "rm -rf /tmp/foo".into(),
+            source_chain: vec![
+                PathBuf::from("/tmp/entry.sh"),
+                PathBuf::from("/tmp/helper.sh"),
+            ],
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: AiGuardReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn destructive_in_hook_script_old_json_missing_chain_deserializes_empty() {
+        // Backward compat: 3b.3-era events have no source_chain field.
+        // AiGuardReason uses internally-tagged serde (tag = "kind", snake_case).
+        let old_json = serde_json::json!({
+            "kind": "destructive_in_hook_script",
+            "pattern": "rm -rf",
+            "hook_event": "PreToolUse",
+            "script_path": "/tmp/hook.sh",
+            "snippet": "rm -rf /tmp/foo"
+        })
+        .to_string();
+        let r: AiGuardReason = serde_json::from_str(&old_json).unwrap();
+        match r {
+            AiGuardReason::DestructiveInHookScript { source_chain, .. } => {
+                assert!(source_chain.is_empty());
+            }
+            other => panic!("expected DestructiveInHookScript, got {other:?}"),
+        }
     }
 }

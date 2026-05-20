@@ -193,6 +193,7 @@ fn classify_script_path(s: &str, hook_event: &str, hooks_dir: &Path, out: &mut V
                     hook_event: hook_event.to_string(),
                     script_path: candidate,
                     snippet: contents.chars().take(80).collect(),
+                    source_chain: Vec::new(),
                 });
             }
         }

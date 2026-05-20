@@ -478,6 +478,7 @@ mod tests {
             hook_event: "PreToolUse".into(),
             script_path: std::path::PathBuf::from("/tmp/h.sh"),
             snippet: "rm -rf /tmp".into(),
+            source_chain: Vec::new(),
         }];
         assert_eq!(r.score(&reasons), 0.0);
     }

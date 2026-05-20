@@ -169,6 +169,7 @@ fn classify_command(cmd: &str, event_name: &str, hooks_dir: &Path, out: &mut Vec
                             hook_event: event_name.to_string(),
                             script_path: candidate,
                             snippet: snippet_around_match(&contents, pat),
+                            source_chain: Vec::new(),
                         });
                     }
                 }

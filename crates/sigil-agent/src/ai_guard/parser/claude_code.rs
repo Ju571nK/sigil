@@ -183,6 +183,7 @@ fn classify_command(
                             hook_event: event_name.to_string(),
                             script_path: candidate.clone(),
                             snippet: snippet_around_match(&contents, pat),
+                            source_chain: Vec::new(),
                         });
                     }
                 }

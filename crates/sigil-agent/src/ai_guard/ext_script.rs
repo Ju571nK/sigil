@@ -98,6 +98,7 @@ pub fn scan_external_script(path: &Path, hook_event: &str) -> Option<AiGuardReas
             hook_event: hook_event.to_string(),
             script_path: path.to_path_buf(),
             snippet: snippet_around_match(&contents, pat),
+            source_chain: Vec::new(),
         });
     }
 
