@@ -38,6 +38,8 @@ async fn meta_reports_over_limit_for_free_tier_above_200_active_hosts() {
         read_token: ReadToken(Some("tok".into())),
         license_state: LicenseState::Free,
         active_window_days: 7,
+        audit_key: None,
+        audit_head: Mutex::new(None),
     });
 
     let app = build_router(state);
@@ -99,6 +101,8 @@ async fn meta_reports_ok_for_valid_license_under_its_limit() {
         read_token: ReadToken(Some("tok".into())),
         license_state: LicenseState::Valid(doc),
         active_window_days: 7,
+        audit_key: None,
+        audit_head: Mutex::new(None),
     });
 
     let app = build_router(state);
@@ -161,6 +165,8 @@ async fn meta_reports_expired_falls_back_to_free_tier() {
         read_token: ReadToken(Some("tok".into())),
         license_state: LicenseState::Expired(doc),
         active_window_days: 7,
+        audit_key: None,
+        audit_head: Mutex::new(None),
     });
 
     let app = build_router(state);

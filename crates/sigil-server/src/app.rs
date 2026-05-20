@@ -25,6 +25,10 @@ pub struct AppState {
     pub license_state: sigil_core::license::status::LicenseState,
     /// Rolling window (days) for active-host counting.
     pub active_window_days: u32,
+    /// Audit signing key (auto-generated). `None` ⇒ audit signing disabled.
+    pub audit_key: Option<crate::audit_key::AuditKey>,
+    /// Latest signed audit-chain head, updated by the audit task; read by /v1/meta.
+    pub audit_head: Mutex<Option<sigil_core::audit::AuditHead>>,
 }
 
 pub type SharedState = Arc<AppState>;

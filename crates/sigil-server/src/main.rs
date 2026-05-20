@@ -60,6 +60,16 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         now,
     );
 
+    let audit_dir = cfg.high_water_path();
+    let audit_dir = audit_dir
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let audit_key = sigil_server::audit_key::AuditKey::load_or_create(audit_dir);
+    match &audit_key {
+        Some(k) => tracing::info!(pubkey_id = %k.pubkey_id, "audit signing key ready"),
+        None => tracing::warn!("audit signing key unavailable; license audit log disabled"),
+    }
+
     Ok(Arc::new(AppState {
         events_out_dir: cfg.events_out_dir.clone(),
         policy_bundle_path: cfg.policy_bundle_path.clone(),
@@ -70,14 +80,17 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         read_token,
         license_state,
         active_window_days,
+        audit_key,
+        audit_head: Mutex::new(None),
     }))
 }
 
 async fn run(cfg: ServerConfig) -> Result<()> {
     let state = build_state(&cfg)?;
 
-    // License audit task: append a durable record on boot, every 6h, and on
-    // any ok/over_limit transition. Append-only; never blocks serving.
+    // License audit task: append a durable, signed, hash-chained record on
+    // boot, every 6h, and on any ok/over_limit transition. Append-only;
+    // never blocks serving. No signing key ⇒ no lines (measure-don't-block).
     {
         let state = state.clone();
         let audit_path = state
@@ -88,9 +101,19 @@ async fn run(cfg: ServerConfig) -> Result<()> {
         let window_days = state.active_window_days;
         let version = env!("CARGO_PKG_VERSION");
         tokio::spawn(async move {
-            use sigil_core::license::status::compute_status;
-            use sigil_server::license_state::{append_audit_line, audit_line, should_audit};
-            let mut last: Option<sigil_core::license::status::LicenseStatusState> = None;
+            use sigil_core::audit::{sign_record, AuditHead, GENESIS_PREV_HASH};
+            use sigil_core::license::status::{compute_status, LicenseStatusState};
+            use sigil_server::license_state::{
+                append_audit_line, build_audit_record, resume_chain, should_audit,
+            };
+
+            let key = match state.audit_key.as_ref() {
+                Some(k) => k,
+                None => return,
+            };
+            let (mut seq, mut prev_hash) =
+                resume_chain(&audit_path).unwrap_or((0, GENESIS_PREV_HASH.to_string()));
+            let mut last: Option<LicenseStatusState> = None;
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
             loop {
                 tick.tick().await;
@@ -100,8 +123,25 @@ async fn run(cfg: ServerConfig) -> Result<()> {
                     .active_host_count(now, time::Duration::days(window_days as i64));
                 let status = compute_status(&state.license_state, active, window_days);
                 if should_audit(last, status.state) {
-                    append_audit_line(&audit_path, &audit_line(&status, now, version));
-                    last = Some(status.state);
+                    let record = build_audit_record(&status, seq, prev_hash.clone(), now, version);
+                    match sign_record(record, &key.signing_key, &key.pubkey_id) {
+                        Ok(signed) => {
+                            append_audit_line(
+                                &audit_path,
+                                &serde_json::to_string(&signed).unwrap(),
+                            );
+                            prev_hash = signed.hash.clone();
+                            seq += 1;
+                            *state.audit_head.lock().unwrap() = Some(AuditHead {
+                                seq: signed.record.seq,
+                                hash: signed.hash,
+                                sig: signed.sig,
+                                pubkey_id: signed.pubkey_id,
+                            });
+                            last = Some(status.state);
+                        }
+                        Err(e) => tracing::warn!(%e, "license audit sign failed"),
+                    }
                 }
             }
         });
