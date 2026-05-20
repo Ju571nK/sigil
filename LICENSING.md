@@ -192,3 +192,26 @@ compiled-in `SIGIL_LICENSE_PUBKEYS` trust anchor. The signing tool is OSS
 generate a new keypair with a new `--id`, add its pubkey alongside the old one,
 and sign new licenses with the new key. Old licenses keep verifying until you
 remove the old pubkey in a later release.
+
+---
+
+## Audit log tamper-evidence (and its limits)
+
+`sigil-server` writes a signed, hash-chained `license-audit.jsonl`: each line is
+an ed25519-signed record whose `prev_hash` links to the previous line. The
+verification logic lives in OSS `sigil-core::audit`; anyone can check a chain
+with `sigil-sign verify-audit <file> --pubkey ed25519:<b64>`.
+
+**What it proves.** Any edit, reordering, deletion, or truncation of the log
+breaks a hash or a signature and is detected by the verifier. This fully covers
+third-party tampering and accidental corruption.
+
+**What it does NOT prove.** The signing key is auto-generated on the server's
+own host, so a determined operator who controls that host can re-sign a forged
+chain. The operator is bound only for history *before an externally-observed
+head*: the signed head is exposed at `GET /v1/meta` (`audit_head`), and any
+external party (a vendor audit, monitoring, sigil-manager) that records a head
+pins the operator to that history. Capture heads off-box to anchor the chain.
+
+This is corroborating evidence, not an automatic legal proof of usage.
+Automatic push-anchoring and public timestamping are future work.
