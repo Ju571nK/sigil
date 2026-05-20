@@ -699,6 +699,141 @@ targets:
     agent.join.abort();
 }
 
+/// Phase 3b.3.1 — recursive source/include scan: entry hook sources helper
+/// which contains a destructive pattern. Asserts the emitted event carries a
+/// `DestructiveInHookScript` reason whose `source_chain` is
+/// `[entry, helper]` (length 2).
+///
+/// Flow:
+///   - `settings.json` → `PreToolUse` hook → `entry.sh` (absolute path)
+///   - `entry.sh`  → `source ./helper.sh`
+///   - `helper.sh` → `rm -rf /tmp/foo`
+///
+/// Because `entry.sh` is outside any convention dir, the parser delegates to
+/// `scan_hook_script`, which walks the `source` chain and emits the reason
+/// with `source_chain = [entry.sh, helper.sh]`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn recursive_source_chain_emitted() {
+    let _home_guard = HOME_LOCK.lock().await;
+    let td = tempfile::TempDir::new().unwrap();
+    let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
+    std::env::set_var("HOME", &home);
+
+    // 1) Write the scripts FIRST so the boot scan finds them on disk.
+    //    Located outside any convention dir to exercise the external-script
+    //    discovery path (not the convention-dir in-tree scan).
+    let ext_dir = home.join("sigil-3b3.1-ext");
+    std::fs::create_dir_all(&ext_dir).unwrap();
+
+    // helper.sh holds the destructive pattern.
+    let helper = ext_dir.join("helper.sh");
+    std::fs::write(&helper, b"#!/bin/bash\nrm -rf /tmp/foo\n").unwrap();
+
+    // entry.sh sources helper.sh by relative path.
+    let entry = ext_dir.join("entry.sh");
+    std::fs::write(&entry, b"#!/bin/bash\nsource ./helper.sh\n").unwrap();
+
+    // Canonicalize paths (macOS /var → /private/var).
+    let entry_canon = dunce::canonicalize(&entry).unwrap();
+
+    // 2) Write Claude Code settings.json referencing entry.sh as a PreToolUse
+    //    hook command (absolute canonicalized path so the parser can find it).
+    let claude = home.join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    let settings = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": ".*",
+                "hooks": [{
+                    "type": "command",
+                    "command": entry_canon.to_str().unwrap()
+                }]
+            }]
+        }
+    });
+    std::fs::write(
+        claude.join("settings.json"),
+        serde_json::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+
+    // 3) Absolute-path policy (built-in ~ expansion ignores HOME override —
+    //    see first test in this file for the explanation).
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+targets:
+  - id: e2e-test-3b3.1-recursive-chain-abs
+    description: Claude Code guard surface for 3b.3.1 recursive source chain
+    tier: critical
+    platform: any
+    paths:
+      - "{home}/.claude/settings.json"
+      - "{home}/.claude/settings.local.json"
+      - "{home}/.claude/hooks"
+    recursive: true
+    follow_symlinks: false
+"#,
+        home = home.display()
+    );
+
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
+
+    // 4) Wait for an AiGuardRiskAssessed event for claude_code.
+    let ev = agent
+        .wait_for_event(
+            |v| {
+                v["evidence"]["kind"] == "ai_guard_risk_assessed"
+                    && v["evidence"]["tool"] == "claude_code"
+            },
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("expected an AiGuardRiskAssessed event for claude_code");
+
+    // 5) Find the DestructiveInHookScript reason with a non-empty source_chain.
+    let reasons = ev["evidence"]["reasons"].as_array().expect("reasons array");
+    let chain_reason = reasons.iter().find(|r| {
+        r["kind"] == "destructive_in_hook_script"
+            && r["source_chain"]
+                .as_array()
+                .map(|c| !c.is_empty())
+                .unwrap_or(false)
+    });
+
+    let reason = chain_reason.unwrap_or_else(|| {
+        panic!(
+            "expected destructive_in_hook_script with non-empty source_chain; reasons = {reasons:?}"
+        )
+    });
+
+    let script_path = reason["script_path"].as_str().expect("script_path is a string");
+    assert!(
+        script_path.ends_with("entry.sh"),
+        "script_path should point at entry.sh, got {script_path:?}"
+    );
+
+    let chain = reason["source_chain"].as_array().expect("source_chain is an array");
+    assert_eq!(
+        chain.len(),
+        2,
+        "chain should be [entry.sh, helper.sh] (length 2), got {chain:?}"
+    );
+    assert!(
+        chain[0].as_str().unwrap_or("").ends_with("entry.sh"),
+        "chain[0] should be entry.sh, got {:?}",
+        chain[0]
+    );
+    assert!(
+        chain[1].as_str().unwrap_or("").ends_with("helper.sh"),
+        "chain[1] should be helper.sh, got {:?}",
+        chain[1]
+    );
+
+    agent.join.abort();
+}
+
 /// Phase 3b.5 Task 6: end-to-end verification that an operator rubric
 /// override in `policy.yaml` is applied to the emitted event's `score`
 /// field at boot.
