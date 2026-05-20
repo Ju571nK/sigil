@@ -8,5 +8,6 @@
 pub mod cli;
 pub mod inspect;
 pub mod keygen;
+pub mod license;
 pub mod sign;
 pub mod verify;
