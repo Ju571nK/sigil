@@ -75,6 +75,38 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
 
 async fn run(cfg: ServerConfig) -> Result<()> {
     let state = build_state(&cfg)?;
+
+    // License audit task: append a durable record on boot, every 6h, and on
+    // any ok/over_limit transition. Append-only; never blocks serving.
+    {
+        let state = state.clone();
+        let audit_path = state
+            .high_water_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("license-audit.jsonl");
+        let window_days = state.active_window_days;
+        let version = env!("CARGO_PKG_VERSION");
+        tokio::spawn(async move {
+            use sigil_core::license::status::compute_status;
+            use sigil_server::license_state::{append_audit_line, audit_line, should_audit};
+            let mut last: Option<sigil_core::license::status::LicenseStatusState> = None;
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+            loop {
+                tick.tick().await;
+                let now = time::OffsetDateTime::now_utc();
+                let active = state
+                    .fleet_index
+                    .active_host_count(now, time::Duration::days(window_days as i64));
+                let status = compute_status(&state.license_state, active, window_days);
+                if should_audit(last, status.state) {
+                    append_audit_line(&audit_path, &audit_line(&status, now, version));
+                    last = Some(status.state);
+                }
+            }
+        });
+    }
+
     let app = build_router(state);
 
     if cfg.mtls_enabled() {
