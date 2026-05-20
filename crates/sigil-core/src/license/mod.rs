@@ -38,13 +38,14 @@ pub struct SignedLicense {
 /// exists in this repo. Each entry is `(key_id, "ed25519:<base64 pubkey>")`.
 /// Multiple entries support rotation. Replaced via a new release, not config.
 ///
-/// SHIPS EMPTY this phase: the vendor key ceremony (generate offline keypair,
-/// paste the pubkey here) is an out-of-band step tracked in the issue. The
-/// verification logic below is fully implemented and tested via an injected
-/// test key (see `verify_license_allow_expired_with_keys`).
-pub const SIGIL_LICENSE_PUBKEYS: &[(&str, &str)] = &[
-    // ("sigil-license-2026", "ed25519:<base64 vendor pubkey v1>"),
-];
+/// Vendor key v1 (`sigil-license-2026`) is populated below: its private key was
+/// generated offline and is held only by the vendor. Add a new entry with a
+/// fresh id to rotate. The verification logic is also exercised in tests via an
+/// injected test key (see `verify_license_allow_expired_with_keys`).
+pub const SIGIL_LICENSE_PUBKEYS: &[(&str, &str)] = &[(
+    "sigil-license-2026",
+    "ed25519:zARxZlmbI1U4lIdxo0SPpe9LEva2KKhYD7Eq4iwAC+c=",
+)];
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum LicenseError {
