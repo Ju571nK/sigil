@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use sigil_signer::cli::{Cli, Command};
-use sigil_signer::{inspect, keygen, sign, verify};
+use sigil_signer::{inspect, keygen, license, sign, verify};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -71,6 +71,40 @@ fn main() -> Result<()> {
         Command::Inspect { r#in } => {
             let r = inspect::inspect_file(&r#in)?;
             inspect::print_report(&r);
+        }
+        Command::License {
+            key,
+            customer_id,
+            max_hosts,
+            valid_days,
+            out,
+            license_id,
+        } => {
+            let key_file = keygen::SigningKeyFile::load(&key)?;
+            let signed = license::sign_to_file(
+                license::LicenseArgs {
+                    key_file: &key_file,
+                    customer_id,
+                    max_hosts,
+                    valid_days,
+                    license_id,
+                    now: OffsetDateTime::now_utc(),
+                },
+                &out,
+            )?;
+            println!("signed license → {}", out.display());
+            println!("  license_id:        {}", signed.license.license_id);
+            println!("  customer_id:       {}", signed.license.customer_id);
+            println!("  max_hosts:         {}", signed.license.max_hosts);
+            println!(
+                "  not_after:         {}",
+                signed
+                    .license
+                    .not_after
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap()
+            );
+            println!("  signing_pubkey_id: {}", signed.signing_pubkey_id);
         }
     }
     Ok(())
