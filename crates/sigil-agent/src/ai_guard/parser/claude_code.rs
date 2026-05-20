@@ -174,38 +174,16 @@ fn classify_command(
     if looks_pathish {
         let candidate = std::path::PathBuf::from(first_token);
         if path_is_inside(&candidate, hooks_dir) {
-            // Convention dir → read script, scan for destructive patterns.
-            match std::fs::read_to_string(&candidate) {
-                Ok(contents) => {
-                    if let Some(pat) = rubric::first_destructive_pattern(&contents) {
-                        out.push(AiGuardReason::DestructiveInHookScript {
-                            pattern: pat.to_string(),
-                            hook_event: event_name.to_string(),
-                            script_path: candidate.clone(),
-                            snippet: snippet_around_match(&contents, pat),
-                        });
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    // Script referenced but not present — quietly skip; the
-                    // tool will fail to invoke at runtime, not our concern.
-                }
-                Err(source) => {
-                    return Err(AssessError::Io {
-                        path: candidate,
-                        source,
-                    });
-                }
-            }
+            // 3b.3.1 — convention-dir script delegates to recursive walker
+            // so sourced files inside the convention dir also get scanned.
+            out.extend(crate::ai_guard::ext_script::scan_hook_script(
+                &candidate, event_name,
+            ));
         } else {
-            // Phase 3b.3 — external path: read script + scan via ext_script
-            // module. Falls back to ExternalScriptUnscanned when content
-            // can't be safely scanned (unreadable, too big, binary).
-            if let Some(r) =
-                crate::ai_guard::ext_script::scan_external_script(&candidate, event_name)
-            {
-                out.push(r);
-            }
+            // 3b.3.1 — external path also uses recursive walker.
+            out.extend(crate::ai_guard::ext_script::scan_hook_script(
+                &candidate, event_name,
+            ));
         }
         return Ok(());
     }
@@ -289,19 +267,6 @@ fn external_path_from_command(
 fn truncate_for_snippet(s: &str) -> String {
     let cleaned: String = s.chars().filter(|c| *c != '\0').collect();
     cleaned.chars().take(80).collect()
-}
-
-/// Find the matching pattern in `contents` and return up to 80 chars of context
-/// centered on the first match.
-fn snippet_around_match(contents: &str, pattern: &str) -> String {
-    if let Ok(re) = regex::Regex::new(pattern) {
-        if let Some(m) = re.find(contents) {
-            let start = m.start().saturating_sub(20);
-            let end = (m.end() + 20).min(contents.len());
-            return truncate_for_snippet(&contents[start..end]);
-        }
-    }
-    truncate_for_snippet(contents)
 }
 
 pub(crate) fn emit_permission_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
@@ -655,11 +620,14 @@ mod tests {
         );
         let p = ClaudeCodeParser;
         let reasons = p.assess(dir.path()).unwrap();
+        // 3b.3.1: scan_hook_script canonicalizes paths via dunce, so compare
+        // with the canonical form of script (on macOS /tmp → /private/var/...).
+        let script_canon = dunce::canonicalize(&script).unwrap_or(script.clone());
         assert!(
             reasons.iter().any(|r| matches!(
                 r,
                 AiGuardReason::DestructiveInHookScript { script_path, .. }
-                    if script_path == &script
+                    if script_path == &script_canon
             )),
             "expected DestructiveInHookScript in {reasons:?}"
         );
