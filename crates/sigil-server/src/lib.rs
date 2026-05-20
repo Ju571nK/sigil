@@ -24,6 +24,7 @@ pub mod events_route;
 pub mod fleet_index;
 pub mod fleet_index_update;
 pub mod jsonl_scan;
+pub mod license_state;
 pub mod persist;
 pub mod policy_route;
 pub mod routes;
