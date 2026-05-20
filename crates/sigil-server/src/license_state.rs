@@ -15,16 +15,26 @@ pub const DEFAULT_ACTIVE_WINDOW_DAYS: u32 = 7;
 pub fn load_license(path: &Path, now: OffsetDateTime) -> LicenseState {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(_) => return LicenseState::Invalid { reason: "license file unreadable".into() },
+        Err(_) => {
+            return LicenseState::Invalid {
+                reason: "license file unreadable".into(),
+            }
+        }
     };
     let env: SignedLicense = match serde_json::from_slice(&bytes) {
         Ok(e) => e,
-        Err(e) => return LicenseState::Invalid { reason: format!("parse: {e}") },
+        Err(e) => {
+            return LicenseState::Invalid {
+                reason: format!("parse: {e}"),
+            }
+        }
     };
     match verify_license_allow_expired(&env, now) {
         Ok((doc, false)) => LicenseState::Valid(doc),
         Ok((doc, true)) => LicenseState::Expired(doc),
-        Err(e) => LicenseState::Invalid { reason: e.to_string() },
+        Err(e) => LicenseState::Invalid {
+            reason: e.to_string(),
+        },
     }
 }
 
@@ -76,7 +86,11 @@ pub fn audit_line(status: &LicenseStatus, now: OffsetDateTime, server_version: &
 /// Append-only — never truncates. Best-effort: logs on I/O error, never panics.
 pub fn append_audit_line(audit_path: &Path, line: &str) {
     use std::io::Write;
-    match std::fs::OpenOptions::new().create(true).append(true).open(audit_path) {
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(audit_path)
+    {
         Ok(mut f) => {
             if let Err(e) = writeln!(f, "{line}") {
                 tracing::warn!(%e, "license audit append failed");

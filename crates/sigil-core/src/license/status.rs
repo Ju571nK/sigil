@@ -45,11 +45,7 @@ pub struct LicenseStatus {
 
 /// Pure status computation. `active_count` and `window_days` are supplied by
 /// the server (which knows the clock + fleet index).
-pub fn compute_status(
-    state: &LicenseState,
-    active_count: u32,
-    window_days: u32,
-) -> LicenseStatus {
+pub fn compute_status(state: &LicenseState, active_count: u32, window_days: u32) -> LicenseStatus {
     let (effective_max, licensed, expired, customer_id, license_id, not_after) = match state {
         LicenseState::Valid(d) => (
             d.max_hosts,
@@ -152,7 +148,13 @@ mod tests {
 
     #[test]
     fn invalid_falls_back_to_free() {
-        let s = compute_status(&LicenseState::Invalid { reason: "bad sig".into() }, 50, 7);
+        let s = compute_status(
+            &LicenseState::Invalid {
+                reason: "bad sig".into(),
+            },
+            50,
+            7,
+        );
         assert_eq!(s.effective_max_hosts, 200);
         assert_eq!(s.state, LicenseStatusState::Ok);
         assert!(!s.licensed);

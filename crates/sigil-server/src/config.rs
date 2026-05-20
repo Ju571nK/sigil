@@ -154,7 +154,10 @@ license:
 "#;
         let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
         let lic = cfg.license.expect("license block present");
-        assert_eq!(lic.path.as_deref(), Some(std::path::Path::new("/etc/sigil/license.bundle")));
+        assert_eq!(
+            lic.path.as_deref(),
+            Some(std::path::Path::new("/etc/sigil/license.bundle"))
+        );
         assert_eq!(lic.active_window_days, Some(14));
     }
 

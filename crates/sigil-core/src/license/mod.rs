@@ -179,12 +179,9 @@ mod tests {
         let keys = [("vk1", entry.as_str())];
         let mut env = sign(&sk, "vk1", doc(datetime!(2027-01-01 0:00 UTC)));
         env.license.max_hosts = 999999; // tamper after signing
-        let err = verify_license_allow_expired_with_keys(
-            &env,
-            datetime!(2026-06-01 0:00 UTC),
-            &keys,
-        )
-        .unwrap_err();
+        let err =
+            verify_license_allow_expired_with_keys(&env, datetime!(2026-06-01 0:00 UTC), &keys)
+                .unwrap_err();
         assert_eq!(err, LicenseError::BadSignature);
     }
 
@@ -194,12 +191,9 @@ mod tests {
         let keys = [("vk1", entry.as_str())];
         let mut env = sign(&sk, "vk1", doc(datetime!(2027-01-01 0:00 UTC)));
         env.signing_pubkey_id = "nope".into();
-        let err = verify_license_allow_expired_with_keys(
-            &env,
-            datetime!(2026-06-01 0:00 UTC),
-            &keys,
-        )
-        .unwrap_err();
+        let err =
+            verify_license_allow_expired_with_keys(&env, datetime!(2026-06-01 0:00 UTC), &keys)
+                .unwrap_err();
         assert_eq!(err, LicenseError::UnknownKey("nope".into()));
     }
 
@@ -219,12 +213,9 @@ mod tests {
         let (sk, entry) = test_keypair();
         let keys = [("vk1", entry.as_str())];
         let env = sign(&sk, "vk1", doc(datetime!(2026-01-01 0:00 UTC)));
-        let (doc, expired) = verify_license_allow_expired_with_keys(
-            &env,
-            datetime!(2026-06-01 0:00 UTC),
-            &keys,
-        )
-        .unwrap();
+        let (doc, expired) =
+            verify_license_allow_expired_with_keys(&env, datetime!(2026-06-01 0:00 UTC), &keys)
+                .unwrap();
         assert!(expired);
         assert!(doc.not_after < datetime!(2026-06-01 0:00 UTC));
     }
@@ -238,12 +229,9 @@ mod tests {
             signature: "!!!notbase64!!!".into(),
             signing_pubkey_id: "vk1".into(),
         };
-        let err = verify_license_allow_expired_with_keys(
-            &env,
-            datetime!(2026-06-01 0:00 UTC),
-            &keys,
-        )
-        .unwrap_err();
+        let err =
+            verify_license_allow_expired_with_keys(&env, datetime!(2026-06-01 0:00 UTC), &keys)
+                .unwrap_err();
         assert_eq!(err, LicenseError::BadSignature);
     }
 }
