@@ -68,4 +68,25 @@ pub enum Command {
         #[arg(long, value_name = "PATH")]
         r#in: PathBuf,
     },
+    /// Sign a license document into a SignedLicense bundle (vendor key required).
+    License {
+        /// Path to the vendor signing keypair JSON (output of `keygen`).
+        #[arg(long)]
+        key: PathBuf,
+        /// Customer identifier (e.g. ACME).
+        #[arg(long)]
+        customer_id: String,
+        /// Maximum licensed active hosts.
+        #[arg(long)]
+        max_hosts: u32,
+        /// Days from now until the license expires (not_after = now + valid_days).
+        #[arg(long)]
+        valid_days: u32,
+        /// Output path for the SignedLicense JSON bundle.
+        #[arg(long)]
+        out: PathBuf,
+        /// Optional explicit license id; auto-generated (SIGIL-<year>-<CUST>-<rand6>) if omitted.
+        #[arg(long)]
+        license_id: Option<String>,
+    },
 }

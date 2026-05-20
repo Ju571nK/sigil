@@ -142,3 +142,53 @@ extended rule packs as **signed policy bundles**.
 ([github.com/Ju571nK/sigil-rules-pro](https://github.com/Ju571nK/sigil-rules-pro)).
 The signer + sender pieces land in Plan B; until then the YAML is only
 consumed via the signed-bundle test fixtures used by `verify.rs`.
+
+---
+
+## Issuing licenses (vendor key ceremony)
+
+Commercial licenses are vendor-signed and verified by the OSS agent against the
+compiled-in `SIGIL_LICENSE_PUBKEYS` trust anchor. The signing tool is OSS
+(`sigil-sign license`); only the vendor private key is secret.
+
+1. **Generate the vendor keypair** (once, in a secure environment):
+
+   ```
+   sigil-sign keygen --id sigil-license-2026 --out vendor-license.key
+   ```
+
+   The `--id` becomes the `signing_pubkey_id` stamped on every license you issue.
+
+2. **Secure the private key.** Store `vendor-license.key` in a password manager,
+   encrypted volume, or HSM. NEVER commit it; never leave it in a repo working
+   tree. Anyone with this file can forge licenses.
+
+3. **Publish the public key.** Copy the printed `ed25519_pubkey_b64` into
+   `SIGIL_LICENSE_PUBKEYS` in `crates/sigil-core/src/license/mod.rs`:
+
+   ```
+   pub const SIGIL_LICENSE_PUBKEYS: &[(&str, &str)] = &[
+       ("sigil-license-2026", "ed25519:<ed25519_pubkey_b64>"),
+   ];
+   ```
+
+   Cut a release so deployed servers trust licenses signed by this key.
+
+4. **Issue a license:**
+
+   ```
+   sigil-sign license \
+     --key vendor-license.key \
+     --customer-id ACME \
+     --max-hosts 1000 \
+     --valid-days 365 \
+     --out acme.license.json
+   ```
+
+5. **Deliver** `acme.license.json` to the customer; they point their
+   `sigil-server` config's `license.path` at it.
+
+**Rotation:** `SIGIL_LICENSE_PUBKEYS` holds multiple entries. To rotate,
+generate a new keypair with a new `--id`, add its pubkey alongside the old one,
+and sign new licenses with the new key. Old licenses keep verifying until you
+remove the old pubkey in a later release.
