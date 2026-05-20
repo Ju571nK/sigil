@@ -89,4 +89,16 @@ pub enum Command {
         #[arg(long)]
         license_id: Option<String>,
     },
+    /// Verify a signed audit-log chain file (hash-chain + optional signatures).
+    VerifyAudit {
+        /// Path to the audit chain file (license-audit.jsonl).
+        #[arg(long, value_name = "PATH")]
+        r#in: PathBuf,
+        /// Externally-observed audit pubkey ("ed25519:<b64>"). Omit to check chain structure only.
+        #[arg(long)]
+        pubkey: Option<String>,
+        /// Expected head hash (from /v1/meta audit_head.hash) to assert against.
+        #[arg(long)]
+        expect_head: Option<String>,
+    },
 }

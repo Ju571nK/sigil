@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use sigil_signer::cli::{Cli, Command};
-use sigil_signer::{inspect, keygen, license, sign, verify};
+use sigil_signer::{inspect, keygen, license, sign, verify, verify_audit};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -105,6 +105,40 @@ fn main() -> Result<()> {
                     .unwrap()
             );
             println!("  signing_pubkey_id: {}", signed.signing_pubkey_id);
+        }
+        Command::VerifyAudit {
+            r#in,
+            pubkey,
+            expect_head,
+        } => {
+            let outcome = verify_audit::verify_audit(verify_audit::VerifyAuditArgs {
+                file: &r#in,
+                pubkey,
+                expect_head,
+            })?;
+            match outcome {
+                verify_audit::VerifyAuditOutcome::Ok {
+                    seq,
+                    hash,
+                    pubkey_id,
+                    lines,
+                    authenticity_checked,
+                } => {
+                    println!("AUDIT CHAIN OK ({lines} lines)");
+                    println!("  head seq:  {seq}");
+                    println!("  head hash: {hash}");
+                    println!("  pubkey_id: {pubkey_id}");
+                    if !authenticity_checked {
+                        println!(
+                            "  NOTE: --pubkey not given -> hash-chain verified, signatures NOT checked."
+                        );
+                    }
+                }
+                verify_audit::VerifyAuditOutcome::Failed(msg) => {
+                    eprintln!("AUDIT VERIFY FAILED: {msg}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
     Ok(())
