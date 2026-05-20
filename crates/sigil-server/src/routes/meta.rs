@@ -12,6 +12,18 @@ pub async fn get_meta(State(state): State<SharedState>) -> impl IntoResponse {
     let active = state.fleet_index.active_host_count(now, window);
     let license = compute_status(&state.license_state, active, state.active_window_days);
 
+    let audit_head = state.audit_head.lock().unwrap().clone();
+    let audit_head_json = match (&audit_head, state.audit_key.as_ref()) {
+        (Some(h), Some(k)) => json!({
+            "seq": h.seq,
+            "hash": h.hash,
+            "sig": h.sig,
+            "pubkey_id": h.pubkey_id,
+            "pubkey": format!("ed25519:{}", k.pubkey_b64),
+        }),
+        _ => serde_json::Value::Null,
+    };
+
     Json(json!({
         "server_version": env!("CARGO_PKG_VERSION"),
         "schema_version": SCHEMA_VERSION,
@@ -26,6 +38,7 @@ pub async fn get_meta(State(state): State<SharedState>) -> impl IntoResponse {
                 "host_id_fingerprint_drift", "agent_dying", "sender_lag_critical"
             ]
         },
-        "license": license
+        "license": license,
+        "audit_head": audit_head_json
     }))
 }
