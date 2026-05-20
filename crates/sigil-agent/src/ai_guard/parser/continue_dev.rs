@@ -186,21 +186,18 @@ fn classify_script_path(s: &str, hook_event: &str, hooks_dir: &Path, out: &mut V
     }
     let candidate = PathBuf::from(first);
     if path_is_inside(&candidate, hooks_dir) {
-        if let Ok(contents) = std::fs::read_to_string(&candidate) {
-            if let Some(pat) = rubric::first_destructive_pattern(&contents) {
-                out.push(AiGuardReason::DestructiveInHookScript {
-                    pattern: pat.to_string(),
-                    hook_event: hook_event.to_string(),
-                    script_path: candidate,
-                    snippet: contents.chars().take(80).collect(),
-                    source_chain: Vec::new(),
-                });
-            }
-        }
-    } else if let Some(r) =
-        crate::ai_guard::ext_script::scan_external_script(&candidate, hook_event)
-    {
-        out.push(r);
+        // 3b.3.1 — convention-dir script delegates to recursive walker
+        // so sourced files inside the convention dir also get scanned.
+        out.extend(crate::ai_guard::ext_script::scan_hook_script(
+            &candidate,
+            hook_event,
+        ));
+    } else {
+        // 3b.3.1 — external path also uses recursive walker.
+        out.extend(crate::ai_guard::ext_script::scan_hook_script(
+            &candidate,
+            hook_event,
+        ));
     }
 }
 

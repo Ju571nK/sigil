@@ -160,31 +160,18 @@ fn classify_command(cmd: &str, event_name: &str, hooks_dir: &Path, out: &mut Vec
     if looks_pathish {
         let candidate = PathBuf::from(first_token);
         if path_is_inside(&candidate, hooks_dir) {
-            // Convention dir — read script + scan.
-            match std::fs::read_to_string(&candidate) {
-                Ok(contents) => {
-                    if let Some(pat) = rubric::first_destructive_pattern(&contents) {
-                        out.push(AiGuardReason::DestructiveInHookScript {
-                            pattern: pat.to_string(),
-                            hook_event: event_name.to_string(),
-                            script_path: candidate,
-                            snippet: snippet_around_match(&contents, pat),
-                            source_chain: Vec::new(),
-                        });
-                    }
-                }
-                Err(_) => {
-                    // Script referenced but unreadable — silently skip.
-                    // Tool will fail to invoke at runtime; not our concern.
-                }
-            }
+            // 3b.3.1 — convention-dir script delegates to recursive walker
+            // so sourced files inside the convention dir also get scanned.
+            out.extend(crate::ai_guard::ext_script::scan_hook_script(
+                &candidate,
+                event_name,
+            ));
         } else {
-            // External path — delegate to ext_script module.
-            if let Some(r) =
-                crate::ai_guard::ext_script::scan_external_script(&candidate, event_name)
-            {
-                out.push(r);
-            }
+            // 3b.3.1 — external path also uses recursive walker.
+            out.extend(crate::ai_guard::ext_script::scan_hook_script(
+                &candidate,
+                event_name,
+            ));
         }
         return;
     }
@@ -206,26 +193,6 @@ fn path_is_inside(candidate: &Path, dir: &Path) -> bool {
     let c = dunce::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
     let d = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     c.starts_with(&d)
-}
-
-/// Compile `pattern` as a regex and return a window centered on the first
-/// match in `contents`. Mirrors `claude_code::snippet_around_match`.
-fn snippet_around_match(contents: &str, pattern: &str) -> String {
-    if let Ok(re) = regex::Regex::new(pattern) {
-        if let Some(m) = re.find(contents) {
-            let start = m.start().saturating_sub(20);
-            let end = (m.end() + 20).min(contents.len());
-            let start = (start..=m.start())
-                .rev()
-                .find(|i| contents.is_char_boundary(*i))
-                .unwrap_or(0);
-            let end = (end..=contents.len())
-                .find(|i| contents.is_char_boundary(*i))
-                .unwrap_or(contents.len());
-            return contents[start..end].chars().take(80).collect();
-        }
-    }
-    contents.chars().take(80).collect()
 }
 
 /// Phase 3b.3 — collect external script paths from a codex config.toml.
