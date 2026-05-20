@@ -105,6 +105,97 @@ pub fn scan_external_script(path: &Path, hook_event: &str) -> Option<AiGuardReas
     None
 }
 
+/// One reference extracted from a `source X` / `. X` directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourceRef {
+    /// Literal that we can attempt to resolve to a filesystem path.
+    Resolvable(String),
+    /// Literal that contains shell variables, command substitution, tilde,
+    /// or other dynamic constructs. Reported as ExternalScriptUnscanned but
+    /// not recursed into.
+    Unresolvable(String),
+}
+
+fn line_contains_dynamic(literal: &str) -> bool {
+    literal.contains('$')
+        || literal.contains('`')
+        || literal.starts_with('~')
+        || literal.contains('*')
+        || literal.contains('?')
+        || literal.contains('[')
+}
+
+/// Strip surrounding balanced single or double quotes. No-op otherwise.
+fn unquote(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return &s[1..s.len() - 1];
+        }
+    }
+    s
+}
+
+/// Parse `source X` and `. X` directives from shell script content.
+/// Line-based, comment-stripping. Heredocs and multi-line strings are NOT
+/// handled (accepted false-positives per spec §4).
+pub(crate) fn parse_source_directives(contents: &str) -> Vec<SourceRef> {
+    let mut out = Vec::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.trim_start();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Strip trailing inline comment (naive — ignores # inside strings).
+        let line = match line.find('#') {
+            Some(idx) => &line[..idx],
+            None => line,
+        };
+        let line = line.trim();
+        let mut toks = line.split_whitespace();
+        let cmd = match toks.next() {
+            Some(t) => t,
+            None => continue,
+        };
+        if cmd != "source" && cmd != "." {
+            continue;
+        }
+        let arg = match toks.next() {
+            Some(t) => t,
+            None => continue,
+        };
+        let literal = unquote(arg);
+        if line_contains_dynamic(literal) {
+            out.push(SourceRef::Unresolvable(literal.to_string()));
+        } else {
+            out.push(SourceRef::Resolvable(literal.to_string()));
+        }
+    }
+    out
+}
+
+/// Resolve a literal path string (from a `source` directive) against the
+/// parent script's path. Absolute paths used as-is; relative joined with
+/// parent dir. Returns canonicalized PathBuf on success, or the constructed
+/// (non-canonical) path as an error if the file does not exist.
+pub(crate) fn resolve_path(literal: &str, parent_script: &Path) -> Result<std::path::PathBuf, std::path::PathBuf> {
+    let candidate = if Path::new(literal).is_absolute() {
+        std::path::PathBuf::from(literal)
+    } else {
+        let parent_dir = parent_script
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        parent_dir.join(literal)
+    };
+
+    match dunce::canonicalize(&candidate) {
+        Ok(canon) => Ok(canon),
+        Err(_) => Err(candidate),
+    }
+}
+
 fn snippet_around_match(contents: &str, pattern: &str) -> String {
     if let Ok(re) = regex::Regex::new(pattern) {
         if let Some(m) = re.find(contents) {
@@ -235,5 +326,112 @@ mod tests {
     #[test]
     fn looks_binary_passes_empty() {
         assert!(!looks_binary(b""));
+    }
+
+    #[test]
+    fn parser_finds_source_directive() {
+        let s = "#!/bin/bash\nsource ./helper.sh\necho hi\n";
+        let refs = parse_source_directives(s);
+        assert_eq!(refs, vec![SourceRef::Resolvable("./helper.sh".into())]);
+    }
+
+    #[test]
+    fn parser_finds_dot_directive() {
+        let s = ". /etc/profile.d/x.sh\n";
+        let refs = parse_source_directives(s);
+        assert_eq!(refs, vec![SourceRef::Resolvable("/etc/profile.d/x.sh".into())]);
+    }
+
+    #[test]
+    fn parser_skips_comment_lines() {
+        let s = "# source ./evil.sh\nsource ./real.sh\n";
+        let refs = parse_source_directives(s);
+        assert_eq!(refs, vec![SourceRef::Resolvable("./real.sh".into())]);
+    }
+
+    #[test]
+    fn parser_unwraps_quoted_paths() {
+        let s = "source \"./helper.sh\"\nsource './other.sh'\n";
+        let refs = parse_source_directives(s);
+        assert_eq!(refs, vec![
+            SourceRef::Resolvable("./helper.sh".into()),
+            SourceRef::Resolvable("./other.sh".into()),
+        ]);
+    }
+
+    #[test]
+    fn parser_marks_var_expansion_unresolvable() {
+        let s = "source $HOME/x.sh\n";
+        let refs = parse_source_directives(s);
+        assert_eq!(refs, vec![SourceRef::Unresolvable("$HOME/x.sh".into())]);
+    }
+
+    #[test]
+    fn parser_marks_tilde_unresolvable() {
+        let s = "source ~/x.sh\n";
+        let refs = parse_source_directives(s);
+        assert_eq!(refs, vec![SourceRef::Unresolvable("~/x.sh".into())]);
+    }
+
+    #[test]
+    fn parser_marks_command_subst_unresolvable() {
+        let s = "source $(which lint)\n";
+        let refs = parse_source_directives(s);
+        assert_eq!(refs, vec![SourceRef::Unresolvable("$(which".into())]);
+    }
+
+    #[test]
+    fn parser_ignores_non_source_lines() {
+        let s = "echo foo\nrm bar\nls /etc\n";
+        assert!(parse_source_directives(s).is_empty());
+    }
+
+    #[test]
+    fn parser_does_not_match_word_prefix_source() {
+        let s = "sourceless command here\n";
+        assert!(parse_source_directives(s).is_empty());
+    }
+
+    #[test]
+    fn parser_strips_inline_comment() {
+        let s = "source ./helper.sh  # local helper\n";
+        let refs = parse_source_directives(s);
+        assert_eq!(refs, vec![SourceRef::Resolvable("./helper.sh".into())]);
+    }
+
+    #[test]
+    fn resolve_absolute_path_succeeds_when_file_exists() {
+        let f = tempfile_with(b"#!/bin/bash\n");
+        let parent = f.path().parent().unwrap();
+        let result = resolve_path(
+            &f.path().to_string_lossy(),
+            &parent.join("dummy.sh"),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resolve_relative_path_joins_with_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent_script = dir.path().join("entry.sh");
+        std::fs::write(&parent_script, b"#!/bin/bash\n").unwrap();
+        let helper = dir.path().join("helper.sh");
+        std::fs::write(&helper, b"#!/bin/bash\n").unwrap();
+
+        let result = resolve_path("./helper.sh", &parent_script);
+        assert!(result.is_ok());
+        let canon = result.unwrap();
+        assert!(canon.ends_with("helper.sh"));
+    }
+
+    #[test]
+    fn resolve_missing_relative_path_errors_with_literal() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent_script = dir.path().join("entry.sh");
+        std::fs::write(&parent_script, b"#!/bin/bash\n").unwrap();
+
+        let result = resolve_path("./missing.sh", &parent_script);
+        let err = result.unwrap_err();
+        assert!(err.to_string_lossy().contains("missing.sh"));
     }
 }
