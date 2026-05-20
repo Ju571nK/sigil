@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 #![warn(rust_2018_idioms)]
 
+pub mod audit;
 pub mod debounce;
 pub mod event;
 pub mod hashing;

@@ -2,6 +2,7 @@
 //! lives in AppState (read-only after boot). NEVER crashes the server: any
 //! load/verify failure degrades to the free tier (measure-don't-block).
 
+use sigil_core::audit::{AuditRecord, SignedAuditRecord};
 use sigil_core::license::status::{LicenseState, LicenseStatus, LicenseStatusState};
 use sigil_core::license::{verify_license_allow_expired, SignedLicense};
 use std::path::Path;
@@ -65,21 +66,45 @@ pub fn should_audit(last: Option<LicenseStatusState>, current: LicenseStatusStat
     last != Some(current)
 }
 
-/// Build one append-only audit line (JSON) from a computed status.
-pub fn audit_line(status: &LicenseStatus, now: OffsetDateTime, server_version: &str) -> String {
-    let v = serde_json::json!({
-        "ts": now.format(&time::format_description::well_known::Rfc3339).unwrap(),
-        "state": status.state,
-        "licensed": status.licensed,
-        "expired": status.expired,
-        "effective_max_hosts": status.effective_max_hosts,
-        "current_host_count": status.current_host_count,
-        "active_window_days": status.active_window_days,
-        "customer_id": status.customer_id,
-        "license_id": status.license_id,
-        "server_version": server_version,
-    });
-    v.to_string()
+/// Read the last signed record from `audit_path` to resume the chain across
+/// restarts. Returns `(next_seq, prev_hash)`. `None` ⇒ start at genesis
+/// (file absent/empty, or last line not a SignedAuditRecord).
+pub fn resume_chain(audit_path: &std::path::Path) -> Option<(u64, String)> {
+    let body = std::fs::read_to_string(audit_path).ok()?;
+    let last = body.lines().rev().find(|l| !l.trim().is_empty())?;
+    let rec: SignedAuditRecord = serde_json::from_str(last).ok()?;
+    Some((rec.record.seq + 1, rec.hash))
+}
+
+/// Build an unsigned `AuditRecord` from a computed status + chain position.
+pub fn build_audit_record(
+    status: &LicenseStatus,
+    seq: u64,
+    prev_hash: String,
+    now: OffsetDateTime,
+    server_version: &str,
+) -> AuditRecord {
+    let state = match status.state {
+        LicenseStatusState::Ok => "ok",
+        LicenseStatusState::OverLimit => "over_limit",
+    };
+    AuditRecord {
+        v: 1,
+        seq,
+        ts: now
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap(),
+        state: state.to_string(),
+        licensed: status.licensed,
+        expired: status.expired,
+        effective_max_hosts: status.effective_max_hosts,
+        current_host_count: status.current_host_count,
+        active_window_days: status.active_window_days,
+        customer_id: status.customer_id.clone(),
+        license_id: status.license_id.clone(),
+        server_version: server_version.to_string(),
+        prev_hash,
+    }
 }
 
 /// Append a single line to the audit log (creating the file if needed).
@@ -131,13 +156,20 @@ mod tests {
     }
 
     #[test]
-    fn audit_line_has_required_fields() {
+    fn build_audit_record_maps_status() {
         let status = compute_status(&LicenseState::Free, 263, 7);
-        let line = audit_line(&status, datetime!(2026-06-01 11:00 UTC), "0.1.0");
-        assert!(line.contains("\"state\":\"over_limit\""));
-        assert!(line.contains("\"current_host_count\":263"));
-        assert!(line.contains("\"effective_max_hosts\":200"));
-        assert!(line.contains("\"server_version\":\"0.1.0\""));
+        let r = build_audit_record(
+            &status,
+            0,
+            "0".repeat(64),
+            datetime!(2026-06-01 11:00 UTC),
+            "0.1.0",
+        );
+        assert_eq!(r.seq, 0);
+        assert_eq!(r.state, "over_limit");
+        assert_eq!(r.current_host_count, 263);
+        assert_eq!(r.effective_max_hosts, 200);
+        assert_eq!(r.prev_hash, "0".repeat(64));
     }
 
     #[test]

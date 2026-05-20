@@ -11,3 +11,4 @@ pub mod keygen;
 pub mod license;
 pub mod sign;
 pub mod verify;
+pub mod verify_audit;

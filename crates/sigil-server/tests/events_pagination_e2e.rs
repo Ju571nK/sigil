@@ -45,6 +45,8 @@ async fn events_pagination_walks_in_pages() {
         read_token: ReadToken(Some("tok".into())),
         license_state: sigil_core::license::status::LicenseState::Free,
         active_window_days: 7,
+        audit_key: None,
+        audit_head: Mutex::new(None),
     });
     let app = build_router(state);
 

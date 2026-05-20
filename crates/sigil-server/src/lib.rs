@@ -16,6 +16,7 @@
 
 pub mod allowlist;
 pub mod app;
+pub mod audit_key;
 pub mod auth;
 pub mod boot_rebuild;
 pub mod cli;

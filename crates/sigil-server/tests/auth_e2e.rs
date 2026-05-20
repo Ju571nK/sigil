@@ -20,6 +20,8 @@ fn state(dir: &std::path::Path, token: ReadToken) -> Arc<AppState> {
         read_token: token,
         license_state: sigil_core::license::status::LicenseState::Free,
         active_window_days: 7,
+        audit_key: None,
+        audit_head: Mutex::new(None),
     })
 }
 

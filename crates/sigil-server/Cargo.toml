@@ -33,6 +33,9 @@ rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 blake3 = { workspace = true }
 parking_lot = { workspace = true }
+ed25519-dalek = { workspace = true }
+data-encoding = { workspace = true }
+rand_core = { version = "0.6", features = ["std"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
