@@ -1,14 +1,21 @@
-//! GET /v1/meta — server build info + alerts default. Bearer auth.
-use axum::{response::IntoResponse, Json};
+//! GET /v1/meta — server build info + alerts default + license status. Bearer auth.
+use crate::app::SharedState;
+use axum::{extract::State, response::IntoResponse, Json};
 use serde_json::json;
 use sigil_core::event::SCHEMA_VERSION;
-use time::OffsetDateTime;
+use sigil_core::license::status::compute_status;
+use time::{Duration, OffsetDateTime};
 
-pub async fn get_meta() -> impl IntoResponse {
+pub async fn get_meta(State(state): State<SharedState>) -> impl IntoResponse {
+    let now = OffsetDateTime::now_utc();
+    let window = Duration::days(state.active_window_days as i64);
+    let active = state.fleet_index.active_host_count(now, window);
+    let license = compute_status(&state.license_state, active, state.active_window_days);
+
     Json(json!({
         "server_version": env!("CARGO_PKG_VERSION"),
         "schema_version": SCHEMA_VERSION,
-        "ts": OffsetDateTime::now_utc()
+        "ts": now
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap(),
         "alerts_definition_default": {
@@ -18,6 +25,7 @@ pub async fn get_meta() -> impl IntoResponse {
                 "policy_signature_invalid", "tls_failure",
                 "host_id_fingerprint_drift", "agent_dying", "sender_lag_critical"
             ]
-        }
+        },
+        "license": license
     }))
 }

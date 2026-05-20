@@ -21,6 +21,10 @@ pub struct AppState {
     pub fleet_index: FleetIndex,
     /// Phase 3b.4 — bearer token for the read API. `None` ⇒ read endpoints 404.
     pub read_token: ReadToken,
+    /// Loaded + verified at boot. Read-only thereafter. Free if none configured.
+    pub license_state: sigil_core::license::status::LicenseState,
+    /// Rolling window (days) for active-host counting.
+    pub active_window_days: u32,
 }
 
 pub type SharedState = Arc<AppState>;

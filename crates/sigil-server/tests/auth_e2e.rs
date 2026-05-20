@@ -18,6 +18,8 @@ fn state(dir: &std::path::Path, token: ReadToken) -> Arc<AppState> {
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: token,
+        license_state: sigil_core::license::status::LicenseState::Free,
+        active_window_days: 7,
     })
 }
 

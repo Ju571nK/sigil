@@ -49,6 +49,17 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
     fleet_index.replace(built);
     tracing::info!(hosts = n, elapsed_ms = ?t0.elapsed().as_millis(), "boot rebuild complete");
 
+    let now = time::OffsetDateTime::now_utc();
+    let active_window_days = cfg
+        .license
+        .as_ref()
+        .and_then(|l| l.active_window_days)
+        .unwrap_or(sigil_server::license_state::DEFAULT_ACTIVE_WINDOW_DAYS);
+    let license_state = sigil_server::license_state::load_and_log(
+        cfg.license.as_ref().and_then(|l| l.path.as_deref()),
+        now,
+    );
+
     Ok(Arc::new(AppState {
         events_out_dir: cfg.events_out_dir.clone(),
         policy_bundle_path: cfg.policy_bundle_path.clone(),
@@ -57,6 +68,8 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         high_water: Mutex::new(high_water),
         fleet_index,
         read_token,
+        license_state,
+        active_window_days,
     }))
 }
 
