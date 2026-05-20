@@ -10,6 +10,7 @@ pub mod event;
 pub mod hashing;
 pub mod host_id;
 pub mod host_meta;
+pub mod license;
 pub mod policy;
 pub mod ratelimit;
 pub mod sink;
