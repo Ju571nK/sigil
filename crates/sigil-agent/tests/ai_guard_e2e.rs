@@ -808,13 +808,17 @@ targets:
         )
     });
 
-    let script_path = reason["script_path"].as_str().expect("script_path is a string");
+    let script_path = reason["script_path"]
+        .as_str()
+        .expect("script_path is a string");
     assert!(
         script_path.ends_with("entry.sh"),
         "script_path should point at entry.sh, got {script_path:?}"
     );
 
-    let chain = reason["source_chain"].as_array().expect("source_chain is an array");
+    let chain = reason["source_chain"]
+        .as_array()
+        .expect("source_chain is an array");
     assert_eq!(
         chain.len(),
         2,

@@ -166,29 +166,27 @@ fn walk(
                     script_path: PathBuf::from(literal),
                 });
             }
-            SourceRef::Resolvable(literal) => {
-                match resolve_path(&literal, path) {
-                    Ok(target) => {
-                        chain.push(target.clone());
-                        walk(
-                            &target,
-                            hook_event,
-                            chain,
-                            visited,
-                            emissions,
-                            file_budget,
-                            depth + 1,
-                        );
-                        chain.pop();
-                    }
-                    Err(unresolved_path) => {
-                        emissions.push(AiGuardReason::ExternalScriptUnscanned {
-                            hook_event: hook_event.to_string(),
-                            script_path: unresolved_path,
-                        });
-                    }
+            SourceRef::Resolvable(literal) => match resolve_path(&literal, path) {
+                Ok(target) => {
+                    chain.push(target.clone());
+                    walk(
+                        &target,
+                        hook_event,
+                        chain,
+                        visited,
+                        emissions,
+                        file_budget,
+                        depth + 1,
+                    );
+                    chain.pop();
                 }
-            }
+                Err(unresolved_path) => {
+                    emissions.push(AiGuardReason::ExternalScriptUnscanned {
+                        hook_event: hook_event.to_string(),
+                        script_path: unresolved_path,
+                    });
+                }
+            },
         }
     }
 }
@@ -274,13 +272,14 @@ pub(crate) fn parse_source_directives(contents: &str) -> Vec<SourceRef> {
 /// parent script's path. Absolute paths used as-is; relative joined with
 /// parent dir. Returns canonicalized PathBuf on success, or the constructed
 /// (non-canonical) path as an error if the file does not exist.
-pub(crate) fn resolve_path(literal: &str, parent_script: &Path) -> Result<std::path::PathBuf, std::path::PathBuf> {
+pub(crate) fn resolve_path(
+    literal: &str,
+    parent_script: &Path,
+) -> Result<std::path::PathBuf, std::path::PathBuf> {
     let candidate = if Path::new(literal).is_absolute() {
         std::path::PathBuf::from(literal)
     } else {
-        let parent_dir = parent_script
-            .parent()
-            .unwrap_or_else(|| Path::new("."));
+        let parent_dir = parent_script.parent().unwrap_or_else(|| Path::new("."));
         parent_dir.join(literal)
     };
 
@@ -433,7 +432,10 @@ mod tests {
     fn parser_finds_dot_directive() {
         let s = ". /etc/profile.d/x.sh\n";
         let refs = parse_source_directives(s);
-        assert_eq!(refs, vec![SourceRef::Resolvable("/etc/profile.d/x.sh".into())]);
+        assert_eq!(
+            refs,
+            vec![SourceRef::Resolvable("/etc/profile.d/x.sh".into())]
+        );
     }
 
     #[test]
@@ -447,10 +449,13 @@ mod tests {
     fn parser_unwraps_quoted_paths() {
         let s = "source \"./helper.sh\"\nsource './other.sh'\n";
         let refs = parse_source_directives(s);
-        assert_eq!(refs, vec![
-            SourceRef::Resolvable("./helper.sh".into()),
-            SourceRef::Resolvable("./other.sh".into()),
-        ]);
+        assert_eq!(
+            refs,
+            vec![
+                SourceRef::Resolvable("./helper.sh".into()),
+                SourceRef::Resolvable("./other.sh".into()),
+            ]
+        );
     }
 
     #[test]
@@ -497,10 +502,7 @@ mod tests {
     fn resolve_absolute_path_succeeds_when_file_exists() {
         let f = tempfile_with(b"#!/bin/bash\n");
         let parent = f.path().parent().unwrap();
-        let result = resolve_path(
-            &f.path().to_string_lossy(),
-            &parent.join("dummy.sh"),
-        );
+        let result = resolve_path(&f.path().to_string_lossy(), &parent.join("dummy.sh"));
         assert!(result.is_ok());
     }
 
@@ -561,8 +563,11 @@ mod tests {
         let (script_path, chain) = out
             .iter()
             .find_map(|r| match r {
-                AiGuardReason::DestructiveInHookScript { script_path, source_chain, .. } =>
-                    Some((script_path, source_chain)),
+                AiGuardReason::DestructiveInHookScript {
+                    script_path,
+                    source_chain,
+                    ..
+                } => Some((script_path, source_chain)),
                 _ => None,
             })
             .expect("expected DestructiveInHookScript");
@@ -599,7 +604,8 @@ mod tests {
         let entry = write_script(dir.path(), "a.sh", b"#!/bin/bash\nsource ./b.sh\n");
         let out = scan_hook_script(&entry, "PreToolUse");
         assert!(
-            !out.iter().any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })),
+            !out.iter()
+                .any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })),
             "no destructive pattern in either file; cycle must not produce false positive"
         );
     }
@@ -617,7 +623,8 @@ mod tests {
         let entry = dir.path().join("lvl0.sh");
         let out = scan_hook_script(&entry, "PreToolUse");
         assert!(
-            !out.iter().any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })),
+            !out.iter()
+                .any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })),
             "depth 6 must NOT be reached when MAX_SOURCE_DEPTH=5; got {out:?}"
         );
     }
@@ -633,7 +640,8 @@ mod tests {
         let entry = write_script(dir.path(), "entry.sh", body.as_bytes());
         let out = scan_hook_script(&entry, "PreToolUse");
         assert!(
-            !out.iter().any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })),
+            !out.iter()
+                .any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })),
             "no destructive pattern present"
         );
     }
@@ -653,10 +661,15 @@ mod tests {
     #[test]
     fn walker_missing_relative_target_emits_unscanned() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = write_script(dir.path(), "entry.sh", b"#!/bin/bash\nsource ./missing.sh\n");
+        let entry = write_script(
+            dir.path(),
+            "entry.sh",
+            b"#!/bin/bash\nsource ./missing.sh\n",
+        );
         let out = scan_hook_script(&entry, "PreToolUse");
         assert!(
-            out.iter().any(|r| matches!(r, AiGuardReason::ExternalScriptUnscanned { .. })),
+            out.iter()
+                .any(|r| matches!(r, AiGuardReason::ExternalScriptUnscanned { .. })),
             "got: {out:?}"
         );
     }
@@ -671,15 +684,23 @@ mod tests {
             b"#!/bin/bash\nsource $UNRESOLVED/x.sh\nsource ./danger.sh\n",
         );
         let out = scan_hook_script(&entry, "PreToolUse");
-        assert!(out.iter().any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })));
-        assert!(out.iter().any(|r| matches!(r, AiGuardReason::ExternalScriptUnscanned { .. })));
+        assert!(out
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::DestructiveInHookScript { .. })));
+        assert!(out
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::ExternalScriptUnscanned { .. })));
     }
 
     #[test]
     fn walker_first_match_wins_no_double_destructive() {
         let dir = tempfile::tempdir().unwrap();
         write_script(dir.path(), "b.sh", b"#!/bin/bash\nrm -rf /tmp/zzz\n");
-        write_script(dir.path(), "a.sh", b"#!/bin/bash\nrm -rf /tmp/aaa\nsource ./b.sh\n");
+        write_script(
+            dir.path(),
+            "a.sh",
+            b"#!/bin/bash\nrm -rf /tmp/aaa\nsource ./b.sh\n",
+        );
         let entry = write_script(dir.path(), "entry.sh", b"#!/bin/bash\nsource ./a.sh\n");
         let out = scan_hook_script(&entry, "PreToolUse");
         let destructive: Vec<_> = out

@@ -163,14 +163,12 @@ fn classify_command(cmd: &str, event_name: &str, hooks_dir: &Path, out: &mut Vec
             // 3b.3.1 — convention-dir script delegates to recursive walker
             // so sourced files inside the convention dir also get scanned.
             out.extend(crate::ai_guard::ext_script::scan_hook_script(
-                &candidate,
-                event_name,
+                &candidate, event_name,
             ));
         } else {
             // 3b.3.1 — external path also uses recursive walker.
             out.extend(crate::ai_guard::ext_script::scan_hook_script(
-                &candidate,
-                event_name,
+                &candidate, event_name,
             ));
         }
         return;
