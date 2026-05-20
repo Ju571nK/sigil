@@ -5,6 +5,17 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// License configuration block (optional). Absent ⇒ free tier.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct LicenseConfig {
+    /// Path to the SignedLicense bundle (JSON). Absent ⇒ free tier.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Rolling window for "active host" counting. Absent ⇒ DEFAULT_ACTIVE_WINDOW_DAYS.
+    #[serde(default)]
+    pub active_window_days: Option<u32>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ServerConfig {
     /// Address to bind. e.g. `0.0.0.0:8443`.
@@ -31,6 +42,9 @@ pub struct ServerConfig {
     /// across restarts). Defaults to `<events_out_dir>/.high-water.json`.
     #[serde(default)]
     pub high_water_path: Option<PathBuf>,
+    /// Optional license configuration. Absent ⇒ free tier (no enforcement).
+    #[serde(default)]
+    pub license: Option<LicenseConfig>,
 }
 
 impl ServerConfig {
@@ -126,5 +140,32 @@ host_allowlist_path: "/d/hosts.json"
     fn missing_file_is_read_error() {
         let err = ServerConfig::load(Path::new("/nonexistent/server.yaml")).unwrap_err();
         assert!(matches!(err, ConfigError::Read { .. }));
+    }
+
+    #[test]
+    fn parses_optional_license_block() {
+        let yaml = r#"
+bind: "127.0.0.1:8443"
+events_out_dir: "/var/lib/sigil-server/events"
+policy_bundle_path: "/var/lib/sigil-server/signed-policy.json"
+license:
+  path: /etc/sigil/license.bundle
+  active_window_days: 14
+"#;
+        let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
+        let lic = cfg.license.expect("license block present");
+        assert_eq!(lic.path.as_deref(), Some(std::path::Path::new("/etc/sigil/license.bundle")));
+        assert_eq!(lic.active_window_days, Some(14));
+    }
+
+    #[test]
+    fn license_block_absent_is_none() {
+        let yaml = r#"
+bind: "127.0.0.1:8443"
+events_out_dir: "/var/lib/sigil-server/events"
+policy_bundle_path: "/var/lib/sigil-server/signed-policy.json"
+"#;
+        let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.license.is_none());
     }
 }
