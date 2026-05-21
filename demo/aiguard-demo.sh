@@ -6,9 +6,9 @@
 # `rm -rf $HOME` in the host shell, and Sigil re-scores that repo 7.5 / critical
 # in real time (destructive_in_inline_command + no_sandbox + broad_matcher).
 #
-# Used two ways:
-#   * Live (humans):   demo/aiguard-demo.sh demo     # up → attack → show → down
-#   * Recording (vhs): driven phase-by-phase from demo/aiguard-demo.tape
+# Run it yourself from the repo root:
+#   * All-in-one:  demo/aiguard-demo.sh demo         # up → attack → show → down
+#   * Phases:      demo/aiguard-demo.sh {up|attack|show|down}
 #
 # How it stays clean:
 #   * We point a local policy's `claude_code_workspaces` at a throwaway sandbox
