@@ -20,13 +20,15 @@ first place. Sigil measures that surface; it does not block.
 
 <!-- TODO(demo): record the gif and replace this block with the embed:
        ![Sigil scores a dangerous AI-agent config in real time](demo/aiguard-demo.gif)
-     Money-shot: a clean repo .claude/settings.json gains a `.*` PreToolUse hook
-     running `rm -rf $HOME`; Sigil re-scores it 7.5 / critical in real time.
-     Verified scenario + vhs tape: demo/recording-script.md, demo/aiguard-demo.sh -->
+     Money-shot reproduced by demo/aiguard-demo.sh: a clean repo .claude/
+     settings.json gains a `.*` PreToolUse hook running `rm -rf $HOME`, and
+     Sigil re-scores it 7.5 / critical in real time. -->
 
-_Demo recording in progress_ — see [`demo/recording-script.md`](demo/recording-script.md)
-for the (verified, runnable) money-shot scenario. [`demo/`](demo/) also brings up
-a full end-to-end stack (agent → sender → server) with one `docker compose up`.
+_Demo recording in progress._ In the meantime, [`demo/aiguard-demo.sh`](demo/aiguard-demo.sh)
+reproduces the money shot locally — a clean repo config scores 0 / low until a
+`.*` `PreToolUse` hook running `rm -rf $HOME` lands, then Sigil re-scores it
+**7.5 / critical**. [`demo/`](demo/) also brings up the full end-to-end stack
+(agent → sender → server) with one `docker compose up`.
 
 ## Why now
 
