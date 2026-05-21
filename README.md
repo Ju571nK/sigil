@@ -212,9 +212,7 @@ flowchart LR
 
     %% Uploader
     subgraph sender["sigil-sender (bin: sigil-sender)"]
-        direction TB
-        s_pipe["batch_reader · manifest<br/>transport (HTTPS + rustls)"]
-        s_ctrl["control_task · agent_ipc<br/>dead_letter · heartbeat"]
+        s_pipe["batch_reader · manifest · transport (HTTPS + rustls)<br/>control_task · agent_ipc · dead_letter · heartbeat"]
     end
 
     %% OSS reference receiver (alternative to BYO SIEM)
@@ -244,7 +242,7 @@ flowchart LR
     s_pipe -- "mTLS (alt)" --> server
 
     %% Control plane
-    s_ctrl -. "apply_policy IPC" .-> a_ctrl
+    s_pipe -. "apply_policy IPC" .-> a_ctrl
     operator -- "signs envelope" --> signer
     signer -. "envelope deployed" .-> server
     server -. "signed envelope" .-> sender
