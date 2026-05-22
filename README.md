@@ -240,6 +240,9 @@ flowchart LR
     %% External sink — your existing system (not part of Sigil)
     SIEM[("Your SIEM<br/>endpoint")]
 
+    %% Optional, exploratory — an internal or external LLM for deeper analysis
+    llm["LLM analysis<br/>internal or external<br/>(optional · exploratory)"]:::optional
+
     %% Data plane
     FS --> a_pipe
     FS --> a_aiguard
@@ -255,8 +258,9 @@ flowchart LR
     signer -. "envelope deployed" .-> server
     server -. "signed envelope" .-> sender
 
-    %% Optional consumer
+    %% Optional consumers
     server -. "read API" .-> manager
+    manager -. "deeper analysis · governance" .-> llm
 
     classDef optional stroke-dasharray: 5 5,fill:#f5f5f5,stroke:#999,color:#666
 
@@ -455,6 +459,10 @@ For responsible disclosure of vulnerabilities, see [SECURITY.md](SECURITY.md).
 
 Bug reports, policy suggestions, and patches are welcome. See
 [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
+
+Questions, ideas, or "is this the right approach?" — open a thread in
+[**GitHub Discussions**](https://github.com/Ju571nK/sigil/discussions) (Q&A)
+rather than an issue; issues are for actionable bugs and concrete proposals.
 
 ## License
 
