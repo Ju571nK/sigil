@@ -44,20 +44,18 @@ fi
 # --- detect platform -------------------------------------------------------
 os="$(uname -s)"
 arch="$(uname -m)"
-case "$os" in
-  Linux)  plat="unknown-linux-musl" ;;
-  Darwin) plat="apple-darwin" ;;
-  *) err "unsupported OS '$os' — see https://github.com/$REPO#installation" ;;
+case "$os/$arch" in
+  Linux/x86_64 | Linux/amd64)
+    target="x86_64-unknown-linux-musl" ;;
+  Darwin/arm64 | Darwin/aarch64)
+    target="aarch64-apple-darwin" ;;
+  Darwin/x86_64)
+    err "Intel Macs aren't supported — build from source: https://github.com/$REPO#build-from-source" ;;
+  Linux/aarch64 | Linux/arm64)
+    err "no prebuilt Linux aarch64 binary yet — build from source or open an issue" ;;
+  *)
+    err "unsupported platform '$os/$arch' — see https://github.com/$REPO#installation" ;;
 esac
-case "$arch" in
-  x86_64 | amd64)  cpu="x86_64" ;;
-  arm64 | aarch64) cpu="aarch64" ;;
-  *) err "unsupported architecture '$arch'" ;;
-esac
-if [ "$os" = "Linux" ] && [ "$cpu" != "x86_64" ]; then
-  err "no prebuilt Linux $cpu binary yet — build from source or open an issue"
-fi
-target="${cpu}-${plat}"
 
 # --- resolve version -------------------------------------------------------
 ver="${SIGIL_VERSION:-}"
