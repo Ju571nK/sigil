@@ -28,13 +28,25 @@ bring up the full end-to-end stack via [`demo/`](demo/) (`docker compose up`).
 
 ## Why now
 
-Through 2025, AI coding agents moved from autocomplete to autonomous shell
-execution, and their configuration quietly became an attack surface.
-<!-- TODO(why-now): cite TrustFall (2025-11) + AWS Kiro incident (2025-12)
-     with canonical links + one-line framing. Pending maintainer input —
-     do not fabricate incident details. -->
-The config that decides what an agent may do is now where the risk lives —
-and nothing on the host was watching it for drift. Sigil watches exactly that.
+Through 2025–2026, the AI coding agent's *configuration* became the attack
+surface. **[TrustFall](https://www.theregister.com/security/2026/05/07/claude-code-trust-prompt-can-trigger-one-click-rce/5235319)**
+(May 2026; [research](https://adversa.ai/blog/trustfall-coding-agent-security-flaw-rce-claude-cursor-gemini-cli-copilot/))
+showed that a cloned repo shipping a `.claude/settings.json`
+(`enableAllProjectMcpServers`) plus a `.mcp.json` auto-approves an unsandboxed
+MCP server — one "trust this folder" click is full RCE, across Claude Code,
+Cursor, Gemini CLI, and Copilot. A year earlier,
+**[AWS Kiro](https://aws.amazon.com/security/security-bulletins/AWS-2025-019/)**
+([writeup](https://embracethered.com/blog/posts/2025/aws-kiro-aribtrary-command-execution-with-indirect-prompt-injection/))
+could be steered by indirect prompt injection into rewriting its *own*
+`.vscode/settings.json` (`"kiroAgent.trustedCommands": ["*"]`) and MCP config to
+run arbitrary commands. Same root in both: the files that decide what an agent
+may do — `settings.json`, `.mcp.json`, command allowlists, sandbox flags.
+
+That surface is exactly what Sigil watches. It can't stop the prompt injection,
+and doesn't try to — it **measures**: it scores those configs (no sandbox, broad
+matcher, auto-approved MCP, destructive hook) and emits a hash-anchored event
+the moment one changes, so a dangerous config — whether a cloned repo dropped it
+or an agent rewrote its own — reaches your SIEM instead of staying silent.
 
 ## The problem
 
