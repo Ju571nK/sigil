@@ -190,7 +190,7 @@ one operator CLI, and three shared libraries.
 ```mermaid
 flowchart LR
     %% ============ CLIENT — the developer's machine ============
-    subgraph host["Developer host — runs on every machine"]
+    subgraph host["User side — runs on every machine"]
         FS[("Filesystem<br/>policy targets")]
 
         subgraph agent["sigil-agent (bin: sigil)"]
@@ -260,6 +260,15 @@ flowchart LR
     agent -. embeds .-> rules
 
     classDef optional stroke-dasharray: 5 5,fill:#f5f5f5,stroke:#999,color:#666
+
+    %% Components (crates) in green so they stand out from the location boxes
+    style agent  fill:#d1fae5,stroke:#059669,color:#064e3b
+    style spool  fill:#d1fae5,stroke:#059669,color:#064e3b
+    style sender fill:#d1fae5,stroke:#059669,color:#064e3b
+    style rules  fill:#d1fae5,stroke:#059669,color:#064e3b
+    style signer fill:#d1fae5,stroke:#059669,color:#064e3b
+    style server fill:#d1fae5,stroke:#059669,color:#064e3b
+    style core   fill:#d1fae5,stroke:#059669,color:#064e3b
 ```
 
 ## Status
