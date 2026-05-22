@@ -187,6 +187,11 @@ one operator CLI, and three shared libraries.
   Linux, and Windows defaults). The OSS fallback when no operator policy
   is supplied; extended rule packs ship separately.
 
+The diagram below is a **runtime view** — where each component runs and how data
+and signed policy flow between machines. The pure libraries (`sigil-core`,
+`sigil-rules-basic`) compile into the binaries above, so they aren't drawn as
+separate boxes.
+
 ```mermaid
 flowchart LR
     %% ============ CLIENT — the developer's machine ============
@@ -207,10 +212,6 @@ flowchart LR
         subgraph sender["sigil-sender (bin: sigil-sender)"]
             s_pipe["batch_reader · manifest · transport (HTTPS + rustls)<br/>control_task · agent_ipc · dead_letter · heartbeat"]
         end
-
-        subgraph rules["sigil-rules-basic"]
-            rulesmods["compile-time YAML defaults<br/>+ default rule packs"]
-        end
     end
 
     %% ============ SERVER SIDE — operator + backend infra ============
@@ -228,12 +229,8 @@ flowchart LR
         manager["sigil-manager<br/>fleet UI<br/>(optional)"]:::optional
     end
 
-    %% Not tied to one machine: external sink + the shared library
+    %% External sink — your existing system (not part of Sigil)
     SIEM[("Your SIEM<br/>endpoint")]
-
-    subgraph core["sigil-core (pure domain — linked into every binary)"]
-        coremods["event · policy · state · hashing<br/>host_id · host_meta<br/>debounce · ratelimit · sink · stats"]
-    end
 
     %% Data plane
     FS --> a_pipe
@@ -253,22 +250,14 @@ flowchart LR
     %% Optional consumer
     server -. "read API" .-> manager
 
-    %% Library deps
-    agent -. uses .-> core
-    sender -. uses .-> core
-    server -. uses .-> core
-    agent -. embeds .-> rules
-
     classDef optional stroke-dasharray: 5 5,fill:#f5f5f5,stroke:#999,color:#666
 
     %% Components (crates) in green so they stand out from the location boxes
     style agent  fill:#d1fae5,stroke:#059669,color:#064e3b
     style spool  fill:#d1fae5,stroke:#059669,color:#064e3b
     style sender fill:#d1fae5,stroke:#059669,color:#064e3b
-    style rules  fill:#d1fae5,stroke:#059669,color:#064e3b
     style signer fill:#d1fae5,stroke:#059669,color:#064e3b
     style server fill:#d1fae5,stroke:#059669,color:#064e3b
-    style core   fill:#d1fae5,stroke:#059669,color:#064e3b
 ```
 
 ## Status
