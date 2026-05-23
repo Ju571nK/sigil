@@ -223,7 +223,7 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         }
     };
 
-    // Phase 3b.6.2 — re-discover all 3 tools and reconcile each via the
+    // Phase 3b.6.2 — re-discover all 5 tools and reconcile each via the
     // generic reconcile_per_repo helper. State map entries for removed
     // repos are evicted to prevent stale memory across reloads.
     let new_continue: std::collections::BTreeSet<PathBuf> =
@@ -247,6 +247,20 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         )
         .into_iter()
         .collect();
+    let new_gemini: std::collections::BTreeSet<PathBuf> =
+        crate::ai_guard::workspace_discovery::discover_per_repo(
+            &effective.gemini_workspaces,
+            ".gemini/settings.json",
+        )
+        .into_iter()
+        .collect();
+    let new_cursor: std::collections::BTreeSet<PathBuf> =
+        crate::ai_guard::workspace_discovery::discover_per_repo(
+            &effective.cursor_workspaces,
+            ".cursor/mcp.json",
+        )
+        .into_iter()
+        .collect();
 
     let (
         continue_added,
@@ -255,6 +269,10 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         claude_removed,
         codex_added,
         codex_removed,
+        gemini_added,
+        gemini_removed,
+        cursor_added,
+        cursor_removed,
         rule_packs_added,
         rule_packs_removed,
     ) = {
@@ -280,9 +298,23 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
             &new_codex,
             |p| crate::ai_guard::CodexProjectParser { repo_root: p },
         );
+        let (a4, r4) = reconcile_per_repo(
+            &mut guard,
+            &ctx.ai_guard_state,
+            sigil_core::event::AiTool::Gemini,
+            &new_gemini,
+            |p| crate::ai_guard::GeminiProjectParser { repo_root: p },
+        );
+        let (a5, r5) = reconcile_per_repo(
+            &mut guard,
+            &ctx.ai_guard_state,
+            sigil_core::event::AiTool::Cursor,
+            &new_cursor,
+            |p| crate::ai_guard::CursorProjectParser { repo_root: p },
+        );
         let (rp_added, rp_removed) =
             reconcile_rule_packs(&mut guard, &ctx.ai_guard_state, &effective.rule_packs);
-        (a1, r1, a2, r2, a3, r3, rp_added, rp_removed)
+        (a1, r1, a2, r2, a3, r3, a4, r4, a5, r5, rp_added, rp_removed)
     };
 
     // Synthetic WatchTargets — in-memory only; never persisted.
@@ -295,6 +327,12 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     for repo_root in &new_codex {
         crate::runtime::push_codex_synthetic_target(&mut effective, repo_root);
     }
+    for repo_root in &new_gemini {
+        crate::runtime::push_gemini_synthetic_target(&mut effective, repo_root);
+    }
+    for repo_root in &new_cursor {
+        crate::runtime::push_cursor_synthetic_target(&mut effective, repo_root);
+    }
 
     tracing::info!(
         continue_added = continue_added.len(),
@@ -303,6 +341,10 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         claude_code_removed = claude_removed.len(),
         codex_added = codex_added.len(),
         codex_removed = codex_removed.len(),
+        gemini_added = gemini_added.len(),
+        gemini_removed = gemini_removed.len(),
+        cursor_added = cursor_added.len(),
+        cursor_removed = cursor_removed.len(),
         rule_packs_added = rule_packs_added.len(),
         rule_packs_removed = rule_packs_removed.len(),
         "policy reload: per-repo parsers + rule packs reconciled"
@@ -787,6 +829,80 @@ mod tests {
                 )
         });
         assert!(has, "expected CodexProjectParser for repoA after reload");
+    }
+
+    // Phase 3b.8 — per-repo Gemini + Cursor parser hot-reload reconciliation.
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_adds_gemini_project_parser_when_workspace_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        let repo_a = workspace.join("repoA");
+        std::fs::create_dir_all(repo_a.join(".gemini")).unwrap();
+        std::fs::write(repo_a.join(".gemini").join("settings.json"), "{}").unwrap();
+        let canonical_a = dunce::canonicalize(&repo_a).unwrap();
+
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
+        reload(&mut ctx, &plat);
+        assert!(parsers.read().iter().all(|p| !matches!(
+            (p.tool(), p.scope()),
+            (
+                sigil_core::event::AiTool::Gemini,
+                sigil_core::event::AiGuardScope::Project { .. }
+            )
+        )));
+
+        let updated = format!(
+            "version: 1\nhost_id_strategy: machine_id\ngemini_workspaces:\n  - '{}'\ntargets: []\n",
+            workspace.display()
+        );
+        std::fs::write(&ctx.policy_yaml_path, &updated).unwrap();
+        reload(&mut ctx, &plat);
+        let has = parsers.read().iter().any(|p| {
+            p.tool() == sigil_core::event::AiTool::Gemini
+                && matches!(
+                    p.scope(),
+                    sigil_core::event::AiGuardScope::Project { ref path } if path == &canonical_a
+                )
+        });
+        assert!(has, "expected GeminiProjectParser for repoA after reload");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_adds_cursor_project_parser_when_workspace_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        let repo_a = workspace.join("repoA");
+        std::fs::create_dir_all(repo_a.join(".cursor")).unwrap();
+        std::fs::write(repo_a.join(".cursor").join("mcp.json"), "{}").unwrap();
+        let canonical_a = dunce::canonicalize(&repo_a).unwrap();
+
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
+        reload(&mut ctx, &plat);
+        assert!(parsers.read().iter().all(|p| !matches!(
+            (p.tool(), p.scope()),
+            (
+                sigil_core::event::AiTool::Cursor,
+                sigil_core::event::AiGuardScope::Project { .. }
+            )
+        )));
+
+        let updated = format!(
+            "version: 1\nhost_id_strategy: machine_id\ncursor_workspaces:\n  - '{}'\ntargets: []\n",
+            workspace.display()
+        );
+        std::fs::write(&ctx.policy_yaml_path, &updated).unwrap();
+        reload(&mut ctx, &plat);
+        let has = parsers.read().iter().any(|p| {
+            p.tool() == sigil_core::event::AiTool::Cursor
+                && matches!(
+                    p.scope(),
+                    sigil_core::event::AiGuardScope::Project { ref path } if path == &canonical_a
+                )
+        });
+        assert!(has, "expected CursorProjectParser for repoA after reload");
     }
 
     // Phase 3b.7 — rule pack parser hot-reload reconciliation.
