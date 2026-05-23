@@ -954,12 +954,16 @@ mod tests {
 
     #[test]
     fn new_reason_variants_serialize_with_snake_case_tags() {
-        let t = AiGuardReason::TrustedMcpServer { server_name: "acme".into() };
+        let t = AiGuardReason::TrustedMcpServer {
+            server_name: "acme".into(),
+        };
         let j = serde_json::to_value(&t).unwrap();
         assert_eq!(j["kind"], "trusted_mcp_server");
         assert_eq!(j["server_name"], "acme");
 
-        let a = AiGuardReason::AutoApprovalEnabled { mode: "auto_edit".into() };
+        let a = AiGuardReason::AutoApprovalEnabled {
+            mode: "auto_edit".into(),
+        };
         let j = serde_json::to_value(&a).unwrap();
         assert_eq!(j["kind"], "auto_approval_enabled");
         assert_eq!(j["mode"], "auto_edit");

@@ -429,13 +429,17 @@ mod tests {
 
     #[test]
     fn trusted_mcp_server_weighs_1_5() {
-        let r = vec![AiGuardReason::TrustedMcpServer { server_name: "x".into() }];
+        let r = vec![AiGuardReason::TrustedMcpServer {
+            server_name: "x".into(),
+        }];
         assert_eq!(score(&r), 1.5);
     }
 
     #[test]
     fn auto_approval_enabled_weighs_2_0() {
-        let r = vec![AiGuardReason::AutoApprovalEnabled { mode: "auto_edit".into() }];
+        let r = vec![AiGuardReason::AutoApprovalEnabled {
+            mode: "auto_edit".into(),
+        }];
         assert_eq!(score(&r), 2.0);
     }
 

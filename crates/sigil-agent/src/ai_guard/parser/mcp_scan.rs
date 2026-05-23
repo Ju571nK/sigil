@@ -64,8 +64,14 @@ fn scheme_is_http(u: &str) -> bool {
 fn is_shell(cmd: &str) -> bool {
     matches!(
         cmd.rsplit(['/', '\\']).next().unwrap_or(cmd),
-        "sh" | "bash" | "zsh" | "dash" | "cmd" | "cmd.exe"
-            | "powershell" | "powershell.exe" | "pwsh"
+        "sh" | "bash"
+            | "zsh"
+            | "dash"
+            | "cmd"
+            | "cmd.exe"
+            | "powershell"
+            | "powershell.exe"
+            | "pwsh"
     )
 }
 
@@ -98,44 +104,66 @@ mod tests {
     #[test]
     fn remote_url_emits_remote() {
         let r = reasons(json!({"mcpServers":{"a":{"url":"https://x"}}}));
-        assert!(r.iter().any(|x| matches!(x, AiGuardReason::McpServerRemote { server_name, .. } if server_name=="a")));
+        assert!(r.iter().any(
+            |x| matches!(x, AiGuardReason::McpServerRemote { server_name, .. } if server_name=="a")
+        ));
     }
     #[test]
     fn http_url_field_emits_remote() {
         let r = reasons(json!({"mcpServers":{"a":{"httpUrl":"https://x/mcp"}}}));
-        assert!(r.iter().any(|x| matches!(x, AiGuardReason::McpServerRemote { .. })));
+        assert!(r
+            .iter()
+            .any(|x| matches!(x, AiGuardReason::McpServerRemote { .. })));
     }
     #[test]
     fn uppercase_scheme_still_detected() {
         let r = reasons(json!({"mcpServers":{"a":{"url":"HTTP://x"}}}));
-        assert!(r.iter().any(|x| matches!(x, AiGuardReason::McpServerRemote { .. })));
+        assert!(r
+            .iter()
+            .any(|x| matches!(x, AiGuardReason::McpServerRemote { .. })));
     }
     #[test]
     fn local_command_emits_local_and_nosandbox() {
         let r = reasons(json!({"mcpServers":{"a":{"command":"node","args":["m.js"]}}}));
-        assert!(r.iter().any(|x| matches!(x, AiGuardReason::McpServerLocalCommand { .. })));
-        assert!(r.iter().any(|x| matches!(x, AiGuardReason::NoSandbox { executor } if executor=="mcp_command")));
+        assert!(r
+            .iter()
+            .any(|x| matches!(x, AiGuardReason::McpServerLocalCommand { .. })));
+        assert!(r.iter().any(
+            |x| matches!(x, AiGuardReason::NoSandbox { executor } if executor=="mcp_command")
+        ));
     }
     #[test]
     fn shell_args_destructive_scanned() {
-        let r = reasons(json!({"mcpServers":{"a":{"command":"bash","args":["-c","rm -rf /tmp/sigil-test"]}}}));
+        let r = reasons(
+            json!({"mcpServers":{"a":{"command":"bash","args":["-c","rm -rf /tmp/sigil-test"]}}}),
+        );
         assert!(r.iter().any(|x| matches!(x, AiGuardReason::DestructiveInInlineCommand { hook_event, .. } if hook_event=="mcp_command")));
     }
     #[test]
     fn cmd_exe_slash_c_scanned() {
-        let r = reasons(json!({"mcpServers":{"a":{"command":"cmd.exe","args":["/c","rm -rf /tmp/sigil-test"]}}}));
-        assert!(r.iter().any(|x| matches!(x, AiGuardReason::DestructiveInInlineCommand { .. })));
+        let r = reasons(
+            json!({"mcpServers":{"a":{"command":"cmd.exe","args":["/c","rm -rf /tmp/sigil-test"]}}}),
+        );
+        assert!(r
+            .iter()
+            .any(|x| matches!(x, AiGuardReason::DestructiveInInlineCommand { .. })));
     }
     #[test]
     fn both_url_and_command_emit_both() {
         let r = reasons(json!({"mcpServers":{"a":{"url":"https://x","command":"node"}}}));
-        assert!(r.iter().any(|x| matches!(x, AiGuardReason::McpServerRemote { .. })));
-        assert!(r.iter().any(|x| matches!(x, AiGuardReason::McpServerLocalCommand { .. })));
+        assert!(r
+            .iter()
+            .any(|x| matches!(x, AiGuardReason::McpServerRemote { .. })));
+        assert!(r
+            .iter()
+            .any(|x| matches!(x, AiGuardReason::McpServerLocalCommand { .. })));
     }
     #[test]
     fn trust_true_emits_trusted() {
         let r = reasons(json!({"mcpServers":{"a":{"command":"node","trust":true}}}));
-        assert!(r.iter().any(|x| matches!(x, AiGuardReason::TrustedMcpServer { server_name } if server_name=="a")));
+        assert!(r.iter().any(
+            |x| matches!(x, AiGuardReason::TrustedMcpServer { server_name } if server_name=="a")
+        ));
     }
     #[test]
     fn no_mcp_servers_emits_nothing() {
@@ -144,6 +172,8 @@ mod tests {
     #[test]
     fn safe_local_command_no_destructive() {
         let r = reasons(json!({"mcpServers":{"a":{"command":"bash","args":["-c","echo hi"]}}}));
-        assert!(!r.iter().any(|x| matches!(x, AiGuardReason::DestructiveInInlineCommand { .. })));
+        assert!(!r
+            .iter()
+            .any(|x| matches!(x, AiGuardReason::DestructiveInInlineCommand { .. })));
     }
 }
