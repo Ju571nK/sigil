@@ -31,6 +31,8 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
         AiGuardReason::PermissionsDenyEmpty => "permissions_deny_empty",
         AiGuardReason::McpServerRemote { .. } => "mcp_server_remote",
         AiGuardReason::McpServerLocalCommand { .. } => "mcp_server_local_command",
+        AiGuardReason::TrustedMcpServer { .. } => "trusted_mcp_server",
+        AiGuardReason::AutoApprovalEnabled { .. } => "auto_approval_enabled",
     }
 }
 
@@ -40,7 +42,7 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct Rubric {
     /// kind_key → weight. Keys are static strings owned by the rubric
-    /// module (returned by `kind_key()`). Defaults populate all 11 known
+    /// module (returned by `kind_key()`). Defaults populate all 13 known
     /// kinds; with_overrides() may replace values but never adds keys.
     pub weights: HashMap<&'static str, f32>,
     /// Subset of `weights` whose value came from an operator override
@@ -55,7 +57,7 @@ pub struct Rubric {
 impl Rubric {
     /// Build the canonical hardcoded weights — single source of truth for
     /// defaults. Must match the historical `weight_for()` match arms for
-    /// all 11 kinds.
+    /// all 13 kinds.
     pub fn defaults() -> Self {
         let mut w: HashMap<&'static str, f32> = HashMap::new();
         w.insert("destructive_in_inline_command", 4.0);
@@ -69,6 +71,8 @@ impl Rubric {
         w.insert("permissions_deny_empty", 1.0);
         w.insert("mcp_server_remote", 1.0);
         w.insert("mcp_server_local_command", 0.5);
+        w.insert("trusted_mcp_server", 1.5);
+        w.insert("auto_approval_enabled", 2.0);
         Rubric {
             weights: w,
             overridden: HashSet::new(),
@@ -418,7 +422,21 @@ mod tests {
         assert_eq!(r.weights.get("permissions_deny_empty"), Some(&1.0));
         assert_eq!(r.weights.get("mcp_server_remote"), Some(&1.0));
         assert_eq!(r.weights.get("mcp_server_local_command"), Some(&0.5));
-        assert_eq!(r.weights.len(), 11);
+        assert_eq!(r.weights.get("trusted_mcp_server"), Some(&1.5));
+        assert_eq!(r.weights.get("auto_approval_enabled"), Some(&2.0));
+        assert_eq!(r.weights.len(), 13);
+    }
+
+    #[test]
+    fn trusted_mcp_server_weighs_1_5() {
+        let r = vec![AiGuardReason::TrustedMcpServer { server_name: "x".into() }];
+        assert_eq!(score(&r), 1.5);
+    }
+
+    #[test]
+    fn auto_approval_enabled_weighs_2_0() {
+        let r = vec![AiGuardReason::AutoApprovalEnabled { mode: "auto_edit".into() }];
+        assert_eq!(score(&r), 2.0);
     }
 
     #[test]
