@@ -808,47 +808,13 @@ rule_packs:
     }
 
     #[test]
-    fn defaults_includes_two_rule_packs() {
+    fn defaults_includes_no_rule_packs() {
+        // Phase 3b.8: gemini-default and cursor-default are retired from the
+        // built-in defaults (superseded by the hardcoded parsers in 3b.8).
+        // Operators can still supply their own rule packs via signed policy
+        // overlay — the engine remains intact.
         let doc = defaults().expect("defaults parse");
-        assert_eq!(doc.rule_packs.len(), 2);
-        let ids: Vec<&str> = doc.rule_packs.iter().map(|p| p.id.as_str()).collect();
-        assert!(ids.contains(&"gemini-default"));
-        assert!(ids.contains(&"cursor-default"));
-    }
-
-    #[test]
-    fn default_rule_pack_gemini_has_expected_shape() {
-        let doc = defaults().expect("defaults");
-        let gemini = doc
-            .rule_packs
-            .iter()
-            .find(|p| p.id == "gemini-default")
-            .unwrap();
-        assert_eq!(gemini.pack_version, 1);
-        assert_eq!(gemini.tool, crate::event::AiTool::Gemini);
-        assert!(matches!(
-            gemini.scope,
-            crate::event::AiGuardScope::UserGlobal
-        ));
-        assert_eq!(gemini.watched_paths, vec!["~/.gemini/settings.json"]);
-        assert!(gemini.rules.iter().any(|r| r.id == "sandbox-disabled"));
-    }
-
-    #[test]
-    fn default_rule_pack_cursor_has_expected_shape() {
-        let doc = defaults().expect("defaults");
-        let cursor = doc
-            .rule_packs
-            .iter()
-            .find(|p| p.id == "cursor-default")
-            .unwrap();
-        assert_eq!(cursor.pack_version, 1);
-        assert_eq!(cursor.tool, crate::event::AiTool::Cursor);
-        assert!(matches!(
-            cursor.scope,
-            crate::event::AiGuardScope::UserGlobal
-        ));
-        assert_eq!(cursor.watched_paths, vec!["~/.cursor/mcp.json"]);
+        assert!(doc.rule_packs.is_empty());
     }
 
     #[test]
