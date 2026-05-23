@@ -146,8 +146,7 @@ Out of the box, with built-in defaults plus your policy YAML:
   **Continue.dev** (`~/.continue/config.json`), `~/.gemini/` and
   `<repo>/.gemini/`, `~/.cursor/mcp.json`. Hash-anchored events on every
   change; risk score on the contents (Claude Code + Codex shipped 3b.1;
-  Claude Desktop + Continue shipped 3b.6; Gemini + Cursor parsers planned
-  in 3b.2).
+  Claude Desktop + Continue shipped 3b.6; Gemini + Cursor parsers shipped 3b.8).
 - **Hook scripts** — convention dirs (`~/.claude/hooks/**`,
   `<repo>/.claude/hooks/**`) watched recursively, so a hook script silently
   going from "deny" to "exit 0" is visible.
