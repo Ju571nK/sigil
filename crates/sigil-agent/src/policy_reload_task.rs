@@ -798,7 +798,7 @@ mod tests {
         let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
         reload(&mut ctx, &plat);
 
-        // Defaults loaded — 2 packs (gemini-default, cursor-default).
+        // Defaults retired in 3b.8 — 0 default packs.
         let default_count = parsers
             .read()
             .iter()
@@ -808,7 +808,7 @@ mod tests {
                     .is_some()
             })
             .count();
-        assert_eq!(default_count, 2);
+        assert_eq!(default_count, 0);
 
         // Add a custom user rule pack.
         let updated = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\nrule_packs:\n  - id: my-extra\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n";
@@ -839,7 +839,7 @@ mod tests {
                 .unwrap_or(false)
         }));
 
-        // Drop the user pack — should leave just the 2 defaults.
+        // Drop the user pack — no defaults remain after 3b.8 retirement.
         let updated = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\n";
         std::fs::write(&ctx.policy_yaml_path, updated).unwrap();
         reload(&mut ctx, &plat);
@@ -852,7 +852,7 @@ mod tests {
         });
         assert!(!still_present, "my-extra should be removed after reload");
 
-        // Defaults still there.
+        // No default packs remain.
         let default_count = parsers
             .read()
             .iter()
@@ -862,6 +862,6 @@ mod tests {
                     .is_some()
             })
             .count();
-        assert_eq!(default_count, 2);
+        assert_eq!(default_count, 0);
     }
 }
