@@ -4,7 +4,9 @@
 use crate::keygen::SigningKeyFile;
 use anyhow::{bail, Context, Result};
 use ed25519_dalek::Signer;
-use sigil_core::manifest::{ArtifactEntry, BuildManifest, SignedBuildManifest, MANIFEST_SCHEMA_VERSION};
+use sigil_core::manifest::{
+    ArtifactEntry, BuildManifest, SignedBuildManifest, MANIFEST_SCHEMA_VERSION,
+};
 use sigil_core::policy::canonical::to_canonical_bytes;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
@@ -77,7 +79,8 @@ pub fn sign_to_file(args: ManifestArgs<'_>, out: &Path) -> Result<SignedBuildMan
     let bytes = serde_json::to_vec_pretty(&signed).context("serialize signed manifest")?;
     if let Some(parent) = out.parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).with_context(|| format!("create dir {}", parent.display()))?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create dir {}", parent.display()))?;
         }
     }
     std::fs::write(out, &bytes).with_context(|| format!("write {}", out.display()))?;
@@ -108,7 +111,11 @@ mod tests {
             key_file: &kf,
             git_sha: "abc123".into(),
             run_url: "https://ci/run/1".into(),
-            artifacts: vec![ArtifactSpec { name: "sigil".into(), target: "x86_64-apple-darwin".into(), file: f1 }],
+            artifacts: vec![ArtifactSpec {
+                name: "sigil".into(),
+                target: "x86_64-apple-darwin".into(),
+                file: f1,
+            }],
             now: datetime!(2026-05-24 0:00 UTC),
         };
         let signed = build_and_sign(args).unwrap();
@@ -122,7 +129,8 @@ mod tests {
 
     #[test]
     fn parse_artifact_spec_ok() {
-        let s = parse_artifact_spec("name=sigil,target=x86_64-apple-darwin,file=/tmp/sigil").unwrap();
+        let s =
+            parse_artifact_spec("name=sigil,target=x86_64-apple-darwin,file=/tmp/sigil").unwrap();
         assert_eq!(s.name, "sigil");
         assert_eq!(s.target, "x86_64-apple-darwin");
         assert_eq!(s.file, PathBuf::from("/tmp/sigil"));
@@ -140,12 +148,19 @@ mod tests {
         let f1 = tmpfile(dir.path(), "sigil", b"x");
         let out = dir.path().join("build-manifest.json");
         let args = ManifestArgs {
-            key_file: &kf, git_sha: "s".into(), run_url: "".into(),
-            artifacts: vec![ArtifactSpec { name: "sigil".into(), target: "t".into(), file: f1 }],
+            key_file: &kf,
+            git_sha: "s".into(),
+            run_url: "".into(),
+            artifacts: vec![ArtifactSpec {
+                name: "sigil".into(),
+                target: "t".into(),
+                file: f1,
+            }],
             now: datetime!(2026-05-24 0:00 UTC),
         };
         let signed = sign_to_file(args, &out).unwrap();
-        let from_disk: SignedBuildManifest = serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
+        let from_disk: SignedBuildManifest =
+            serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
         assert_eq!(from_disk, signed);
     }
 }

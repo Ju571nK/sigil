@@ -106,7 +106,13 @@ fn main() -> Result<()> {
             );
             println!("  signing_pubkey_id: {}", signed.signing_pubkey_id);
         }
-        Command::Manifest { key, git_sha, run_url, artifacts, out } => {
+        Command::Manifest {
+            key,
+            git_sha,
+            run_url,
+            artifacts,
+            out,
+        } => {
             let key_file = keygen::SigningKeyFile::load(&key)?;
             let specs = artifacts
                 .iter()

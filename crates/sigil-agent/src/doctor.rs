@@ -83,31 +83,58 @@ pub(crate) fn verify_self_impl(
     };
     let text = match std::fs::read_to_string(&mpath) {
         Ok(s) => s,
-        Err(e) => { println!("[verify-self] cannot read manifest {}: {e}", mpath.display()); return 1; }
+        Err(e) => {
+            println!(
+                "[verify-self] cannot read manifest {}: {e}",
+                mpath.display()
+            );
+            return 1;
+        }
     };
     let signed: sigil_core::manifest::SignedBuildManifest = match serde_json::from_str(&text) {
         Ok(v) => v,
-        Err(e) => { println!("[verify-self] manifest parse failed: {e}"); return 1; }
+        Err(e) => {
+            println!("[verify-self] manifest parse failed: {e}");
+            return 1;
+        }
     };
     let manifest = match sigil_core::manifest::verify_manifest_with_keys(&signed, keys) {
         Ok(m) => m,
-        Err(e) => { println!("[verify-self] manifest verification failed: {e}"); return 1; }
+        Err(e) => {
+            println!("[verify-self] manifest verification failed: {e}");
+            return 1;
+        }
     };
     let bytes = match std::fs::read(exe) {
         Ok(b) => b,
-        Err(e) => { println!("[verify-self] cannot read own binary {}: {e}", exe.display()); return 1; }
+        Err(e) => {
+            println!(
+                "[verify-self] cannot read own binary {}: {e}",
+                exe.display()
+            );
+            return 1;
+        }
     };
     let hash = blake3::hash(&bytes).to_hex().to_string();
     let name = exe.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     match manifest.artifact(name, target) {
-        None => { println!("[verify-self] no manifest entry for {name}/{target}"); 1 }
+        None => {
+            println!("[verify-self] no manifest entry for {name}/{target}");
+            1
+        }
         Some(e) if e.blake3 == hash => {
-            println!("[OK] verify-self: {name}/{target} matches manifest (blake3 {}…)", &hash[..16]);
+            println!(
+                "[OK] verify-self: {name}/{target} matches manifest (blake3 {}…)",
+                &hash[..16]
+            );
             0
         }
         Some(e) => {
-            println!("[FAIL] verify-self: {name}/{target} hash mismatch (binary {}… != manifest {}…)",
-                &hash[..16], &e.blake3[..16]);
+            println!(
+                "[FAIL] verify-self: {name}/{target} hash mismatch (binary {}… != manifest {}…)",
+                &hash[..16],
+                &e.blake3[..16]
+            );
             1
         }
     }
@@ -898,7 +925,9 @@ mod verify_self_tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use rand_core::{OsRng, RngCore};
-    use sigil_core::manifest::{ArtifactEntry, BuildManifest, SignedBuildManifest, MANIFEST_SCHEMA_VERSION};
+    use sigil_core::manifest::{
+        ArtifactEntry, BuildManifest, SignedBuildManifest, MANIFEST_SCHEMA_VERSION,
+    };
     use sigil_core::policy::canonical::to_canonical_bytes;
     use std::io::Write;
 
@@ -908,19 +937,45 @@ mod verify_self_tests {
         let mut s = [0u8; 32];
         OsRng.fill_bytes(&mut s);
         let sk = SigningKey::from_bytes(&s);
-        (sk.clone(), format!("ed25519:{}", data_encoding::BASE64.encode(&sk.verifying_key().to_bytes())))
+        (
+            sk.clone(),
+            format!(
+                "ed25519:{}",
+                data_encoding::BASE64.encode(&sk.verifying_key().to_bytes())
+            ),
+        )
     }
-    fn fixture(dir: &Path, sk: &SigningKey, key_id: &str, exe_name: &str, exe_body: &[u8], entry_hash: Option<String>) -> (std::path::PathBuf, std::path::PathBuf) {
+    fn fixture(
+        dir: &Path,
+        sk: &SigningKey,
+        key_id: &str,
+        exe_name: &str,
+        exe_body: &[u8],
+        entry_hash: Option<String>,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
         let exe = dir.join(exe_name);
-        { let mut f = std::fs::File::create(&exe).unwrap(); f.write_all(exe_body).unwrap(); }
+        {
+            let mut f = std::fs::File::create(&exe).unwrap();
+            f.write_all(exe_body).unwrap();
+        }
         let blake3 = entry_hash.unwrap_or_else(|| blake3::hash(exe_body).to_hex().to_string());
         let m = BuildManifest {
-            schema_version: MANIFEST_SCHEMA_VERSION, git_sha: "s".into(), run_url: "".into(),
+            schema_version: MANIFEST_SCHEMA_VERSION,
+            git_sha: "s".into(),
+            run_url: "".into(),
             built_at: time::macros::datetime!(2026-05-24 0:00 UTC),
-            artifacts: vec![ArtifactEntry { name: exe_name.into(), target: TGT.into(), blake3 }],
+            artifacts: vec![ArtifactEntry {
+                name: exe_name.into(),
+                target: TGT.into(),
+                blake3,
+            }],
         };
         let sig = sk.sign(&to_canonical_bytes(&m).unwrap());
-        let signed = SignedBuildManifest { manifest: m, signature: data_encoding::BASE64.encode(&sig.to_bytes()), signing_pubkey_id: key_id.into() };
+        let signed = SignedBuildManifest {
+            manifest: m,
+            signature: data_encoding::BASE64.encode(&sig.to_bytes()),
+            signing_pubkey_id: key_id.into(),
+        };
         let mpath = dir.join("manifest.json");
         std::fs::write(&mpath, serde_json::to_vec_pretty(&signed).unwrap()).unwrap();
         (exe, mpath)
@@ -949,7 +1004,10 @@ mod verify_self_tests {
         let (sk, entry) = keypair();
         let (exe, mpath) = fixture(dir.path(), &sk, "bk", "sigil", b"x", None);
         let keys = [("bk", entry.as_str())];
-        assert_ne!(verify_self_impl(&exe, Some(mpath), &keys, "aarch64-unknown-linux-gnu"), 0);
+        assert_ne!(
+            verify_self_impl(&exe, Some(mpath), &keys, "aarch64-unknown-linux-gnu"),
+            0
+        );
     }
     #[test]
     fn tampered_signature_exits_nonzero() {

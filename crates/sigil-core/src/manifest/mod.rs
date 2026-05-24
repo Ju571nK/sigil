@@ -52,7 +52,9 @@ pub enum ManifestError {
 impl BuildManifest {
     /// (name,target) 매칭 entry. verify 가 중복을 거부하므로 first-match 로 충분.
     pub fn artifact(&self, name: &str, target: &str) -> Option<&ArtifactEntry> {
-        self.artifacts.iter().find(|a| a.name == name && a.target == target)
+        self.artifacts
+            .iter()
+            .find(|a| a.name == name && a.target == target)
     }
 }
 
@@ -65,7 +67,9 @@ fn parse_build_key(entry: &str) -> Option<ed25519_dalek::VerifyingKey> {
 }
 
 fn is_lower_hex_64(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// 컴파일드인 SIGIL_BUILD_PUBKEYS 로 검증. anchor 가 비어있으면 항상 UnknownKey.
@@ -83,19 +87,22 @@ pub fn verify_manifest_with_keys(
 
     if m.schema_version != MANIFEST_SCHEMA_VERSION {
         return Err(ManifestError::Malformed(format!(
-            "unsupported schema_version {}", m.schema_version
+            "unsupported schema_version {}",
+            m.schema_version
         )));
     }
     let mut seen: HashSet<(&str, &str)> = HashSet::new();
     for a in &m.artifacts {
         if !is_lower_hex_64(&a.blake3) {
             return Err(ManifestError::Malformed(format!(
-                "artifact {}/{}: blake3 not lowercase 64-hex", a.name, a.target
+                "artifact {}/{}: blake3 not lowercase 64-hex",
+                a.name, a.target
             )));
         }
         if !seen.insert((a.name.as_str(), a.target.as_str())) {
             return Err(ManifestError::Malformed(format!(
-                "duplicate artifact entry {}/{}", a.name, a.target
+                "duplicate artifact entry {}/{}",
+                a.name, a.target
             )));
         }
     }
@@ -131,7 +138,10 @@ mod tests {
         let mut secret = [0u8; 32];
         OsRng.fill_bytes(&mut secret);
         let sk = SigningKey::from_bytes(&secret);
-        let entry = format!("ed25519:{}", data_encoding::BASE64.encode(&sk.verifying_key().to_bytes()));
+        let entry = format!(
+            "ed25519:{}",
+            data_encoding::BASE64.encode(&sk.verifying_key().to_bytes())
+        );
         (sk, entry)
     }
     fn manifest_with(artifacts: Vec<ArtifactEntry>) -> BuildManifest {
@@ -144,12 +154,20 @@ mod tests {
         }
     }
     fn entry(name: &str) -> ArtifactEntry {
-        ArtifactEntry { name: name.into(), target: "x86_64-apple-darwin".into(), blake3: "a".repeat(64) }
+        ArtifactEntry {
+            name: name.into(),
+            target: "x86_64-apple-darwin".into(),
+            blake3: "a".repeat(64),
+        }
     }
     fn sign(sk: &SigningKey, id: &str, m: BuildManifest) -> SignedBuildManifest {
         let canonical = to_canonical_bytes(&m).unwrap();
         let sig = sk.sign(&canonical);
-        SignedBuildManifest { manifest: m, signature: data_encoding::BASE64.encode(&sig.to_bytes()), signing_pubkey_id: id.into() }
+        SignedBuildManifest {
+            manifest: m,
+            signature: data_encoding::BASE64.encode(&sig.to_bytes()),
+            signing_pubkey_id: id.into(),
+        }
     }
 
     #[test]
@@ -166,14 +184,20 @@ mod tests {
         let keys = [("bk1", e.as_str())];
         let mut signed = sign(&sk, "bk1", manifest_with(vec![entry("sigil")]));
         signed.manifest.git_sha = "deadbeef".into();
-        assert_eq!(verify_manifest_with_keys(&signed, &keys).unwrap_err(), ManifestError::BadSignature);
+        assert_eq!(
+            verify_manifest_with_keys(&signed, &keys).unwrap_err(),
+            ManifestError::BadSignature
+        );
     }
     #[test]
     fn unknown_key_id() {
         let (sk, e) = test_keypair();
         let keys = [("other", e.as_str())];
         let signed = sign(&sk, "bk1", manifest_with(vec![entry("sigil")]));
-        assert!(matches!(verify_manifest_with_keys(&signed, &keys).unwrap_err(), ManifestError::UnknownKey(_)));
+        assert!(matches!(
+            verify_manifest_with_keys(&signed, &keys).unwrap_err(),
+            ManifestError::UnknownKey(_)
+        ));
     }
     #[test]
     fn bad_schema_version_is_malformed() {
@@ -182,22 +206,36 @@ mod tests {
         let mut m = manifest_with(vec![entry("sigil")]);
         m.schema_version = 99;
         let signed = sign(&sk, "bk1", m);
-        assert!(matches!(verify_manifest_with_keys(&signed, &keys).unwrap_err(), ManifestError::Malformed(_)));
+        assert!(matches!(
+            verify_manifest_with_keys(&signed, &keys).unwrap_err(),
+            ManifestError::Malformed(_)
+        ));
     }
     #[test]
     fn bad_hex_is_malformed() {
         let (sk, e) = test_keypair();
         let keys = [("bk1", e.as_str())];
-        let mut bad = entry("sigil"); bad.blake3 = "XYZ".into();
+        let mut bad = entry("sigil");
+        bad.blake3 = "XYZ".into();
         let signed = sign(&sk, "bk1", manifest_with(vec![bad]));
-        assert!(matches!(verify_manifest_with_keys(&signed, &keys).unwrap_err(), ManifestError::Malformed(_)));
+        assert!(matches!(
+            verify_manifest_with_keys(&signed, &keys).unwrap_err(),
+            ManifestError::Malformed(_)
+        ));
     }
     #[test]
     fn duplicate_entry_is_malformed() {
         let (sk, e) = test_keypair();
         let keys = [("bk1", e.as_str())];
-        let signed = sign(&sk, "bk1", manifest_with(vec![entry("sigil"), entry("sigil")]));
-        assert!(matches!(verify_manifest_with_keys(&signed, &keys).unwrap_err(), ManifestError::Malformed(_)));
+        let signed = sign(
+            &sk,
+            "bk1",
+            manifest_with(vec![entry("sigil"), entry("sigil")]),
+        );
+        assert!(matches!(
+            verify_manifest_with_keys(&signed, &keys).unwrap_err(),
+            ManifestError::Malformed(_)
+        ));
     }
     #[test]
     fn artifact_lookup_hit_and_miss() {
@@ -210,6 +248,9 @@ mod tests {
     fn empty_anchor_yields_unknown_key() {
         let (sk, _e) = test_keypair();
         let signed = sign(&sk, "bk1", manifest_with(vec![entry("sigil")]));
-        assert!(matches!(verify_manifest_with_keys(&signed, &[]).unwrap_err(), ManifestError::UnknownKey(_)));
+        assert!(matches!(
+            verify_manifest_with_keys(&signed, &[]).unwrap_err(),
+            ManifestError::UnknownKey(_)
+        ));
     }
 }
