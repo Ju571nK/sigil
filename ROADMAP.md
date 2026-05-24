@@ -86,7 +86,7 @@ merge SHA for each shipped phase.
   active hosts) or licensed limit, surfaces `license` status on `/v1/meta`, and
   writes an append-only `license-audit.jsonl` record. Structure for future
   commercial licensing — no billing and no blocking (measures, doesn't block).
-- **Phase 3b.8 — (pending merge).** Hardcoded Gemini CLI + Cursor guard-surface
+- **Phase 3b.8 — shipped 3d8a227.** Hardcoded Gemini CLI + Cursor guard-surface
   parsers: per-repo scope, destructive scanning, full Gemini surface coverage.
   Retired the declarative default packs shipped in 3b.7; new shared `mcp_scan`
   helper lowercases URL schemes before comparison.
