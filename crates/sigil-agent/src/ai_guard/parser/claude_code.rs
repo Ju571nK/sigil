@@ -309,6 +309,12 @@ pub(crate) fn emit_permission_reasons(settings: &Value, out: &mut Vec<AiGuardRea
     }
 }
 
+/// Claude Code permission rules are `Tool:matcher` (colon-delimited), so
+/// breadth lives in the matcher position: bare `*`, `*:*`, or any rule whose
+/// matcher is a wildcard (`:*` / `:.*`). This heuristic is intentionally
+/// distinct from Gemini's `emit_tools_allowed` (issue #30): Gemini uses a
+/// `tool(restriction)` paren format, not colon format, so a shared predicate
+/// would not fit. Over-flagging is acceptable — Sigil measures, doesn't block.
 fn is_broad_allow(rule: &str) -> bool {
     rule == "*" || rule == "*:*" || rule.ends_with(":*") || rule.ends_with(":.*")
 }

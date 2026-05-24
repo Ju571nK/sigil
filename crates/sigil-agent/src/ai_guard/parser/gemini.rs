@@ -46,6 +46,13 @@ pub(crate) fn emit_sandbox(v: &Value, out: &mut Vec<AiGuardReason>) {
 /// tools.allowed[*] entry that is an arg-unrestricted shell tool (exactly
 /// "run_shell_command", or any entry containing '*') -> PermissionsAllowBroad.
 /// "run_shell_command(git)" (parenthesised restriction) is safe.
+///
+/// Format note (issue #30): Gemini `tools.allowed` entries are `tool(restriction)`
+/// (parenthesised), distinct from Claude Code's `Tool:matcher` colon format and
+/// its `is_broad_allow` — the two parsers intentionally use format-specific
+/// heuristics rather than a shared predicate. `contains('*')` may over-flag a
+/// restricted-but-globbed entry (e.g. `run_shell_command(rm *.log)`); that is
+/// acceptable per "measures, doesn't block / prefer false positives".
 pub(crate) fn emit_tools_allowed(v: &Value, out: &mut Vec<AiGuardReason>) {
     let Some(arr) = v
         .get("tools")
