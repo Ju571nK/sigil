@@ -87,7 +87,7 @@ pub(crate) fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
 
 fn emit_one_mcp(name: &str, def: &Value, out: &mut Vec<AiGuardReason>) {
     if let Some(url) = def.get("url").and_then(Value::as_str) {
-        if url.starts_with("http://") || url.starts_with("https://") {
+        if super::mcp_scan::scheme_is_http(url) {
             out.push(AiGuardReason::McpServerRemote {
                 server_name: name.to_string(),
                 url: url.to_string(),
@@ -410,6 +410,25 @@ mod tests {
             AiGuardReason::McpServerRemote { server_name, url }
                 if server_name == "remote" && url == "https://mcp.example.com"
         )));
+    }
+
+    #[test]
+    fn mcp_uppercase_scheme_emits_remote() {
+        let dir = tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"{"mcpServers": [{"name": "remote", "url": "HtTpS://mcp.example.com"}]}"#,
+        );
+        let p = ContinueDevParser;
+        let reasons = p.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::McpServerRemote { server_name, .. }
+                    if server_name == "remote"
+            )),
+            "expected McpServerRemote for HtTpS:// (mixed-case) url, got {reasons:?}"
+        );
     }
 
     #[test]

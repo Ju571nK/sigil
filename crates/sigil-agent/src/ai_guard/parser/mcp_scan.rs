@@ -55,8 +55,9 @@ pub fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
 }
 
 /// True iff the URL scheme (lowercased) is http/https. Lowercasing defeats
-/// `HTTP://` evasion.
-fn scheme_is_http(u: &str) -> bool {
+/// `HTTP://` evasion. Shared with sibling parsers (`codex`, `continue_dev`)
+/// via `pub(crate)` so they don't duplicate this logic.
+pub(crate) fn scheme_is_http(u: &str) -> bool {
     let lower = u.trim_start().to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
 }

@@ -249,7 +249,7 @@ pub(crate) fn emit_mcp_reasons(val: &Value, out: &mut Vec<AiGuardReason>) {
     for (name, def) in servers {
         let url = def.get("url").and_then(Value::as_str);
         if let Some(u) = url {
-            if u.starts_with("http://") || u.starts_with("https://") {
+            if super::mcp_scan::scheme_is_http(u) {
                 out.push(AiGuardReason::McpServerRemote {
                     server_name: name.clone(),
                     url: u.to_string(),
@@ -490,6 +490,28 @@ url = "https://mcp.example.com/sse"
                     if server_name == "acme" && url == "https://mcp.example.com/sse"
             )),
             "expected McpServerRemote, got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn mcp_server_with_uppercase_scheme_emits_remote() {
+        let dir = tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"
+[mcp_servers.acme]
+url = "HTTP://mcp.example.com/sse"
+"#,
+        );
+        let p = CodexParser;
+        let reasons = p.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::McpServerRemote { server_name, .. }
+                    if server_name == "acme"
+            )),
+            "expected McpServerRemote for HTTP:// (uppercase) url, got {reasons:?}"
         );
     }
 
