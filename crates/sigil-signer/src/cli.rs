@@ -89,6 +89,21 @@ pub enum Command {
         #[arg(long)]
         license_id: Option<String>,
     },
+    /// Sign a build manifest (per-artifact blake3) into a SignedBuildManifest.
+    Manifest {
+        /// Vendor build signing key file (from `keygen`).
+        #[arg(long)]
+        key: PathBuf,
+        #[arg(long)]
+        git_sha: String,
+        #[arg(long, default_value = "")]
+        run_url: String,
+        /// Repeatable: `name=<n>,target=<t>,file=<p>`.
+        #[arg(long = "artifact", action = clap::ArgAction::Append)]
+        artifacts: Vec<String>,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Verify a signed audit-log chain file (hash-chain + optional signatures).
     VerifyAudit {
         /// Path to the audit chain file (license-audit.jsonl).
