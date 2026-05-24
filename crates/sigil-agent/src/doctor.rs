@@ -3,6 +3,7 @@
 use crate::platform::{ActivePlatform, FdaState, Platform};
 use sigil_core::policy::expand::{expand_per_user, EnvLookup};
 use sigil_core::policy::{current_platform, defaults, merge};
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Result of a single doctor check: `(level, message)`. Free type so the
@@ -43,6 +44,71 @@ impl CheckResult {
         Self {
             level: CheckLevel::Warn,
             message: msg.into(),
+        }
+    }
+}
+
+/// `--verify-self` 진입점. 실행 중 바이너리를 manifest 와 대조.
+/// 0 = 일치+검증OK, 비0 = 그 외(unavailable 포함).
+pub fn verify_self(manifest: Option<std::path::PathBuf>) -> i32 {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            println!("[verify-self] cannot resolve current exe: {e}");
+            return 1;
+        }
+    };
+    verify_self_impl(
+        &exe,
+        manifest,
+        sigil_core::manifest::SIGIL_BUILD_PUBKEYS,
+        env!("SIGIL_BUILD_TARGET"),
+    )
+}
+
+/// 테스트 가능한 코어: keyset + target 을 주입받음.
+pub(crate) fn verify_self_impl(
+    exe: &Path,
+    manifest: Option<std::path::PathBuf>,
+    keys: &[(&str, &str)],
+    target: &str,
+) -> i32 {
+    if keys.is_empty() {
+        println!("[verify-self] no build trust anchor compiled in this release (populated in a future signed release)");
+        return 1;
+    }
+    let Some(mpath) = manifest else {
+        println!("[verify-self] no build manifest given (--manifest); self-verify unavailable");
+        return 1;
+    };
+    let text = match std::fs::read_to_string(&mpath) {
+        Ok(s) => s,
+        Err(e) => { println!("[verify-self] cannot read manifest {}: {e}", mpath.display()); return 1; }
+    };
+    let signed: sigil_core::manifest::SignedBuildManifest = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => { println!("[verify-self] manifest parse failed: {e}"); return 1; }
+    };
+    let manifest = match sigil_core::manifest::verify_manifest_with_keys(&signed, keys) {
+        Ok(m) => m,
+        Err(e) => { println!("[verify-self] manifest verification failed: {e}"); return 1; }
+    };
+    let bytes = match std::fs::read(exe) {
+        Ok(b) => b,
+        Err(e) => { println!("[verify-self] cannot read own binary {}: {e}", exe.display()); return 1; }
+    };
+    let hash = blake3::hash(&bytes).to_hex().to_string();
+    let name = exe.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    match manifest.artifact(name, target) {
+        None => { println!("[verify-self] no manifest entry for {name}/{target}"); 1 }
+        Some(e) if e.blake3 == hash => {
+            println!("[OK] verify-self: {name}/{target} matches manifest (blake3 {}…)", &hash[..16]);
+            0
+        }
+        Some(e) => {
+            println!("[FAIL] verify-self: {name}/{target} hash mismatch (binary {}… != manifest {}…)",
+                &hash[..16], &e.blake3[..16]);
+            1
         }
     }
 }
@@ -824,5 +890,90 @@ mod linux_tests {
         let r = check_events_dir_perms(&ev, &group_file);
         assert_eq!(r.level, CheckLevel::Ok);
         assert!(r.message.contains("0750"), "{:?}", r);
+    }
+}
+
+#[cfg(test)]
+mod verify_self_tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use rand_core::{OsRng, RngCore};
+    use sigil_core::manifest::{ArtifactEntry, BuildManifest, SignedBuildManifest, MANIFEST_SCHEMA_VERSION};
+    use sigil_core::policy::canonical::to_canonical_bytes;
+    use std::io::Write;
+
+    const TGT: &str = "x86_64-apple-darwin";
+
+    fn keypair() -> (SigningKey, String) {
+        let mut s = [0u8; 32];
+        OsRng.fill_bytes(&mut s);
+        let sk = SigningKey::from_bytes(&s);
+        (sk.clone(), format!("ed25519:{}", data_encoding::BASE64.encode(&sk.verifying_key().to_bytes())))
+    }
+    fn fixture(dir: &Path, sk: &SigningKey, key_id: &str, exe_name: &str, exe_body: &[u8], entry_hash: Option<String>) -> (std::path::PathBuf, std::path::PathBuf) {
+        let exe = dir.join(exe_name);
+        { let mut f = std::fs::File::create(&exe).unwrap(); f.write_all(exe_body).unwrap(); }
+        let blake3 = entry_hash.unwrap_or_else(|| blake3::hash(exe_body).to_hex().to_string());
+        let m = BuildManifest {
+            schema_version: MANIFEST_SCHEMA_VERSION, git_sha: "s".into(), run_url: "".into(),
+            built_at: time::macros::datetime!(2026-05-24 0:00 UTC),
+            artifacts: vec![ArtifactEntry { name: exe_name.into(), target: TGT.into(), blake3 }],
+        };
+        let sig = sk.sign(&to_canonical_bytes(&m).unwrap());
+        let signed = SignedBuildManifest { manifest: m, signature: data_encoding::BASE64.encode(&sig.to_bytes()), signing_pubkey_id: key_id.into() };
+        let mpath = dir.join("manifest.json");
+        std::fs::write(&mpath, serde_json::to_vec_pretty(&signed).unwrap()).unwrap();
+        (exe, mpath)
+    }
+
+    #[test]
+    fn match_exits_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, entry) = keypair();
+        let (exe, mpath) = fixture(dir.path(), &sk, "bk", "sigil", b"the-binary", None);
+        let keys = [("bk", entry.as_str())];
+        assert_eq!(verify_self_impl(&exe, Some(mpath), &keys, TGT), 0);
+    }
+    #[test]
+    fn mutated_binary_exits_nonzero() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, entry) = keypair();
+        let good = blake3::hash(b"the-binary").to_hex().to_string();
+        let (exe, mpath) = fixture(dir.path(), &sk, "bk", "sigil", b"TAMPERED", Some(good));
+        let keys = [("bk", entry.as_str())];
+        assert_ne!(verify_self_impl(&exe, Some(mpath), &keys, TGT), 0);
+    }
+    #[test]
+    fn no_entry_for_target_exits_nonzero() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, entry) = keypair();
+        let (exe, mpath) = fixture(dir.path(), &sk, "bk", "sigil", b"x", None);
+        let keys = [("bk", entry.as_str())];
+        assert_ne!(verify_self_impl(&exe, Some(mpath), &keys, "aarch64-unknown-linux-gnu"), 0);
+    }
+    #[test]
+    fn tampered_signature_exits_nonzero() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, _entry) = keypair();
+        let (exe, mpath) = fixture(dir.path(), &sk, "bk", "sigil", b"x", None);
+        let (_sk2, other) = keypair();
+        let keys = [("bk", other.as_str())];
+        assert_ne!(verify_self_impl(&exe, Some(mpath), &keys, TGT), 0);
+    }
+    #[test]
+    fn empty_anchor_exits_nonzero() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, _e) = keypair();
+        let (exe, mpath) = fixture(dir.path(), &sk, "bk", "sigil", b"x", None);
+        assert_ne!(verify_self_impl(&exe, Some(mpath), &[], TGT), 0);
+    }
+    #[test]
+    fn no_manifest_exits_nonzero() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_sk, entry) = keypair();
+        let exe = dir.path().join("sigil");
+        std::fs::write(&exe, b"x").unwrap();
+        let keys = [("bk", entry.as_str())];
+        assert_ne!(verify_self_impl(&exe, None, &keys, TGT), 0);
     }
 }

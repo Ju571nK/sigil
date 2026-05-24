@@ -39,7 +39,14 @@ pub enum Command {
     /// Run as a daemon.
     Run,
     /// Diagnose configuration and permissions; do not start the daemon.
-    Doctor,
+    Doctor {
+        /// Verify this binary's blake3 against a signed build manifest, then exit.
+        #[arg(long)]
+        verify_self: bool,
+        /// Path to the signed build manifest JSON (required with --verify-self).
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+    },
     /// Inspect static or live state.
     Show {
         #[command(subcommand)]

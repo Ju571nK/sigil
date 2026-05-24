@@ -25,8 +25,12 @@ fn main() -> anyhow::Result<()> {
             let code = rt.block_on(runtime::run(cfg))?;
             std::process::exit(code);
         }
-        cli::Command::Doctor => {
-            let code = doctor::run(cli.policy);
+        cli::Command::Doctor { verify_self, manifest } => {
+            let code = if verify_self {
+                doctor::verify_self(manifest)
+            } else {
+                doctor::run(cli.policy)
+            };
             std::process::exit(code);
         }
         cli::Command::Show { what } => {
