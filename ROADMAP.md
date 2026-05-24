@@ -90,8 +90,15 @@ merge SHA for each shipped phase.
   parsers: per-repo scope, destructive scanning, full Gemini surface coverage.
   Retired the declarative default packs shipped in 3b.7; new shared `mcp_scan`
   helper lowercases URL schemes before comparison.
+- **Phase 3c (slice 1) — shipped 30ac7d4.** Build self-verification: vendor-signed
+  `BuildManifest` (`sigil-core::manifest`, ed25519 over RFC 8785 canonical bytes,
+  compiled-in `SIGIL_BUILD_PUBKEYS` trust anchor), `sigil-sign manifest` signer, and
+  `sigil doctor --verify-self` (hashes the running binary with blake3, checks it
+  against the manifest). Mirrors the license module; mechanism ships with the anchor
+  empty until the build-signing key ceremony.
 
 ## Planned
 
-- **Phase 3c — planned.** Reproducible-build attestation; additional
-  posture signals.
+- **Phase 3c (remaining) — planned.** CI manifest generation + build-signing key
+  ceremony (populate `SIGIL_BUILD_PUBKEYS`), bit-identical reproducibility audit;
+  additional posture signals.
