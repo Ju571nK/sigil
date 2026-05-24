@@ -215,3 +215,22 @@ pins the operator to that history. Capture heads off-box to anchor the chain.
 
 This is corroborating evidence, not an automatic legal proof of usage.
 Automatic push-anchoring and public timestamping are future work.
+
+## Build self-verification (and its limits)
+
+`sigil doctor --verify-self` hashes the running binary with blake3 and checks it
+against a vendor-signed build manifest (`sigil-sign manifest`), verified with the
+compiled-in `SIGIL_BUILD_PUBKEYS` trust anchor. The verification logic lives in OSS
+`sigil-core::manifest`.
+
+**What it catches.** Accidental corruption, in-place/partial tampering, version and
+architecture drift, and naive swaps that didn't re-sign — provided the embedded
+trust anchor and verifier are intact.
+
+**What it does NOT prove.** The trust anchor is compiled into the binary, so an
+attacker who fully replaces the binary can also replace `SIGIL_BUILD_PUBKEYS` and the
+verifier itself. Pair this with the externally-anchored, harder-to-forge
+`gh attestation verify` (Sigstore-backed build provenance) for defense in depth.
+
+This slice ships the mechanism; `SIGIL_BUILD_PUBKEYS` is empty until a signed release
+populates it (the build-signing key ceremony, mirroring the license vendor key).

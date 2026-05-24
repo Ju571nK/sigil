@@ -12,6 +12,7 @@ pub mod hashing;
 pub mod host_id;
 pub mod host_meta;
 pub mod license;
+pub mod manifest;
 pub mod policy;
 pub mod ratelimit;
 pub mod sink;

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use sigil_signer::cli::{Cli, Command};
-use sigil_signer::{inspect, keygen, license, sign, verify, verify_audit};
+use sigil_signer::{inspect, keygen, license, manifest, sign, verify, verify_audit};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -104,6 +104,36 @@ fn main() -> Result<()> {
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap()
             );
+            println!("  signing_pubkey_id: {}", signed.signing_pubkey_id);
+        }
+        Command::Manifest {
+            key,
+            git_sha,
+            run_url,
+            artifacts,
+            out,
+        } => {
+            let key_file = keygen::SigningKeyFile::load(&key)?;
+            let specs = artifacts
+                .iter()
+                .map(|s| manifest::parse_artifact_spec(s))
+                .collect::<Result<Vec<_>>>()?;
+            if specs.is_empty() {
+                anyhow::bail!("at least one --artifact required");
+            }
+            let signed = manifest::sign_to_file(
+                manifest::ManifestArgs {
+                    key_file: &key_file,
+                    git_sha,
+                    run_url,
+                    artifacts: specs,
+                    now: OffsetDateTime::now_utc(),
+                },
+                &out,
+            )?;
+            println!("signed build manifest → {}", out.display());
+            println!("  git_sha:           {}", signed.manifest.git_sha);
+            println!("  artifacts:         {}", signed.manifest.artifacts.len());
             println!("  signing_pubkey_id: {}", signed.signing_pubkey_id);
         }
         Command::VerifyAudit {
