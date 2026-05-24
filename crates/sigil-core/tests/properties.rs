@@ -38,6 +38,8 @@ proptest! {
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            gemini_workspaces: vec![],
+            cursor_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -63,6 +65,8 @@ proptest! {
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            gemini_workspaces: vec![],
+            cursor_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -74,6 +78,8 @@ proptest! {
             continue_workspaces: vec![],
             claude_code_workspaces: vec![],
             codex_workspaces: vec![],
+            gemini_workspaces: vec![],
+            cursor_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };

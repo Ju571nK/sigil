@@ -510,7 +510,7 @@ targets: []
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn gemini_default_rule_pack_emits_sandbox_disabled() {
+async fn gemini_parser_emits_sandbox_disabled() {
     let _home_guard = HOME_LOCK.lock().await;
     let td = tempfile::TempDir::new().unwrap();
     let home = dunce::canonicalize(td.path()).unwrap();
@@ -518,17 +518,36 @@ async fn gemini_default_rule_pack_emits_sandbox_disabled() {
     std::env::set_var("HOME", &home);
 
     std::fs::create_dir_all(home.join(".gemini")).unwrap();
+    // Gemini CLI schema: sandbox is nested under tools.sandbox (boolean false
+    // disables the sandbox; a string like "docker" means sandbox ON).
     std::fs::write(
         home.join(".gemini").join("settings.json"),
-        r#"{"sandbox": false}"#,
+        r#"{"tools":{"sandbox":false}}"#,
     )
     .unwrap();
 
-    // Empty policy.yaml — defaults (gemini-default + cursor-default rule packs)
-    // are loaded automatically via sigil_core::policy::defaults().
-    let policy_yaml = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
-    let agent = TestAgentBuilder::new().policy(policy_yaml).start().await;
+    // Use an absolute-path policy target (same pattern as other tests in this
+    // file — built-in ~ expansion does NOT respect the HOME override).
+    // GeminiParser is registered unconditionally in the runtime parser set;
+    // we only need a policy target so the OS watcher covers the tempdir.
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+targets:
+  - id: e2e-test-gemini-abs
+    description: Gemini CLI guard surface for e2e test (absolute tempdir path)
+    tier: critical
+    platform: any
+    paths:
+      - "{home}/.gemini/settings.json"
+    recursive: false
+    follow_symlinks: false
+"#,
+        home = home.display()
+    );
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
 
+    // GeminiParser scope is UserGlobal.
     let ev = agent
         .wait_for_event(
             |v| {
@@ -550,10 +569,11 @@ async fn gemini_default_rule_pack_emits_sandbox_disabled() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cursor_default_rule_pack_emits_remote_mcp() {
+async fn cursor_parser_emits_remote_mcp() {
     let _home_guard = HOME_LOCK.lock().await;
     let td = tempfile::TempDir::new().unwrap();
     let home = dunce::canonicalize(td.path()).unwrap();
+    // SAFETY: process-global write; serialized via HOME_LOCK above.
     std::env::set_var("HOME", &home);
 
     std::fs::create_dir_all(home.join(".cursor")).unwrap();
@@ -563,15 +583,35 @@ async fn cursor_default_rule_pack_emits_remote_mcp() {
     )
     .unwrap();
 
-    let policy_yaml = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
-    let agent = TestAgentBuilder::new().policy(policy_yaml).start().await;
+    // Use an absolute-path policy target (same pattern as other tests in this
+    // file — built-in ~ expansion does NOT respect the HOME override).
+    // CursorParser is registered unconditionally in the runtime parser set;
+    // we only need a policy target so the OS watcher covers the tempdir.
+    let policy_yaml = format!(
+        r#"version: 1
+host_id_strategy: machine_id
+targets:
+  - id: e2e-test-cursor-abs
+    description: Cursor CLI guard surface for e2e test (absolute tempdir path)
+    tier: critical
+    platform: any
+    paths:
+      - "{home}/.cursor/mcp.json"
+    recursive: false
+    follow_symlinks: false
+"#,
+        home = home.display()
+    );
+    let agent = TestAgentBuilder::new().policy(&policy_yaml).start().await;
 
+    // CursorParser scope is Application{app:"cursor"}, NOT UserGlobal.
     let ev = agent
         .wait_for_event(
             |v| {
                 v["evidence"]["kind"] == "ai_guard_risk_assessed"
                     && v["evidence"]["tool"] == "cursor"
-                    && v["evidence"]["scope"]["kind"] == "user_global"
+                    && v["evidence"]["scope"]["kind"] == "application"
+                    && v["evidence"]["scope"]["app"] == "cursor"
             },
             Duration::from_secs(15),
         )

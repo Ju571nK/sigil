@@ -142,6 +142,14 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         &effective.codex_workspaces,
         ".codex/config.toml",
     );
+    let gemini_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
+        &effective.gemini_workspaces,
+        ".gemini/settings.json",
+    );
+    let cursor_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
+        &effective.cursor_workspaces,
+        ".cursor/mcp.json",
+    );
 
     for repo_root in &continue_repos {
         push_continue_synthetic_target(&mut effective, repo_root);
@@ -151,6 +159,12 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     }
     for repo_root in &codex_repos {
         push_codex_synthetic_target(&mut effective, repo_root);
+    }
+    for repo_root in &gemini_repos {
+        push_gemini_synthetic_target(&mut effective, repo_root);
+    }
+    for repo_root in &cursor_repos {
+        push_cursor_synthetic_target(&mut effective, repo_root);
     }
 
     // Phase 3b.6.1 — build the shared parsers list BEFORE the policy_reload
@@ -169,6 +183,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         Arc::new(crate::ai_guard::CodexParser),
         Arc::new(crate::ai_guard::ClaudeDesktopParser),
         Arc::new(crate::ai_guard::ContinueDevParser),
+        Arc::new(crate::ai_guard::GeminiParser),
+        Arc::new(crate::ai_guard::CursorParser),
     ];
     for repo_root in continue_repos {
         parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser {
@@ -182,6 +198,12 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     }
     for repo_root in codex_repos {
         parsers_vec.push(Arc::new(crate::ai_guard::CodexProjectParser { repo_root }));
+    }
+    for repo_root in gemini_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::GeminiProjectParser { repo_root }));
+    }
+    for repo_root in cursor_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::CursorProjectParser { repo_root }));
     }
     // Phase 3b.7 — declarative rule packs (sigil-rules-basic defaults +
     // operator overlay from signed envelope, already merged into
@@ -952,6 +974,44 @@ pub(crate) fn push_codex_synthetic_target(
     effective.targets.push(sigil_core::policy::WatchTarget {
         id: format!("codex-project-{h}"),
         description: format!("Phase 3b.6.2 synthetic: {}", repo_root.display()),
+        tier: sigil_core::policy::Tier::Critical,
+        platform: sigil_core::policy::Platform::Any,
+        paths: vec![config.to_string_lossy().to_string()],
+        recursive: false,
+        follow_symlinks: false,
+        disabled: false,
+    });
+}
+
+/// Phase 3b.8 — push ONE synthetic WatchTarget for a Gemini per-repo config.
+pub(crate) fn push_gemini_synthetic_target(
+    effective: &mut sigil_core::policy::EffectivePolicy,
+    repo_root: &std::path::Path,
+) {
+    let config = repo_root.join(".gemini").join("settings.json");
+    let h = synthetic_target_id_suffix(repo_root);
+    effective.targets.push(sigil_core::policy::WatchTarget {
+        id: format!("gemini-project-{h}"),
+        description: format!("Phase 3b.8 synthetic: {}", repo_root.display()),
+        tier: sigil_core::policy::Tier::Critical,
+        platform: sigil_core::policy::Platform::Any,
+        paths: vec![config.to_string_lossy().to_string()],
+        recursive: false,
+        follow_symlinks: false,
+        disabled: false,
+    });
+}
+
+/// Phase 3b.8 — push ONE synthetic WatchTarget for a Cursor per-repo config.
+pub(crate) fn push_cursor_synthetic_target(
+    effective: &mut sigil_core::policy::EffectivePolicy,
+    repo_root: &std::path::Path,
+) {
+    let config = repo_root.join(".cursor").join("mcp.json");
+    let h = synthetic_target_id_suffix(repo_root);
+    effective.targets.push(sigil_core::policy::WatchTarget {
+        id: format!("cursor-project-{h}"),
+        description: format!("Phase 3b.8 synthetic: {}", repo_root.display()),
         tier: sigil_core::policy::Tier::Critical,
         platform: sigil_core::policy::Platform::Any,
         paths: vec![config.to_string_lossy().to_string()],

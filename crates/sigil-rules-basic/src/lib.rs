@@ -17,19 +17,14 @@ pub const DEFAULTS_WINDOWS: &str = include_str!("defaults_windows.yaml");
 /// Compile-time-embedded YAML for the Linux basic ruleset.
 pub const DEFAULTS_LINUX: &str = include_str!("defaults_linux.yaml");
 
-/// Compile-time-embedded YAML for the Gemini CLI default rule pack
-/// (Phase 3b.7). sigil-core's `defaults()` parses this into a `RulePack`
-/// and includes it in the returned `PolicyDocument.rule_packs`.
-pub const DEFAULT_RULE_PACK_GEMINI: &str = include_str!("default_rule_packs/gemini.yaml");
-
-/// Compile-time-embedded YAML for the Cursor IDE default rule pack
-/// (Phase 3b.7). Same handling as `DEFAULT_RULE_PACK_GEMINI`.
-pub const DEFAULT_RULE_PACK_CURSOR: &str = include_str!("default_rule_packs/cursor.yaml");
-
-/// All default rule packs for Phase 3b.7. Order matters only for stable
-/// ordering in the merged PolicyDocument — the engine evaluates each
-/// pack independently.
-pub const DEFAULT_RULE_PACKS: &[&str] = &[DEFAULT_RULE_PACK_GEMINI, DEFAULT_RULE_PACK_CURSOR];
+/// Default rule packs embedded at compile time.
+///
+/// Phase 3b.8: the Gemini and Cursor built-in packs have been retired here
+/// because the hardcoded parsers added in 3b.8 cover the same
+/// `(tool, UserGlobal)` identity and would double-emit. The declarative
+/// rule-pack ENGINE remains intact — operators can still ship their own packs
+/// via signed policy overlay.
+pub const DEFAULT_RULE_PACKS: &[&str] = &[];
 
 /// Returns the basic ruleset YAML for the current build target, or `None`
 /// for platforms other than macOS / Windows / Linux (which have no built-in

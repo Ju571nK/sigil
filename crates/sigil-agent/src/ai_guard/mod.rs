@@ -16,6 +16,8 @@ pub use parser::claude_code::{ClaudeCodeParser, ClaudeCodeProjectParser};
 pub use parser::claude_desktop::ClaudeDesktopParser;
 pub use parser::codex::{CodexParser, CodexProjectParser};
 pub use parser::continue_dev::{ContinueDevParser, ContinueDevProjectParser};
+pub use parser::cursor::{CursorParser, CursorProjectParser};
+pub use parser::gemini::{GeminiParser, GeminiProjectParser};
 pub use rule_pack::parser::RulePackParser;
 pub use task::{run, CachedAssessment, StateMap, TaskCtx};
 

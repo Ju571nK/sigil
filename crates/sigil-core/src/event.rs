@@ -182,6 +182,12 @@ pub enum AiGuardReason {
         server_name: String,
         command: String,
     },
+    /// Phase 3b.8 — an MCP server is marked `trust: true`, bypassing
+    /// per-tool confirmation for every tool it exposes (Gemini).
+    TrustedMcpServer { server_name: String },
+    /// Phase 3b.8 — the agent's default approval mode auto-approves a class
+    /// of tool calls without prompting (e.g. Gemini `defaultApprovalMode: "auto_edit"`).
+    AutoApprovalEnabled { mode: String },
 }
 
 /// Phase 3b.4-pre — full host identity / OS / network snapshot, emitted by
@@ -944,6 +950,23 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let back: AiGuardReason = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[test]
+    fn new_reason_variants_serialize_with_snake_case_tags() {
+        let t = AiGuardReason::TrustedMcpServer {
+            server_name: "acme".into(),
+        };
+        let j = serde_json::to_value(&t).unwrap();
+        assert_eq!(j["kind"], "trusted_mcp_server");
+        assert_eq!(j["server_name"], "acme");
+
+        let a = AiGuardReason::AutoApprovalEnabled {
+            mode: "auto_edit".into(),
+        };
+        let j = serde_json::to_value(&a).unwrap();
+        assert_eq!(j["kind"], "auto_approval_enabled");
+        assert_eq!(j["mode"], "auto_edit");
     }
 
     #[test]

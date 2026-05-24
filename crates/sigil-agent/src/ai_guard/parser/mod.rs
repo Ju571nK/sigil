@@ -5,6 +5,9 @@ pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;
 pub mod continue_dev;
+pub mod cursor;
+pub mod gemini;
+pub mod mcp_scan;
 
 use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
 use std::io;
