@@ -107,3 +107,49 @@ jobs:
           	sigil-server|sigil-server|sigil-server.service|/etc/sigil/server.yaml.example
           	sigil-signer|sigil-sign||
           	TABLE
+
+  # Debian/Ubuntu validation of the .deb packages. The rocky9 leg covers the
+  # RPM path; this covers .deb end-to-end: build all four, install each, smoke
+  # `--help`, then purge and verify cleanup. (#11)
+  debian12:
+    name: debian:12 / .deb install-test
+    runs-on: ubuntu-latest
+    container: debian:12
+    steps:
+      - name: install build deps
+        run: |
+          apt-get update
+          apt-get install -y git gcc perl ca-certificates curl init-system-helpers
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: debian12
+      - name: build .deb (all 4 packages)
+        run: |
+          cargo install cargo-deb --locked
+          packaging/build.sh deb
+      - name: inspect & install-test .deb (all 4 packages)
+        shell: bash
+        run: |
+          set -eux
+          for entry in \
+            "sigil|sigil|sigil.service|/etc/sigil/policy.yaml.example" \
+            "sigil-sender|sigil-sender|sigil-sender.service|/etc/sigil/sender.yaml.example" \
+            "sigil-server|sigil-server|sigil-server.service|/etc/sigil/server.yaml.example" \
+            "sigil-signer|sigil-sign||"; do
+            IFS='|' read -r pkg bin unit example <<< "$entry"
+            # the `_` after the name keeps sigil_ from matching sigil-sender_ etc.
+            deb=$(echo target/debian/${pkg}_[0-9]*.deb)
+            echo "=== $pkg :: $deb ==="
+            dpkg --info "$deb"
+            dpkg --contents "$deb"
+            dpkg --contents "$deb" | grep -qE "/usr/bin/${bin}$"
+            [ -z "$unit" ]    || dpkg --contents "$deb" | grep -qE "/systemd/system/${unit}$"
+            [ -z "$example" ] || dpkg --contents "$deb" | grep -qE "${example}$"
+            dpkg -i "$deb"
+            "/usr/bin/${bin}" --help >/dev/null
+            [ -z "$example" ] || test -f "$example"
+            dpkg -P "$pkg"
+            test ! -e "/usr/bin/${bin}"
+          done
