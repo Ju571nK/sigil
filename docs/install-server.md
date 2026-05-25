@@ -40,21 +40,27 @@ Debian/Ubuntu works via the `.deb` package; deltas are called out inline.
 Pick one. The `.rpm`/`.deb` path is recommended for servers — it ships a
 hardened, disabled-by-default systemd unit and a config example.
 
-### Option A — `.rpm` (RHEL / Rocky / Fedora), recommended
+### Option A — `.rpm` / `.deb` from Releases (RHEL / Rocky / Debian), recommended
+
+Download the package for your distro from the
+[latest release](https://github.com/Ju571nK/sigil/releases/latest). These are
+**static** builds, so they run on any glibc — including RHEL/Rocky 9:
 
 ```sh
-# Build the package on a build host (one-time tooling):
-cargo install cargo-deb cargo-generate-rpm
-packaging/build.sh server rpm
+# RHEL / Rocky / Fedora
+sudo dnf install ./sigil-server-*.x86_64.rpm
 
-# On the server:
-sudo dnf install ./target/generate-rpm/sigil-server-0.1.0-1.x86_64.rpm
+# Debian / Ubuntu
+sudo apt install ./sigil-server_*_amd64.deb
 ```
 
 This installs `/usr/bin/sigil-server`, the unit at
 `/usr/lib/systemd/system/sigil-server.service`, and
-`/etc/sigil/server.yaml.example`. Debian/Ubuntu: build with `packaging/build.sh
-server deb` and `sudo apt install ./...deb`.
+`/etc/sigil/server.yaml.example`.
+
+> Prefer to build the package yourself? `cargo install cargo-deb
+> cargo-generate-rpm && packaging/build.sh server` produces them under
+> `target/debian/` and `target/generate-rpm/`.
 
 You also need `sigil-sign` (operator CLI) on a trusted workstation to produce
 the signed policy bundle — install the `sigil-signer` package or use `install.sh`.
