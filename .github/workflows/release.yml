@@ -81,9 +81,53 @@ jobs:
             sigil-*.zip
           if-no-files-found: error
 
+  packages:
+    name: linux packages (server, static)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools + packagers
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          cargo install cargo-deb cargo-generate-rpm
+
+      # Static (musl) binary so the .rpm/.deb run on any glibc — incl. RHEL/Rocky 9.
+      - name: Build static sigil-server
+        run: cargo build --release --locked -p sigil-server --target x86_64-unknown-linux-musl
+
+      - name: Stage binary where the packagers expect it
+        run: |
+          mkdir -p target/release
+          cp target/x86_64-unknown-linux-musl/release/sigil-server target/release/sigil-server
+
+      - name: Build .deb + .rpm
+        working-directory: crates/sigil-server
+        run: |
+          mkdir -p ../../target/generate-rpm
+          cargo deb --no-build
+          cargo generate-rpm --output ../../target/generate-rpm/
+
+      # Flatten into one dir so the artifact (and dist/) has the packages at the
+      # root — the release job globs dist/sigil-* non-recursively.
+      - name: Collect packages into a flat dir
+        run: |
+          mkdir -p pkgs
+          cp target/debian/*.deb target/generate-rpm/*.rpm pkgs/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: pkgs/*
+          if-no-files-found: error
+
   release:
     name: publish release
-    needs: build
+    needs: [build, packages]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -126,6 +170,17 @@ jobs:
           `aarch64` for Arm devices such as Surface Pro X) and add it to your PATH.
 
           Every archive contains all four binaries: `sigil`, `sigil-sender`, `sigil-server`, `sigil-sign`.
+
+          ## Server (Linux)
+
+          Run the collector from a prebuilt package (static binary — works on RHEL/Rocky and Debian/Ubuntu). See [docs/install-server.md](https://github.com/Ju571nK/sigil/blob/main/docs/install-server.md).
+
+          ```sh
+          sudo dnf install ./sigil-server-*.x86_64.rpm     # RHEL / Rocky / Fedora
+          sudo apt  install ./sigil-server_*_amd64.deb     # Debian / Ubuntu
+          ```
+
+          Each package ships a hardened, disabled-by-default systemd unit + config example.
           EOF
           # Tags with a pre-release suffix (e.g. v0.1.0-rc.1) are marked
           # --prerelease so they don't become "latest" — install.sh won't pick
