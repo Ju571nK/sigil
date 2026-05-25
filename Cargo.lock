@@ -2256,7 +2256,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "sigil-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2290,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "data-encoding",
@@ -2316,11 +2316,11 @@ dependencies = [
 
 [[package]]
 name = "sigil-rules-basic"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "sigil-sender"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2348,7 +2348,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2379,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-signer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2397,7 +2397,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-spool"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "notify",
  "parking_lot",
