@@ -157,6 +157,12 @@ impl UserEnumerator for WindowsPlatform {
             return out;
         };
         for ent in entries.flatten() {
+            // Only real user profile directories are users; skip files such as
+            // `desktop.ini` and any other non-directory entries.
+            match ent.file_type() {
+                Ok(ft) if ft.is_dir() => {}
+                _ => continue,
+            }
             let name = ent.file_name().to_string_lossy().to_string();
             // Skip well-known non-human profiles.
             if matches!(

@@ -81,7 +81,8 @@ fn default_state_db_path() -> std::path::PathBuf {
         "/var/lib/sigil/state.db".into()
     } else {
         std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Sigil/state.db")
+            .join("Sigil")
+            .join("state.db")
     }
 }
 
@@ -90,6 +91,7 @@ fn default_events_dir() -> std::path::PathBuf {
         "/var/log/sigil".into()
     } else {
         std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Sigil/events")
+            .join("Sigil")
+            .join("events")
     }
 }

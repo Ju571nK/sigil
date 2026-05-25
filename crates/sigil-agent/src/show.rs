@@ -244,7 +244,9 @@ fn default_events_dir() -> PathBuf {
     if cfg!(any(target_os = "macos", target_os = "linux")) {
         PathBuf::from("/var/log/sigil")
     } else {
-        PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default()).join("Sigil/events")
+        PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
+            .join("Sigil")
+            .join("events")
     }
 }
 

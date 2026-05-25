@@ -482,7 +482,8 @@ fn default_state_db_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Sigil/state.db")
+            .join("Sigil")
+            .join("state.db")
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
