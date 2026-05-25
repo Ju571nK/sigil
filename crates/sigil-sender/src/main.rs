@@ -11,7 +11,11 @@ use tokio_util::sync::CancellationToken;
 fn resolve_host_id(env: Option<String>, cfg: Option<&str>) -> anyhow::Result<String> {
     let pick = |s: &str| {
         let t = s.trim();
-        if t.is_empty() { None } else { Some(t.to_string()) }
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
     };
     if let Some(v) = env.as_deref().and_then(pick) {
         return Ok(v);
@@ -48,7 +52,8 @@ async fn main() -> Result<()> {
             // Data plane (read JSONL spool → POST /v1/events → ack) lands in
             // Plan B follow-up tickets B11.x; see crates/sigil-sender/src/runtime.rs.
             let cfg = SenderConfig::load(&config_path)?;
-            let host_id = resolve_host_id(std::env::var("SIGIL_HOST_ID").ok(), cfg.host_id.as_deref())?;
+            let host_id =
+                resolve_host_id(std::env::var("SIGIL_HOST_ID").ok(), cfg.host_id.as_deref())?;
             let cancel = CancellationToken::new();
             let cancel_c = cancel.clone();
             tokio::spawn(async move {
