@@ -35,6 +35,7 @@ fn cfg(events_dir: &std::path::Path, state_dir: &std::path::Path, addr: &str) ->
         max_batch_events: 256,
         max_batch_bytes: 1024 * 1024,
         policy_poll_interval: Duration::from_secs(60),
+        host_id: None,
     }
 }
 

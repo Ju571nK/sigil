@@ -34,6 +34,11 @@ pub struct SenderConfig {
     /// Policy poll interval (spec default 5min).
     #[serde(default = "default_policy_poll_secs", with = "serde_duration_secs")]
     pub policy_poll_interval: Duration,
+    /// This host's id — MUST equal the agent's host_id (the agent's state.db
+    /// UUID). The server rejects events whose host_id != the batch envelope
+    /// host_id. Overridable at runtime by the SIGIL_HOST_ID env var.
+    #[serde(default)]
+    pub host_id: Option<String>,
 }
 
 fn default_max_batch_events() -> usize {
@@ -150,5 +155,48 @@ policy_poll_interval: 30
         let p = std::path::Path::new("/nonexistent/sender.yaml");
         let err = SenderConfig::load(p).unwrap_err();
         assert!(matches!(err, ConfigError::Read { .. }));
+    }
+
+    #[test]
+    fn host_id_present_parses_to_some() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender.yaml");
+        write(
+            &p,
+            r#"
+server_base_url: "https://sigil.example.com"
+client_cert_path: "/etc/sigil/client.crt"
+client_key_path: "/etc/sigil/client.key"
+server_ca_path: "/etc/sigil/server-ca.pem"
+events_dir: "/var/log/sigil/events"
+offset_path: "/var/lib/sigil/sender-offset.json"
+agent_control: "/var/run/sigil/control.sock"
+dead_letter_dir: "/var/log/sigil/dead-letter"
+host_id: "abc-123"
+"#,
+        );
+        let cfg = SenderConfig::load(&p).unwrap();
+        assert_eq!(cfg.host_id, Some("abc-123".to_string()));
+    }
+
+    #[test]
+    fn host_id_absent_parses_to_none() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender.yaml");
+        write(
+            &p,
+            r#"
+server_base_url: "https://sigil.example.com"
+client_cert_path: "/etc/sigil/client.crt"
+client_key_path: "/etc/sigil/client.key"
+server_ca_path: "/etc/sigil/server-ca.pem"
+events_dir: "/var/log/sigil/events"
+offset_path: "/var/lib/sigil/sender-offset.json"
+agent_control: "/var/run/sigil/control.sock"
+dead_letter_dir: "/var/log/sigil/dead-letter"
+"#,
+        );
+        let cfg = SenderConfig::load(&p).unwrap();
+        assert_eq!(cfg.host_id, None);
     }
 }
