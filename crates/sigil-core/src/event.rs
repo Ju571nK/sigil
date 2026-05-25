@@ -855,7 +855,9 @@ mod tests {
             event_id: Uuid::parse_str("01910f5a-1234-7890-abcd-ef0123456789").unwrap(),
             ts: datetime!(2026-05-08 14:23:45.123 UTC),
             host_id: "5A7C3E91-FIXED-FOR-SNAPSHOT".into(),
-            agent_version: AGENT_VERSION.to_string(),
+            // Pinned (not AGENT_VERSION) so the snapshot stays stable across
+            // version bumps — this test asserts the JSONL shape, not the version.
+            agent_version: "0.1.0".into(),
             severity: Severity::Warn,
             source: SourceKind::FileSystem,
             subject: Subject::Path {
