@@ -398,6 +398,13 @@ sigil-sign --help
 
 See [`packaging/README.md`](packaging/README.md) for details.
 
+### Full deployment guides
+
+End-to-end production walkthroughs (PKI/mTLS, config, firewall, systemd, verification):
+
+- [**Server install & operations (Linux)**](docs/install-server.md) — deploy `sigil-server` to receive events over mTLS and serve signed policy.
+- [**Agent install (macOS)**](docs/install-macos-agent.md) — run the `sigil` agent and optionally ship events to a server.
+
 ## Usage
 
 Run the agent:
