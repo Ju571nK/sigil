@@ -73,7 +73,7 @@ jobs:
           Copy-Item README.md,LICENSE,NOTICE $dist -ErrorAction SilentlyContinue
           Compress-Archive -Path $dist -DestinationPath "$dist.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: |
@@ -119,7 +119,7 @@ jobs:
           mkdir -p pkgs
           cp target/debian/*.deb target/generate-rpm/*.rpm pkgs/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-packages
           path: pkgs/*
@@ -130,7 +130,7 @@ jobs:
     needs: [build, packages]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -140,7 +140,7 @@ jobs:
         run: sha256sum sigil-* | tee SHA256SUMS
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/sigil-*"
 
