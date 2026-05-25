@@ -129,7 +129,10 @@ mod cli_tests {
             "/tmp/ks.pem",
             "run",
         ]);
-        assert_eq!(cli.control_socket.as_deref(), Some(Path::new("/tmp/c.sock")));
+        assert_eq!(
+            cli.control_socket.as_deref(),
+            Some(Path::new("/tmp/c.sock"))
+        );
         assert_eq!(cli.keystore.as_deref(), Some(Path::new("/tmp/ks.pem")));
     }
 

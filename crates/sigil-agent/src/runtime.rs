@@ -871,7 +871,9 @@ fn keystore_path() -> PathBuf {
     {
         resolve_keystore_path_unix(
             crate::control::is_root(),
-            std::env::var("XDG_CONFIG_HOME").ok().filter(|s| !s.is_empty()),
+            std::env::var("XDG_CONFIG_HOME")
+                .ok()
+                .filter(|s| !s.is_empty()),
             std::env::var("HOME").ok().filter(|s| !s.is_empty()),
         )
     }
@@ -920,7 +922,11 @@ mod keystore_path_tests {
     #[test]
     fn root_uses_etc_sigil() {
         assert_eq!(
-            resolve_keystore_path_unix(true, Some("/home/u/.config".into()), Some("/home/u".into())),
+            resolve_keystore_path_unix(
+                true,
+                Some("/home/u/.config".into()),
+                Some("/home/u".into())
+            ),
             PathBuf::from("/etc/sigil/policy-signing-pubkeys.pem")
         );
     }
@@ -928,7 +934,11 @@ mod keystore_path_tests {
     #[test]
     fn nonroot_prefers_xdg_config_home() {
         assert_eq!(
-            resolve_keystore_path_unix(false, Some("/home/u/.config".into()), Some("/home/u".into())),
+            resolve_keystore_path_unix(
+                false,
+                Some("/home/u/.config".into()),
+                Some("/home/u".into())
+            ),
             PathBuf::from("/home/u/.config/sigil/policy-signing-pubkeys.pem")
         );
     }

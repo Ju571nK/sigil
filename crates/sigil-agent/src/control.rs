@@ -25,7 +25,9 @@ use crate::policy_apply::{apply, ApplyContext, ApplyOutcome};
 pub fn default_control_socket() -> PathBuf {
     resolve_control_socket(
         is_root(),
-        std::env::var("XDG_RUNTIME_DIR").ok().filter(|s| !s.is_empty()),
+        std::env::var("XDG_RUNTIME_DIR")
+            .ok()
+            .filter(|s| !s.is_empty()),
         std::env::var("TMPDIR").ok().filter(|s| !s.is_empty()),
         current_uid(),
     )
@@ -684,7 +686,12 @@ mod socket_path_tests {
     #[test]
     fn root_uses_system_run_path() {
         assert_eq!(
-            resolve_control_socket(true, Some("/run/user/1000".into()), Some("/tmp".into()), 1000),
+            resolve_control_socket(
+                true,
+                Some("/run/user/1000".into()),
+                Some("/tmp".into()),
+                1000
+            ),
             PathBuf::from("/var/run/sigil/control.sock")
         );
     }
@@ -692,7 +699,12 @@ mod socket_path_tests {
     #[test]
     fn nonroot_prefers_xdg_runtime_dir() {
         assert_eq!(
-            resolve_control_socket(false, Some("/run/user/501".into()), Some("/tmp".into()), 501),
+            resolve_control_socket(
+                false,
+                Some("/run/user/501".into()),
+                Some("/tmp".into()),
+                501
+            ),
             PathBuf::from("/run/user/501/sigil/control.sock")
         );
     }
