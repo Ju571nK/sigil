@@ -112,12 +112,17 @@ jobs:
           cargo deb --no-build
           cargo generate-rpm --output ../../target/generate-rpm/
 
+      # Flatten into one dir so the artifact (and dist/) has the packages at the
+      # root — the release job globs dist/sigil-* non-recursively.
+      - name: Collect packages into a flat dir
+        run: |
+          mkdir -p pkgs
+          cp target/debian/*.deb target/generate-rpm/*.rpm pkgs/
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-packages
-          path: |
-            target/debian/*.deb
-            target/generate-rpm/*.rpm
+          path: pkgs/*
           if-no-files-found: error
 
   release:
