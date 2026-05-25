@@ -2266,6 +2266,7 @@ dependencies = [
  "ed25519-dalek",
  "if-addrs",
  "insta",
+ "libc",
  "mac_address",
  "notify",
  "os_info",

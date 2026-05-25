@@ -25,6 +25,17 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub events_dir: Option<PathBuf>,
 
+    /// Override the control IPC socket path (Unix). Default: `/var/run/sigil/control.sock`
+    /// as root, else `$XDG_RUNTIME_DIR/sigil/control.sock`. Lets a non-root / macOS
+    /// agent expose the control plane (apply_policy, `sigil show stats`) without sudo.
+    #[arg(long, global = true)]
+    pub control_socket: Option<PathBuf>,
+
+    /// Override the policy-signing keystore path. Default: `/etc/sigil/...` as root,
+    /// else `$XDG_CONFIG_HOME/sigil/...` (Unix) or `%LOCALAPPDATA%\Sigil\...` (Windows).
+    #[arg(long, global = true)]
+    pub keystore: Option<PathBuf>,
+
     /// Use a polling watcher instead of the OS-native one (inotify / FSEvents /
     /// ReadDirectoryChangesW). Use this where native filesystem events are
     /// unreliable — e.g. NFS-mounted homes, `virtiofs`/`9p` shares, or
@@ -100,4 +111,32 @@ pub enum ShowWhat {
         #[arg(long = "pretty")]
         pretty: bool,
     },
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::Cli;
+    use clap::Parser;
+    use std::path::Path;
+
+    #[test]
+    fn parses_control_socket_and_keystore_overrides() {
+        let cli = Cli::parse_from([
+            "sigil",
+            "--control-socket",
+            "/tmp/c.sock",
+            "--keystore",
+            "/tmp/ks.pem",
+            "run",
+        ]);
+        assert_eq!(cli.control_socket.as_deref(), Some(Path::new("/tmp/c.sock")));
+        assert_eq!(cli.keystore.as_deref(), Some(Path::new("/tmp/ks.pem")));
+    }
+
+    #[test]
+    fn path_overrides_default_to_none() {
+        let cli = Cli::parse_from(["sigil", "run"]);
+        assert!(cli.control_socket.is_none());
+        assert!(cli.keystore.is_none());
+    }
 }
