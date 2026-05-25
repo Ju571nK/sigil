@@ -143,10 +143,14 @@ jobs:
             deb=$(echo target/debian/${pkg}_[0-9]*.deb)
             echo "=== $pkg :: $deb ==="
             dpkg --info "$deb"
-            dpkg --contents "$deb"
-            dpkg --contents "$deb" | grep -qE "/usr/bin/${bin}$"
-            [ -z "$unit" ]    || dpkg --contents "$deb" | grep -qE "/systemd/system/${unit}$"
-            [ -z "$example" ] || dpkg --contents "$deb" | grep -qE "${example}$"
+            # Capture once; grep via here-string. A `dpkg --contents | grep -q`
+            # pipe SIGPIPEs dpkg's tar subprocess (grep exits at first match),
+            # which fails the step under bash's default `set -o pipefail`.
+            contents=$(dpkg --contents "$deb")
+            printf '%s\n' "$contents"
+            grep -qE "/usr/bin/${bin}$" <<< "$contents"
+            [ -z "$unit" ]    || grep -qE "/systemd/system/${unit}$" <<< "$contents"
+            [ -z "$example" ] || grep -qE "${example}$" <<< "$contents"
             dpkg -i "$deb"
             "/usr/bin/${bin}" --help >/dev/null
             [ -z "$example" ] || test -f "$example"
