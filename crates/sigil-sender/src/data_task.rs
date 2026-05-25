@@ -280,6 +280,12 @@ pub async fn run(ctx: DataTaskCtx) {
                     }
                 };
                 for r in &accepted.rejected {
+                    tracing::warn!(
+                        host_id = %ctx.host_id,
+                        reason = %r.reason,
+                        event_id = %r.event_id,
+                        "server rejected event; dead-lettering"
+                    );
                     let evt = local_event(
                         &ctx.host_id,
                         Evidence::EventUnprocessableLocal {
@@ -309,6 +315,12 @@ pub async fn run(ctx: DataTaskCtx) {
             }
             BatchOutcome::PermanentReject { status, body } => {
                 consecutive_failures += 1;
+                tracing::warn!(
+                    host_id = %ctx.host_id,
+                    status,
+                    count = batch_size,
+                    "server rejected batch; dead-lettering"
+                );
                 let evt = local_event(
                     &ctx.host_id,
                     Evidence::ServerProtocolViolation {
