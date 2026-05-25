@@ -30,6 +30,8 @@ jobs:
             os: macos-14
           - target: x86_64-pc-windows-msvc
             os: windows-2022
+          - target: aarch64-pc-windows-msvc     # Arm Windows (Surface Pro X, Arm laptops)
+            os: windows-11-arm                   # GitHub-hosted ARM64 runner
     steps:
       - uses: actions/checkout@v5
 
@@ -120,7 +122,8 @@ jobs:
 
           ## Windows
 
-          Download the `.zip` below and add it to your PATH.
+          Download the `.zip` for your architecture (`x86_64` for most PCs,
+          `aarch64` for Arm devices such as Surface Pro X) and add it to your PATH.
 
           Every archive contains all four binaries: `sigil`, `sigil-sender`, `sigil-server`, `sigil-sign`.
           EOF
