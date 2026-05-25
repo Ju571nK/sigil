@@ -41,6 +41,9 @@ if-addrs = "0.13"
 os_info = "3"
 blake3 = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = { workspace = true }
 insta = { workspace = true }

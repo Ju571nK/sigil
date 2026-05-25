@@ -10,14 +10,70 @@ use sigil_core::stats::{Stats, StatsSnapshot};
 use sigil_core::PolicySignatureInvalidReason;
 #[cfg(unix)]
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::policy_apply::{apply, ApplyContext, ApplyOutcome};
 
-/// Default control-socket path on Unix. `sigil run` binds it; `sigil show
-/// stats` and `sigil-sender` connect to it.
-pub fn default_control_socket() -> std::path::PathBuf {
-    "/var/run/sigil/control.sock".into()
+/// Default control-socket path. As root, the system path `/var/run/sigil`
+/// (matches the systemd unit's `RuntimeDirectory=`). A non-root agent (macOS,
+/// non-root Linux — e.g. the 2-machine test) can't write there, so fall back
+/// to `$XDG_RUNTIME_DIR/sigil` (else `$TMPDIR`/`/tmp/sigil-<uid>`), keeping the
+/// control plane usable without elevation. Override with `--control-socket`.
+/// `sigil run` binds it; `sigil show stats` and `sigil-sender` connect to it.
+/// On Windows the named pipe is used instead and this value is ignored.
+pub fn default_control_socket() -> PathBuf {
+    resolve_control_socket(
+        is_root(),
+        std::env::var("XDG_RUNTIME_DIR").ok().filter(|s| !s.is_empty()),
+        std::env::var("TMPDIR").ok().filter(|s| !s.is_empty()),
+        current_uid(),
+    )
+}
+
+/// Pure resolver for [`default_control_socket`] — split out so the
+/// root/non-root/XDG/TMPDIR branches can be unit-tested without touching the
+/// process euid or environment.
+fn resolve_control_socket(
+    is_root: bool,
+    xdg_runtime: Option<String>,
+    tmpdir: Option<String>,
+    uid: u32,
+) -> PathBuf {
+    if is_root {
+        return PathBuf::from("/var/run/sigil/control.sock");
+    }
+    if let Some(dir) = xdg_runtime {
+        return PathBuf::from(dir).join("sigil").join("control.sock");
+    }
+    let base = tmpdir.unwrap_or_else(|| "/tmp".to_string());
+    PathBuf::from(base)
+        .join(format!("sigil-{uid}"))
+        .join("control.sock")
+}
+
+/// True when the process effective uid is 0 (root). Non-Unix: always false.
+/// Also consulted by the keystore default in `runtime`.
+#[cfg(unix)]
+pub(crate) fn is_root() -> bool {
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    unsafe { libc::geteuid() == 0 }
+}
+#[cfg(not(unix))]
+pub(crate) fn is_root() -> bool {
+    false
+}
+
+/// Process real uid — namespaces the fallback socket dir in shared `/tmp`.
+/// Non-Unix: 0 (unused; Windows uses the named pipe).
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    // SAFETY: `getuid` has no preconditions and cannot fail.
+    unsafe { libc::getuid() }
+}
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    0
 }
 
 /// Default control named-pipe name on Windows.
@@ -617,6 +673,44 @@ pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result
                 let _ = wr.write_all(b"\n").await;
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod socket_path_tests {
+    use super::resolve_control_socket;
+    use std::path::PathBuf;
+
+    #[test]
+    fn root_uses_system_run_path() {
+        assert_eq!(
+            resolve_control_socket(true, Some("/run/user/1000".into()), Some("/tmp".into()), 1000),
+            PathBuf::from("/var/run/sigil/control.sock")
+        );
+    }
+
+    #[test]
+    fn nonroot_prefers_xdg_runtime_dir() {
+        assert_eq!(
+            resolve_control_socket(false, Some("/run/user/501".into()), Some("/tmp".into()), 501),
+            PathBuf::from("/run/user/501/sigil/control.sock")
+        );
+    }
+
+    #[test]
+    fn nonroot_without_xdg_uses_tmpdir_namespaced_by_uid() {
+        assert_eq!(
+            resolve_control_socket(false, None, Some("/custom/tmp".into()), 501),
+            PathBuf::from("/custom/tmp/sigil-501/control.sock")
+        );
+    }
+
+    #[test]
+    fn nonroot_without_xdg_or_tmpdir_falls_back_to_slash_tmp() {
+        assert_eq!(
+            resolve_control_socket(false, None, None, 42),
+            PathBuf::from("/tmp/sigil-42/control.sock")
+        );
     }
 }
 

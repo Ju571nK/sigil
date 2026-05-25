@@ -672,9 +672,21 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             "control",
             tokio::spawn(async move {
                 #[cfg(unix)]
-                let _ = crate::control::serve(&socket, ctx_c).await;
+                if let Err(e) = crate::control::serve(&socket, ctx_c).await {
+                    tracing::error!(
+                        error = ?e,
+                        socket = %socket.display(),
+                        "control IPC server exited; control plane (apply_policy, sigil show) unavailable"
+                    );
+                }
                 #[cfg(windows)]
-                let _ = crate::control::serve(&pipe, ctx_c).await;
+                if let Err(e) = crate::control::serve(&pipe, ctx_c).await {
+                    tracing::error!(
+                        error = ?e,
+                        pipe = %pipe,
+                        "control IPC server exited; control plane (apply_policy, sigil show) unavailable"
+                    );
+                }
             }),
         );
     }
@@ -851,17 +863,90 @@ impl TargetLookup for GlobTargetLookup {
 
 /// Per-OS path of the policy-signing keystore (spec §3.8.2).
 fn keystore_path() -> PathBuf {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        PathBuf::from("/etc/sigil/policy-signing-pubkeys.pem")
-    }
     #[cfg(target_os = "windows")]
     {
-        PathBuf::from(r"C:\ProgramData\Sigil\policy-signing-pubkeys.pem")
+        resolve_keystore_path_windows(std::env::var_os("LOCALAPPDATA"))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(not(target_os = "windows"))]
     {
-        PathBuf::from("/etc/sigil/policy-signing-pubkeys.pem")
+        resolve_keystore_path_unix(
+            crate::control::is_root(),
+            std::env::var("XDG_CONFIG_HOME").ok().filter(|s| !s.is_empty()),
+            std::env::var("HOME").ok().filter(|s| !s.is_empty()),
+        )
+    }
+}
+
+/// Pure resolver for the Unix keystore default. Root → system `/etc/sigil`
+/// (matches the systemd deploy). Non-root → `$XDG_CONFIG_HOME/sigil` (else
+/// `$HOME/.config/sigil`) so a non-root agent can load policy-signing pubkeys
+/// without `/etc` write access. Override with `--keystore`.
+#[cfg(not(target_os = "windows"))]
+fn resolve_keystore_path_unix(
+    is_root: bool,
+    xdg_config: Option<String>,
+    home: Option<String>,
+) -> PathBuf {
+    const FILE: &str = "policy-signing-pubkeys.pem";
+    if is_root {
+        return PathBuf::from("/etc/sigil").join(FILE);
+    }
+    if let Some(dir) = xdg_config {
+        return PathBuf::from(dir).join("sigil").join(FILE);
+    }
+    if let Some(home) = home {
+        return PathBuf::from(home).join(".config").join("sigil").join(FILE);
+    }
+    PathBuf::from("/etc/sigil").join(FILE)
+}
+
+/// Pure resolver for the Windows keystore default. Defaults to the
+/// user-writable `%LOCALAPPDATA%\Sigil` so a non-elevated agent works out of
+/// the box; a SYSTEM service wanting machine-wide `%ProgramData%\Sigil` passes
+/// `--keystore`.
+#[cfg(target_os = "windows")]
+fn resolve_keystore_path_windows(localappdata: Option<std::ffi::OsString>) -> PathBuf {
+    let base = localappdata.unwrap_or_default();
+    PathBuf::from(base)
+        .join("Sigil")
+        .join("policy-signing-pubkeys.pem")
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod keystore_path_tests {
+    use super::resolve_keystore_path_unix;
+    use std::path::PathBuf;
+
+    #[test]
+    fn root_uses_etc_sigil() {
+        assert_eq!(
+            resolve_keystore_path_unix(true, Some("/home/u/.config".into()), Some("/home/u".into())),
+            PathBuf::from("/etc/sigil/policy-signing-pubkeys.pem")
+        );
+    }
+
+    #[test]
+    fn nonroot_prefers_xdg_config_home() {
+        assert_eq!(
+            resolve_keystore_path_unix(false, Some("/home/u/.config".into()), Some("/home/u".into())),
+            PathBuf::from("/home/u/.config/sigil/policy-signing-pubkeys.pem")
+        );
+    }
+
+    #[test]
+    fn nonroot_without_xdg_uses_home_dot_config() {
+        assert_eq!(
+            resolve_keystore_path_unix(false, None, Some("/home/u".into())),
+            PathBuf::from("/home/u/.config/sigil/policy-signing-pubkeys.pem")
+        );
+    }
+
+    #[test]
+    fn nonroot_without_xdg_or_home_falls_back_to_etc() {
+        assert_eq!(
+            resolve_keystore_path_unix(false, None, None),
+            PathBuf::from("/etc/sigil/policy-signing-pubkeys.pem")
+        );
     }
 }
 
