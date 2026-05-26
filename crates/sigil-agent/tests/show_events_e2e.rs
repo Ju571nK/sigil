@@ -6,7 +6,6 @@
 
 mod common;
 use common::{policy_for_paths, TestAgentBuilder};
-use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn snapshot_mode_reads_real_file_change_events() {
@@ -20,10 +19,10 @@ async fn snapshot_mode_reads_real_file_change_events() {
     let ev = agent
         .wait_for_event(
             |v| v["evidence"]["kind"] == "file_change",
-            Duration::from_secs(5),
+            common::fs_event_timeout(),
         )
         .await
-        .expect("agent emitted no file_change within 5s");
+        .expect("agent emitted no file_change in time");
     assert_eq!(ev["schema_version"], 1);
 
     // Snapshot-mode read from the same events_dir. Use the test-only entry

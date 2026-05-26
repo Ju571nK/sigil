@@ -50,7 +50,7 @@ async fn apply_policy_reloads_live_watch_targets() {
     let ev = agent
         .wait_for_event(
             |v| v["evidence"]["kind"] == "file_change",
-            Duration::from_secs(5),
+            common::fs_event_timeout(),
         )
         .await
         .expect("policy A: file_change for X");
