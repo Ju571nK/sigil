@@ -1,3 +1,5 @@
+mod config;
+
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     model::{ServerCapabilities, ServerInfo},
