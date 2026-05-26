@@ -1,4 +1,5 @@
 mod config;
+mod upstream;
 
 use rmcp::{
     handler::server::router::tool::ToolRouter,
