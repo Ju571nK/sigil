@@ -23,3 +23,11 @@ pub fn policy_for_paths(paths: &[&str], tier: &str) -> String {
     yaml.push_str("    follow_symlinks: false\n");
     yaml
 }
+
+/// Wait budget for OS-watcher-driven (`wait_for_event`) assertions. macOS
+/// FSEvents delivery can lag well past a few seconds under parallel test load
+/// (issue #25), so give it more headroom there; other platforms keep the tight
+/// 5s and fail fast.
+pub fn fs_event_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(if cfg!(target_os = "macos") { 15 } else { 5 })
+}

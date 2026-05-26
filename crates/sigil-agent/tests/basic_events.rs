@@ -22,7 +22,7 @@ async fn it_emits_modified_event() {
                     && (v["evidence"]["change_kind"] == "modified"
                         || v["evidence"]["change_kind"] == "created")
             },
-            Duration::from_secs(5),
+            common::fs_event_timeout(),
         )
         .await
         .expect("expected file_change event");
