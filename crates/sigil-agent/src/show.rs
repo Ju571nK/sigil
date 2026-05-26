@@ -12,17 +12,21 @@ use sigil_core::policy::expand::{expand_per_user, EnvLookup};
 use sigil_core::policy::{current_platform, defaults, merge};
 use sigil_core::stats::StatsSnapshot;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn run(
     what: ShowWhat,
     policy_override: Option<PathBuf>,
     events_dir_override: Option<PathBuf>,
+    state_db_path: PathBuf,
 ) -> anyhow::Result<i32> {
     // `stats` talks to the running daemon over the control socket; it doesn't
     // touch the policy file, so handle it before the merge below.
     if let ShowWhat::Stats = what {
         return show_stats();
+    }
+    if let ShowWhat::HostId = what {
+        return show_host_id(&state_db_path);
     }
     #[cfg(feature = "operator-cli")]
     if let ShowWhat::PolicyStatus = what {
@@ -76,6 +80,7 @@ pub fn run(
             }
         }
         ShowWhat::Stats => unreachable!("handled above"),
+        ShowWhat::HostId => unreachable!("handled above"),
         #[cfg(feature = "operator-cli")]
         ShowWhat::PolicyStatus => unreachable!("handled above"),
         #[cfg(feature = "operator-cli")]
@@ -86,6 +91,27 @@ pub fn run(
         ShowWhat::Risk { .. } => unreachable!("handled above"),
     }
     Ok(0)
+}
+
+/// Print this host's persisted host_id (read-only — the agent assigns it on its
+/// first `sigil run`). Bare UUID on stdout so it's scriptable; exit 1 with a
+/// hint on stderr if none is persisted yet.
+fn show_host_id(state_db_path: &Path) -> anyhow::Result<i32> {
+    let cache = sigil_core::state::HashCache::open(state_db_path)?;
+    match cache.host_meta_get()?.host_id {
+        Some(id) => {
+            println!("{id}");
+            Ok(0)
+        }
+        None => {
+            eprintln!(
+                "sigil show host-id: no host_id yet — the agent assigns one on its \
+                 first `sigil run` (state.db: {})",
+                state_db_path.display()
+            );
+            Ok(1)
+        }
+    }
 }
 
 /// Connect to the running daemon's control socket, ask for `{"cmd":"stats"}`,

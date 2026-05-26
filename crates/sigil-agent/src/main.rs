@@ -40,7 +40,12 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(code);
         }
         cli::Command::Show { what } => {
-            let code = show::run(what, cli.policy.clone(), cli.events_dir.clone())?;
+            let code = show::run(
+                what,
+                cli.policy.clone(),
+                cli.events_dir.clone(),
+                cli.state_db.clone().unwrap_or_else(default_state_db_path),
+            )?;
             std::process::exit(code);
         }
         cli::Command::Version => {
