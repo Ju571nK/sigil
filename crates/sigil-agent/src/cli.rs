@@ -79,6 +79,9 @@ pub enum ShowWhat {
     Paths,
     /// Query the running daemon for stats via control IPC.
     Stats,
+    /// Print this host's stable host_id — the UUID persisted in state.db on the
+    /// agent's first run, and the value the sender's `host_id` must match.
+    HostId,
     /// Query the running daemon for the active policy version + envelope expiry.
     #[cfg(feature = "operator-cli")]
     PolicyStatus,
