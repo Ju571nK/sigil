@@ -113,7 +113,7 @@ pub async fn get_fleet_risk(
             "top_tool": tool,
             "reasons_count": entry.reasons.len(),
             "assessed_ts": entry.assessed_ts.format(&time::format_description::well_known::Rfc3339).unwrap(),
-            "open_alert_count_24h": h.counts_24h.sum_warn(),
+            "open_alert_count_24h": h.counts_24h.sum_alerts(),
         })
     }).collect();
     let next_cursor = if end < rows.len() {

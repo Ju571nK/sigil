@@ -50,6 +50,9 @@ pub struct HourlyBuckets {
     pub channel_stalls: [u32; 24],
     pub watcher_degraded: [u32; 24],
     pub sender_lag_critical: [u32; 24],
+    /// Events matching `/v1/meta.alerts_definition_default` (issue #21).
+    /// Kept in sync with `fleet_index_update::is_alert_evidence`.
+    pub alerts: [u32; 24],
 }
 
 impl HourlyBuckets {
@@ -72,6 +75,7 @@ impl HourlyBuckets {
             self.channel_stalls[slot] = 0;
             self.watcher_degraded[slot] = 0;
             self.sender_lag_critical[slot] = 0;
+            self.alerts[slot] = 0;
         }
         self.head_hour_unix = cur_hour_unix;
     }
@@ -110,6 +114,9 @@ impl HourlyBuckets {
     }
     pub fn sum_sender_lag_critical(&self) -> u32 {
         self.sender_lag_critical.iter().sum()
+    }
+    pub fn sum_alerts(&self) -> u32 {
+        self.alerts.iter().sum()
     }
 }
 

@@ -2,7 +2,24 @@
 //! can be exercised by unit tests without spinning up a FleetIndex.
 
 use crate::fleet_index::HostSummary;
-use sigil_core::event::{Event, Evidence, Severity};
+use sigil_core::event::{AiGuardBucket, Event, Evidence, Severity};
+
+/// True if this evidence matches `/v1/meta.alerts_definition_default` (issue #21):
+/// AiGuardRiskAssessed in {high, critical} + the additional alert kinds.
+/// MUST stay in sync with the JSON in `routes/meta.rs::get_meta`.
+fn is_alert_evidence(ev: &Evidence) -> bool {
+    matches!(
+        ev,
+        Evidence::AiGuardRiskAssessed {
+            bucket: AiGuardBucket::High | AiGuardBucket::Critical,
+            ..
+        } | Evidence::PolicySignatureInvalid { .. }
+            | Evidence::TlsFailure { .. }
+            | Evidence::HostIdFingerprintDrift { .. }
+            | Evidence::AgentDying { .. }
+            | Evidence::SenderLagCritical { .. }
+    )
+}
 
 /// Apply one event to a HostSummary. Caller (FleetIndex in Task 5 / boot_rebuild
 /// in Task 6) holds the write lock and the `host_id`-keyed entry.
@@ -22,6 +39,9 @@ pub fn apply_event(host: &mut HostSummary, event: &Event) {
         match event.severity {
             Severity::Info => host.counts_24h.info[s] = host.counts_24h.info[s].saturating_add(1),
             Severity::Warn => host.counts_24h.warn[s] = host.counts_24h.warn[s].saturating_add(1),
+        }
+        if is_alert_evidence(&event.evidence) {
+            host.counts_24h.alerts[s] = host.counts_24h.alerts[s].saturating_add(1);
         }
     }
 
@@ -321,5 +341,102 @@ mod tests {
         assert_eq!(h.counts_24h.sum_info(), 1);
         // last_seen_ts stays at recent (we used max()).
         assert_eq!(h.last_seen_ts, Some(recent));
+    }
+
+    #[test]
+    fn alerts_bucket_counts_only_alert_definition_events() {
+        let mut h = HostSummary::new("h".into());
+        let t = datetime!(2026-05-17 12:00 UTC);
+        apply_event(
+            &mut h,
+            &ev(
+                Evidence::AiGuardRiskAssessed {
+                    tool: AiTool::ClaudeCode,
+                    scope: AiGuardScope::UserGlobal,
+                    score: 8.0,
+                    bucket: AiGuardBucket::High,
+                    reasons: vec![],
+                    is_reattestation: false,
+                },
+                Severity::Warn,
+                t,
+            ),
+        );
+        apply_event(
+            &mut h,
+            &ev(
+                Evidence::TlsFailure {
+                    reason: "ca".into(),
+                },
+                Severity::Warn,
+                t,
+            ),
+        );
+        apply_event(
+            &mut h,
+            &ev(
+                Evidence::SenderLagCritical {
+                    lag_events: 1,
+                    lag_bytes: 1,
+                    oldest_unsent_age_s: 1,
+                },
+                Severity::Warn,
+                t,
+            ),
+        );
+        apply_event(
+            &mut h,
+            &ev(
+                Evidence::PolicySignatureInvalid {
+                    reason: PolicySignatureInvalidReason::SignatureInvalid,
+                    signing_pubkey_id: "k1".into(),
+                    policy_version_in_envelope: 17,
+                    last_applied_policy_version: 16,
+                },
+                Severity::Warn,
+                t,
+            ),
+        );
+        apply_event(
+            &mut h,
+            &ev(
+                Evidence::WatcherDegraded {
+                    from: "fsevents".into(),
+                    to: "poll".into(),
+                    reason: "x".into(),
+                },
+                Severity::Warn,
+                t,
+            ),
+        );
+        assert_eq!(
+            h.counts_24h.sum_alerts(),
+            4,
+            "AiGuard High + TlsFailure + SenderLagCritical + PolicySignatureInvalid"
+        );
+        assert_eq!(h.counts_24h.sum_warn(), 5, "all five are warn-severity");
+    }
+
+    #[test]
+    fn ai_guard_low_medium_are_not_alerts() {
+        let mut h = HostSummary::new("h".into());
+        let t = datetime!(2026-05-17 12:00 UTC);
+        apply_event(
+            &mut h,
+            &ev(
+                Evidence::AiGuardRiskAssessed {
+                    tool: AiTool::ClaudeCode,
+                    scope: AiGuardScope::UserGlobal,
+                    score: 2.0,
+                    bucket: AiGuardBucket::Medium,
+                    reasons: vec![],
+                    is_reattestation: false,
+                },
+                Severity::Warn,
+                t,
+            ),
+        );
+        assert_eq!(h.counts_24h.sum_alerts(), 0);
+        assert_eq!(h.counts_24h.sum_warn(), 1);
     }
 }
