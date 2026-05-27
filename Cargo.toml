@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sigil-core", "crates/sigil-agent", "crates/sigil-spool", "crates/sigil-rules-basic", "crates/sigil-sender", "crates/sigil-signer", "crates/sigil-server"]
+members = ["crates/sigil-core", "crates/sigil-agent", "crates/sigil-spool", "crates/sigil-rules-basic", "crates/sigil-sender", "crates/sigil-signer", "crates/sigil-server", "crates/sigil-mcp"]
 resolver = "2"
 
 [workspace.package]
@@ -44,6 +44,8 @@ http = "1"
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
 tower = "0.5"
 urlencoding = "2"
+rmcp = { version = "0.16", features = ["server", "transport-io"] }
+httpmock = "0.7"
 
 [profile.release]
 panic = "unwind"

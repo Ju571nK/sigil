@@ -1,0 +1,29 @@
+[package]
+name = "sigil-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Read-only fleet MCP server: exposes a sigil-server's read API as Model Context Protocol tools."
+
+[[bin]]
+name = "sigil-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rmcp = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+urlencoding = { workspace = true }
+
+[dev-dependencies]
+httpmock = { workspace = true }
+tokio = { workspace = true }
