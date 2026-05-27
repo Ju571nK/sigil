@@ -35,8 +35,6 @@ impl From<UpstreamError> for McpError {
     }
 }
 
-// fields and methods used by tool layer in Task 4
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct Upstream {
     client: Client,
@@ -45,8 +43,6 @@ pub struct Upstream {
 }
 
 impl Upstream {
-    // used by main.rs in Task 4
-    #[allow(dead_code)]
     pub fn new(cfg: &Config) -> Result<Self, UpstreamError> {
         let client = match &cfg.mtls {
             Some(m) => build_mtls_client(&m.client_cert, &m.client_key, &m.ca_cert)?,
@@ -69,8 +65,6 @@ impl Upstream {
     }
 
     /// GET `path` (+optional query), return parsed JSON. Only verb used: GET.
-    // used by tool layer in Task 4
-    #[allow(dead_code)]
     pub async fn get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, UpstreamError> {
         debug_assert!(path.starts_with('/'), "path must start with '/': {path}");
         let url = format!("{}{}", self.base_url, path);

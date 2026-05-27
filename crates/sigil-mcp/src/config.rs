@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-// fields consumed by HTTP client + main.rs in Tasks 3/4
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Config {
     pub base_url: String,
@@ -10,8 +8,6 @@ pub struct Config {
     pub mtls: Option<MtlsPaths>,
 }
 
-// client_key and ca_cert used by the HTTP client in Task 4
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct MtlsPaths {
     pub client_cert: PathBuf,
@@ -28,8 +24,6 @@ pub enum ConfigError {
 }
 
 impl Config {
-    // used by main.rs in Task 4
-    #[allow(dead_code)]
     pub fn from_env() -> Result<Self, ConfigError> {
         let map: HashMap<String, String> = std::env::vars().collect();
         Self::from_map(&map)
