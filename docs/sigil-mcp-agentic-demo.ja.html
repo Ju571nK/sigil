@@ -157,7 +157,7 @@
         <div class="toolcall">→ sigil-fleet · fleet_risk() を呼び出し</div>
         <p>サーバーには <b>1台</b> のホストが登録されていて、<span class="band band-high">high</span> バンドです：</p>
         <table>
-          <tr><td class="k">ホスト</td><td><code>ju571n</code></td></tr>
+          <tr><td class="k">ホスト</td><td><code>host-alpha</code></td></tr>
           <tr><td class="k">リスクバンド</td><td><span class="band band-high">high</span></td></tr>
           <tr><td class="k">スコア</td><td><b>5.75</b> / 10</td></tr>
           <tr><td class="k">24時間のオープンアラート</td><td>12件</td></tr>
@@ -172,12 +172,12 @@
     <div class="turn">
       <div class="user">get_host で詳細を見せて</div>
       <div class="asst">
-        <div class="toolcall">→ sigil-fleet · get_host("825e46a2-…-18e8177eec30") を呼び出し</div>
-        <p><b>ホスト <code>ju571n</code> の詳細な状態</b></p>
+        <div class="toolcall">→ sigil-fleet · get_host("11111111-…-111111111111") を呼び出し</div>
+        <p><b>ホスト <code>host-alpha</code> の詳細な状態</b></p>
         <table>
           <tr><td class="k">OS</td><td>macOS 26.5.0（aarch64 / Apple Silicon）、kernel 25.5.0</td></tr>
           <tr><td class="k">エージェント版</td><td>0.1.0</td></tr>
-          <tr><td class="k">IP</td><td>192.168.50.240（en0）、ゲートウェイ 192.168.50.1</td></tr>
+          <tr><td class="k">IP</td><td>10.0.0.42（en0）、ゲートウェイ 10.0.0.1</td></tr>
           <tr><td class="k">status</td><td><b style="color:var(--muted)">disconnected</b> — 最終接続 2026-05-25 03:18 UTC、heartbeat なし</td></tr>
           <tr><td class="k">24時間のイベント</td><td>warn 12 / info 1</td></tr>
           <tr><td class="k">policy_state</td><td><code>last_applied_policy_version: 0</code> → ポリシーを一度も適用していない（reload 時刻 null）</td></tr>
@@ -228,7 +228,7 @@
   <p>（Claude Desktop の場合は <code>claude_desktop_config.json</code> の <code>mcpServers</code> に同じ <code>command</code> と <code>env</code> を追加。）</p>
   <p><b>3 · 尋ねる</b> — 新しいセッションで：</p>
 <pre><code>フリートで最もリスクの高いホストを見つけて、なぜ危険なのか理由を分かりやすく説明して
-ju571n の AI guard 状態を要約して、優先的な対応を3つ提案して
+host-alpha の AI guard 状態を要約して、優先的な対応を3つ提案して
 直近24時間のアラートをトリアージして</code></pre>
 
   <div class="foot">
