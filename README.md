@@ -158,8 +158,8 @@ Out of the box, with built-in defaults plus your policy YAML:
 
 ## Architecture
 
-Sigil is a Rust workspace with seven crates: three long-running binaries,
-one operator CLI, and three shared libraries.
+Sigil is a Rust workspace with eight crates: three long-running binaries,
+one operator CLI, one read-only MCP server, and three shared libraries.
 
 **Long-running binaries**
 
@@ -181,6 +181,13 @@ one operator CLI, and three shared libraries.
 - `sigil-signer` — keystore + envelope tool (`sigil-sign` binary).
   `keygen` / `sign` / `verify` / `inspect` for the ed25519 keys that
   authenticate signed policy responses. One-shot — not a daemon.
+
+**MCP server**
+
+- `sigil-mcp` — read-only fleet MCP server (`sigil-mcp` binary). Exposes a
+  `sigil-server`'s bearer-gated read API as Model Context Protocol tools so an
+  MCP client (Claude Desktop/Code) can read and reason over fleet posture.
+  Read-only by construction: GET only, no write or remediation tools.
 
 **Libraries**
 
@@ -242,6 +249,10 @@ flowchart LR
     %% Optional, exploratory — an internal or external LLM for deeper analysis
     llm["LLM analysis<br/>internal or external<br/>(optional · exploratory)"]:::optional
 
+    %% Optional — read-only fleet access for an MCP client (Claude Desktop/Code)
+    mcp["sigil-mcp<br/>read-only fleet MCP server<br/>(GET only · optional)"]
+    mcpclient(["MCP client<br/>(Claude Desktop / Code)"]):::optional
+
     %% Data plane
     FS --> a_pipe
     FS --> a_aiguard
@@ -260,6 +271,8 @@ flowchart LR
     %% Optional consumers
     server -. "read API" .-> manager
     manager -. "deeper analysis · governance" .-> llm
+    server -. "read API (GET)" .-> mcp
+    mcp -. "MCP tools (stdio)" .-> mcpclient
 
     classDef optional stroke-dasharray: 5 5,fill:#f5f5f5,stroke:#999,color:#666
 
@@ -269,6 +282,7 @@ flowchart LR
     style sender fill:#d1fae5,stroke:#059669,color:#064e3b
     style signer fill:#d1fae5,stroke:#059669,color:#064e3b
     style server fill:#d1fae5,stroke:#059669,color:#064e3b
+    style mcp    fill:#d1fae5,stroke:#059669,color:#064e3b
 ```
 
 ## Status
