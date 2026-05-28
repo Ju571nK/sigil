@@ -538,8 +538,10 @@ fn check_selinux(enforce_path: &std::path::Path) -> CheckResult {
     }
 }
 
-/// Check that the control socket exists and is owned by `root:sigil` with mode
-/// `0o660`. Returns `Info` (not Warn) when the socket is missing because that
+/// Check that the control socket exists, is root-owned, and is NOT world-accessible
+/// (issue #4). The `sigil` group is informational only — the full root:sigil /
+/// dedicated-user hardening is tracked separately (epic #10).
+/// Returns `Info` (not Warn) when the socket is missing because that
 /// just means the daemon isn't running — not a config error.
 #[cfg(target_os = "linux")]
 fn check_control_socket_perms(
@@ -562,22 +564,44 @@ fn check_control_socket_perms(
             ));
         }
     };
-    let Some(expected_gid) = read_group_gid_from(group_file, "sigil") else {
+    let sigil_gid = read_group_gid_from(group_file, "sigil");
+    classify_socket_perms(
+        &socket_path.display().to_string(),
+        meta.uid(),
+        meta.gid(),
+        meta.mode() & 0o777,
+        sigil_gid,
+    )
+}
+
+/// Pure classifier (testable without a real root-owned file). The socket must be
+/// root-owned and have no access bits for `other`; the `sigil` group, if present
+/// and matching, is reported but not required.
+#[cfg(target_os = "linux")]
+fn classify_socket_perms(
+    path: &str,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    sigil_gid: Option<u32>,
+) -> CheckResult {
+    if uid != 0 {
         return CheckResult::warn(format!(
-            "control socket: 'sigil' group not found in {} — \
-             daemon cannot drop privs to the right gid",
-            group_file.display()
+            "control socket: owner uid={uid}, expected root (uid 0) at {path}"
         ));
-    };
-    let actual_uid = meta.uid();
-    let actual_gid = meta.gid();
-    let actual_mode = meta.mode() & 0o777;
-    if actual_uid == 0 && actual_gid == expected_gid && actual_mode == 0o660 {
-        return CheckResult::ok(format!("control socket: root:sigil({expected_gid}) 0660"));
     }
-    CheckResult::warn(format!(
-        "control socket perms: uid={actual_uid} gid={actual_gid} mode={actual_mode:o}; \
-         expected uid=0 gid={expected_gid} mode=660"
+    if mode & 0o007 != 0 {
+        return CheckResult::warn(format!(
+            "control socket: world-accessible (mode {mode:o}); expected no access for 'other' \
+             (e.g. 0660) at {path}"
+        ));
+    }
+    let group = match sigil_gid {
+        Some(g) if g == gid => format!("root:sigil({g})"),
+        _ => format!("root:gid({gid})"),
+    };
+    CheckResult::ok(format!(
+        "control socket: {group} mode {mode:o} (root-owned, not world-accessible)"
     ))
 }
 
@@ -779,34 +803,48 @@ mod linux_tests {
     }
 
     #[test]
-    fn check_control_socket_perms_warns_when_group_missing_from_etc_group() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("control.sock");
-        std::fs::write(&p, b"").unwrap();
-        let group_file = dir.path().join("group");
-        std::fs::write(&group_file, "root:x:0:\n").unwrap();
-        let r = check_control_socket_perms(&p, &group_file);
-        assert_eq!(r.level, CheckLevel::Warn);
-        assert!(r.message.contains("'sigil' group"), "{:?}", r);
+    fn classify_socket_ok_root_0660_with_sigil_group() {
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 996, 0o660, Some(996));
+        assert_eq!(r.level, CheckLevel::Ok);
+        assert!(r.message.contains("root:sigil(996)"), "{r:?}");
     }
 
     #[test]
-    fn check_control_socket_perms_warns_when_world_readable() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("control.sock");
-        std::fs::write(&p, b"").unwrap();
-        let mut perm = std::fs::metadata(&p).unwrap().permissions();
-        perm.set_mode(0o666);
-        std::fs::set_permissions(&p, perm).unwrap();
-        let group_file = dir.path().join("group");
-        std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
-        let r = check_control_socket_perms(&p, &group_file);
+    fn classify_socket_ok_root_0660_without_sigil_group() {
+        // sigil group absent or gid mismatch → still OK (group is informational, epic #10).
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 0, 0o660, None);
+        assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
+        assert!(r.message.contains("root-owned"), "{r:?}");
+    }
+
+    #[test]
+    fn classify_socket_ok_root_0660_with_gid_mismatch() {
+        // sigil group exists but the socket's gid differs → still Ok, labeled root:gid(N).
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 999, 0o660, Some(996));
+        assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
+        assert!(r.message.contains("root:gid(999)"), "{r:?}");
+        assert!(!r.message.contains("sigil"), "{r:?}");
+    }
+
+    #[test]
+    fn classify_socket_ok_root_0600_is_not_world_accessible() {
+        // 0600 (no group/other access) is stricter than 0660 → still Ok.
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 0, 0o600, None);
+        assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
+    }
+
+    #[test]
+    fn classify_socket_warns_when_world_accessible() {
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 0, 0o666, Some(996));
         assert_eq!(r.level, CheckLevel::Warn);
-        // Implementation formats actual mode with `{:o}` (no leading 0), so
-        // assert on the bare octal digits.
-        assert!(r.message.contains("666"), "{:?}", r);
-        assert!(r.message.contains("expected"), "{:?}", r);
+        assert!(r.message.contains("world-accessible"), "{r:?}");
+    }
+
+    #[test]
+    fn classify_socket_warns_when_not_root_owned() {
+        let r = classify_socket_perms("/run/sigil/control.sock", 1000, 1000, 0o660, Some(996));
+        assert_eq!(r.level, CheckLevel::Warn);
+        assert!(r.message.contains("uid=1000"), "{r:?}");
     }
 
     #[test]

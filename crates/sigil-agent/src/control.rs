@@ -597,6 +597,14 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
         std::fs::create_dir_all(parent)?;
     }
     let listener = UnixListener::bind(socket_path)?;
+    // Lock the control socket to owner+group rw, no world access (issue #4). The
+    // agent runs as root; group ownership (root by default; `sigil` under the
+    // future hardened install, epic #10) gates non-root control access. Set this
+    // deterministically rather than relying on the process umask.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o660))?;
+    }
     tracing::info!(path = ?socket_path, "control IPC listening");
     loop {
         let (stream, _) = match listener.accept().await {
