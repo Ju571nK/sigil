@@ -18,3 +18,14 @@ targets:
       - "~/.config/example/mcp-allowlist.json"
     recursive: false
     follow_symlinks: false
+
+# Optional (Phase 3b): tune the AI Guard risk rubric. Keys are rubric kind_key
+# values — run `sigil doctor` to see the full effective table with current
+# weights. Unknown keys are logged and ignored; an absent section = built-in
+# defaults. Higher weight ⇒ that finding contributes more to a host's risk score.
+rubric_overrides:
+  # An unscanned external hook script is higher risk in our environment
+  # (built-in default is 1.5):
+  external_script_unscanned: 2.5
+  # De-emphasize a broad, non-PreToolUse matcher (built-in default 0.5):
+  broad_matcher_other: 0.25

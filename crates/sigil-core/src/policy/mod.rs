@@ -865,6 +865,25 @@ host_id_strategy: hostname
     }
 
     #[test]
+    fn shipped_policy_example_yaml_parses_with_rubric_overrides() {
+        // The packaged example (ships to /etc/sigil/policy.yaml.example) must stay
+        // schema-valid and keep demonstrating rubric_overrides (epic #9 wrap-up).
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/policy.example.yaml"
+        );
+        let contents = std::fs::read_to_string(path).expect("read policy.example.yaml");
+        let doc: PolicyDocument =
+            serde_yaml::from_str(&contents).expect("policy.example.yaml must parse");
+        assert_eq!(doc.version, 1);
+        assert!(
+            doc.rubric_overrides
+                .contains_key("external_script_unscanned"),
+            "example should demonstrate rubric_overrides"
+        );
+    }
+
+    #[test]
     fn merge_forwards_user_rubric_overrides() {
         let defaults = defaults().unwrap();
         // PolicyDocument doesn't derive Default (HostIdStrategy has no Default
