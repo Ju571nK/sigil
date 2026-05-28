@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sigil + Claude — AIセキュリティの状態を、対話で。(sigil-mcp デモ)</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg:#1a1a1a; --muted:#586069; --bg:#fbfbfd; --card:#ffffff; --border:#e2e4e8;
+    --code-bg:#f4f5f7; --link:#0b66c3; --accent:#6d28d9; --accent2:#0b66c3;
+    --user-bg:#eef3fb; --user-border:#c7d8f0;
+    --asst-bg:#ffffff; --asst-border:#e2e4e8;
+    --low:#1a7f37; --low-bg:#e9f7ee; --med:#9a6700; --med-bg:#fdf6e3;
+    --high:#b35900; --high-bg:#fdeede; --crit:#cf222e; --crit-bg:#fbe9ea;
+    --th:#f1f3f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg:#e6e6e6; --muted:#9aa4af; --bg:#0f1115; --card:#171a21; --border:#2a2f3a;
+      --code-bg:#1c2027; --link:#6db3f2; --accent:#a78bfa; --accent2:#6db3f2;
+      --user-bg:#16202e; --user-border:#284058; --asst-bg:#171a21; --asst-border:#2a2f3a;
+      --low:#4ac26b; --low-bg:#13251a; --med:#d4a72c; --med-bg:#2a2413; --high:#e0843a;
+      --high-bg:#2c2013; --crit:#ff7b72; --crit-bg:#2c1719; --th:#1c2027;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.7; font-size:16px; }
+  .wrap { max-width:920px; margin:0 auto; padding:0 1.3em 4em; }
+  code,kbd { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:0.86em; }
+  code { background:var(--code-bg); padding:0.1em 0.35em; border-radius:4px; }
+  pre { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+    padding:0.9em 1.1em; overflow-x:auto; font-size:0.82em; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+
+  header.hero { background:linear-gradient(135deg, color-mix(in srgb,var(--accent) 16%,transparent), transparent 70%);
+    border-bottom:1px solid var(--border); padding:3em 0 2.2em; }
+  .hero .wrap { padding-top:0; padding-bottom:0; }
+  .eyebrow { color:var(--accent); font-weight:700; letter-spacing:0.06em; font-size:0.78rem; }
+  h1 { font-size:2.1rem; line-height:1.25; margin:0.35em 0 0.45em; }
+  h1 .grad { background:linear-gradient(90deg,var(--accent),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .lede { font-size:1.1rem; color:var(--muted); max-width:42em; margin:0; }
+  .pill { display:inline-block; font-size:0.74rem; font-weight:600; padding:0.2em 0.7em; border-radius:999px;
+    border:1px solid var(--border); background:var(--card); color:var(--muted); margin-right:0.4em; margin-top:0.3em; }
+
+  h2 { font-size:1.4rem; margin:2.4em 0 0.2em; }
+  h2 .n { color:var(--accent); font-variant-numeric:tabular-nums; margin-right:0.35em; }
+  .sub { color:var(--muted); margin:0.2em 0 1em; }
+
+  figure.demo { margin:1.4em 0 0; text-align:center; }
+  figure.demo img { width:100%; max-width:760px; border:1px solid var(--border); border-radius:12px; display:block; margin:0 auto; }
+  figure.demo figcaption { color:var(--muted); font-size:0.85rem; margin-top:0.6em; }
+
+  .beforeafter { display:grid; grid-template-columns:1fr 1fr; gap:0.9em; margin:1em 0; }
+  @media (max-width:640px){ .beforeafter{ grid-template-columns:1fr; } }
+  .ba { border:1px solid var(--border); border-radius:10px; padding:1em 1.1em; background:var(--card); }
+  .ba h3 { margin:0 0 0.3em; font-size:1rem; }
+  .ba.before h3 { color:var(--muted); } .ba.after h3 { color:var(--accent); }
+  .ba p { margin:0; color:var(--muted); font-size:0.95rem; }
+
+  .flow { display:flex; flex-wrap:wrap; align-items:center; gap:0.5em; margin:1.1em 0; font-size:0.86rem; }
+  .node { border:1px solid var(--border); background:var(--card); border-radius:8px; padding:0.45em 0.8em; font-weight:600; }
+  .node small { display:block; color:var(--muted); font-weight:400; font-size:0.8em; }
+  .arrow { color:var(--muted); font-weight:700; }
+  .node.hl { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+
+  .chat { margin:1.2em 0; }
+  .turn { margin:1.1em 0; }
+  .user { background:var(--user-bg); border:1px solid var(--user-border); border-radius:12px 12px 12px 4px;
+    padding:0.7em 1em; max-width:80%; font-weight:600; }
+  .user::before { content:"あなた"; display:block; font-size:0.7rem; color:var(--muted); font-weight:700; letter-spacing:0.05em; margin-bottom:0.15em; }
+  .asst { background:var(--asst-bg); border:1px solid var(--asst-border); border-radius:12px 12px 4px 12px;
+    padding:0.9em 1.1em; margin-top:0.5em; }
+  .asst::before { content:"Claude  ·  sigil-fleet (MCP) 経由"; display:block; font-size:0.7rem; color:var(--accent); font-weight:700; letter-spacing:0.04em; margin-bottom:0.5em; }
+  .toolcall { font-family:"SF Mono",Menlo,monospace; font-size:0.76rem; color:var(--muted);
+    border-left:2px solid var(--accent); padding:0.15em 0 0.15em 0.7em; margin:0.2em 0 0.7em; }
+
+  table { border-collapse:collapse; width:100%; margin:0.6em 0; font-size:0.9rem; }
+  th,td { border:1px solid var(--border); padding:0.4em 0.7em; text-align:left; }
+  th { background:var(--th); font-weight:600; }
+  td.k { color:var(--muted); width:44%; }
+  .band { font-weight:700; padding:0.08em 0.55em; border-radius:999px; font-size:0.8em; }
+  .band-low { color:var(--low); background:var(--low-bg); }
+  .band-medium { color:var(--med); background:var(--med-bg); }
+  .band-high { color:var(--high); background:var(--high-bg); }
+
+  .toolgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:0.5em; margin:1em 0; }
+  @media (max-width:640px){ .toolgrid{ grid-template-columns:1fr 1fr; } }
+  .tool { border:1px solid var(--border); background:var(--card); border-radius:8px; padding:0.55em 0.7em; font-size:0.85rem; }
+  .tool code { font-weight:700; background:none; padding:0; color:var(--accent2); }
+  .tool small { display:block; color:var(--muted); font-size:0.85em; }
+
+  .note { border:1px solid var(--border); border-left:3px solid var(--accent); background:var(--card);
+    border-radius:8px; padding:0.8em 1em; margin:1.2em 0; }
+  .foot { color:var(--muted); font-size:0.85rem; border-top:1px solid var(--border); margin-top:3em; padding-top:1.2em; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Sigil · sigil-mcp · v0.2.0</div>
+    <h1>あなたの<span class="grad">AIセキュリティの状態</span>を、<br>自然な言葉で尋ねる。</h1>
+    <p class="lede">Sigil は、AI コーディングエージェント（Claude Code・Cursor・Codex・Gemini など）のガード面 — hooks・permissions・サンドボックス・MCP allowlist — を計測します。<code>sigil-mcp</code> を使えば、Claude がその状態を Model Context Protocol 経由で読み取り、あなたと一緒にリスクを読み解きます。覚えるべきダッシュボードはありません。会話するだけです。</p>
+    <p style="margin-top:1em">
+      <span class="pill">読み取り専用</span>
+      <span class="pill">計測する、ブロックはしない</span>
+      <span class="pill">9つの MCP ツール</span>
+      <span class="pill">OSS · Apache-2.0</span>
+    </p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <figure class="demo">
+    <img src="sigil-mcp-demo.gif" alt="sigil-mcp をプロジェクトで直接実行し、ライブのフリートを照会するデモ">
+    <figcaption>プロジェクト内で <code>sigil-mcp</code> を直接実行 — ライブのフリートを MCP で照会（数値はすべて実際のツール応答）。</figcaption>
+  </figure>
+
+  <h2><span class="n">01</span>この飛躍</h2>
+  <p class="sub">同じフリートのデータを、別のかたちで使う。</p>
+  <div class="beforeafter">
+    <div class="ba before">
+      <h3>これまで — 静的なダッシュボード</h3>
+      <p>Web コンソールを開き、フリートの表を眺め、赤いホストを目で探し、行をクリックして掘り下げる。読むのは人間、見せるのはツール。</p>
+    </div>
+    <div class="ba after">
+      <h3>これから — 推論するアナリスト</h3>
+      <p><em>「何が危険で、なぜ？」</em>と尋ねるだけ。Claude がフリートのツールを呼び、ホストをランク付けし、理由を説明し、次の対応を提案する。尋ねるのは人間、推論するのはエージェント。</p>
+    </div>
+  </div>
+
+  <h2><span class="n">02</span>つながり方</h2>
+  <p class="sub">薄い読み取り専用のブリッジ — エージェント本体は決定論的なデータ層のまま。</p>
+  <div class="flow">
+    <span class="node">sigil agent<small>ホストごと・ガード面を採点</small></span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">sigil-server<small>フリート read API（mTLS + bearer）</small></span>
+    <span class="arrow">&rarr;</span>
+    <span class="node hl">sigil-mcp<small>read API → MCP ツール（stdio）</small></span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Claude<small>推論・説明する</small></span>
+  </div>
+
+  <h2><span class="n">03</span>その会話</h2>
+  <p class="sub">ライブのデモフリートに対する実際のセッション。モックは一切なく、すべて実際のツール応答です。</p>
+
+  <div class="chat">
+
+    <div class="turn">
+      <div class="user">フリートのリスクを見せて</div>
+      <div class="asst">
+        <div class="toolcall">→ sigil-fleet · fleet_risk() を呼び出し</div>
+        <p>サーバーには <b>1台</b> のホストが登録されていて、<span class="band band-high">high</span> バンドです：</p>
+        <table>
+          <tr><td class="k">ホスト</td><td><code>ju571n</code></td></tr>
+          <tr><td class="k">リスクバンド</td><td><span class="band band-high">high</span></td></tr>
+          <tr><td class="k">スコア</td><td><b>5.75</b> / 10</td></tr>
+          <tr><td class="k">24時間のオープンアラート</td><td>12件</td></tr>
+          <tr><td class="k">リスク理由（reasons）</td><td>6件</td></tr>
+          <tr><td class="k">トップツール</td><td><code>claude_code</code></td></tr>
+          <tr><td class="k">評価時刻</td><td>2026-05-25 02:59 UTC</td></tr>
+        </table>
+        <p><code>reasons_count: 6</code> と <code>open_alert_count_24h: 12</code> から、なぜ high なのか理由が6件挙がっています。次に <code>get_host</code> で詳細な状態（理由・個別アラート）を掘り下げるか、<code>query_events</code> でその12件のアラートのタイムラインを見られます。どちらを見ますか？</p>
+      </div>
+    </div>
+
+    <div class="turn">
+      <div class="user">get_host で詳細を見せて</div>
+      <div class="asst">
+        <div class="toolcall">→ sigil-fleet · get_host("825e46a2-…-18e8177eec30") を呼び出し</div>
+        <p><b>ホスト <code>ju571n</code> の詳細な状態</b></p>
+        <table>
+          <tr><td class="k">OS</td><td>macOS 26.5.0（aarch64 / Apple Silicon）、kernel 25.5.0</td></tr>
+          <tr><td class="k">エージェント版</td><td>0.1.0</td></tr>
+          <tr><td class="k">IP</td><td>192.168.50.240（en0）、ゲートウェイ 192.168.50.1</td></tr>
+          <tr><td class="k">status</td><td><b style="color:var(--muted)">disconnected</b> — 最終接続 2026-05-25 03:18 UTC、heartbeat なし</td></tr>
+          <tr><td class="k">24時間のイベント</td><td>warn 12 / info 1</td></tr>
+          <tr><td class="k">policy_state</td><td><code>last_applied_policy_version: 0</code> → ポリシーを一度も適用していない（reload 時刻 null）</td></tr>
+        </table>
+        <p style="margin-top:0.9em"><b>ツール別の AI Guard リスク</b></p>
+        <table>
+          <thead><tr><th>ツール</th><th>バンド</th><th>スコア</th><th>scope</th></tr></thead>
+          <tbody>
+            <tr><td><code>claude_code</code></td><td><span class="band band-high">high</span></td><td>5.75</td><td>user_global</td></tr>
+            <tr><td><code>cursor</code></td><td><span class="band band-medium">medium</span></td><td>2.5</td><td>application</td></tr>
+            <tr><td><code>claude_desktop</code></td><td><span class="band band-low">low</span></td><td>0.0</td><td>application</td></tr>
+            <tr><td><code>codex</code></td><td><span class="band band-low">low</span></td><td>0.0</td><td>user_global</td></tr>
+            <tr><td><code>continue_dev</code></td><td><span class="band band-low">low</span></td><td>0.0</td><td>application</td></tr>
+            <tr><td><code>gemini</code></td><td><span class="band band-low">low</span></td><td>0.0</td><td>user_global</td></tr>
+          </tbody>
+        </table>
+        <p>リスクは <code>claude_code</code>（user-global, high 5.75）にほぼ集中していて、<code>cursor</code> が medium です。要因の上位は <code>no_sandbox</code>（host_shell 実行）と <code>broad_matcher</code>（マッチャー <code>*</code>）。優先順位：① claude_code の hook / permission の理由6件を確認 → ② cursor の MCP allowlist を点検 → ③ エージェントが disconnected なので最新状態を再収集。理由の詳細を <code>query_events</code> で抽出しましょうか？</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="note">上記の表・数値は、デモフリートに対する <b>実際の <code>sigil-mcp</code> ツール応答</b>です（ライブ MCP 実行＋セッションのキャプチャ）。Claude の説明はそのデータに基づく推論です。Sigil は計測するだけで、判断と対応は運用者（または Claude の助言を受けた人）に委ねられます。</p>
+
+  <h2><span class="n">04</span>ツール群</h2>
+  <p class="sub"><code>sigil-mcp</code> はサーバーの read API を 9つの読み取り専用 MCP ツールとして公開します。GET のみ — 書き込みも remediation もありません。</p>
+  <div class="toolgrid">
+    <div class="tool"><code>fleet_risk</code><small>ホスト別 AI Guard リスク（順位付き）</small></div>
+    <div class="tool"><code>list_hosts</code><small>既知のホスト一覧</small></div>
+    <div class="tool"><code>get_host</code><small>1ホストの詳細な状態</small></div>
+    <div class="tool"><code>fleet_compliance</code><small>ホスト別のポリシー準拠</small></div>
+    <div class="tool"><code>query_events</code><small>状態イベント（ホスト・期間で絞り込み）</small></div>
+    <div class="tool"><code>get_event</code><small>ID で1イベント</small></div>
+    <div class="tool"><code>get_policy</code><small>有効な署名済みポリシー</small></div>
+    <div class="tool"><code>server_meta</code><small>バージョン・アラート定義</small></div>
+    <div class="tool"><code>healthz</code><small>死活確認</small></div>
+  </div>
+
+  <h2><span class="n">05</span>試してみる</h2>
+  <p class="sub"><b>v0.2.0</b> に同梱 — 5つのバイナリ、curl 一発。</p>
+  <p><b>1 · インストール</b>（<code>sigil</code>・<code>sigil-sender</code>・<code>sigil-server</code>・<code>sigil-sign</code> に加えて <code>sigil-mcp</code> も入ります）：</p>
+<pre><code>curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh</code></pre>
+  <p><b>2 · Claude Code に登録</b>（自分の <code>sigil-server</code> の read API を指す — <code>:8443</code> 直結、または bearer のみのリバースプロキシ）：</p>
+<pre><code>claude mcp add sigil-fleet \
+  -e SIGIL_SERVER_BASE_URL=http://your-server:9090 \
+  -e SIGIL_SERVER_READ_TOKEN=your-read-token \
+  -- ~/.local/bin/sigil-mcp</code></pre>
+  <p>（Claude Desktop の場合は <code>claude_desktop_config.json</code> の <code>mcpServers</code> に同じ <code>command</code> と <code>env</code> を追加。）</p>
+  <p><b>3 · 尋ねる</b> — 新しいセッションで：</p>
+<pre><code>フリートで最もリスクの高いホストを見つけて、なぜ危険なのか理由を分かりやすく説明して
+ju571n の AI guard 状態を要約して、優先的な対応を3つ提案して
+直近24時間のアラートをトリアージして</code></pre>
+
+  <div class="foot">
+    <p><b>次に。</b> 現在は <code>sigil-server</code> のフリート API を読みます。計画中の <code>sigil-mcp</code> <em>ローカルモード</em> では、ローカルのエージェントの control socket を直接読み — 個人開発者がサーバーなしで Claude に「<em>自分の</em> AI リスクは？」と尋ねられるようになります（<a href="https://github.com/Ju571nK/sigil/issues/55">issue #55</a>）。</p>
+    <p>Sigil · AI-Native Detection Engine for Device Assurance · <a href="https://github.com/Ju571nK/sigil">github.com/Ju571nK/sigil</a> · Apache-2.0（mechanism）</p>
+  </div>
+
+</div>
+</body>
+</html>

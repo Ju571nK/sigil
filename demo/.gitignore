@@ -1,0 +1,11 @@
+# Runtime artifacts from local demo runs — keep fixtures + configs, drop state.
+home/
+agent/events/
+agent/state.db
+agent/*.sock
+agent/*.log
+server/events/
+server/*.log
+server/signed-policy.json
+server-upload/
+.host_id

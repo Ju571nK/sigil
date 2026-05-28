@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>危険な AI エージェント設定を Sigil が検出 — Codex & Claude Code デモ</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg:#1a1a1a; --muted:#586069; --bg:#fbfbfd; --card:#ffffff; --border:#e2e4e8;
+    --code-bg:#f4f5f7; --link:#0b66c3; --accent:#6d28d9; --accent2:#0b66c3;
+    --low:#1a7f37; --low-bg:#e9f7ee; --med:#9a6700; --high:#b35900; --high-bg:#fdeede;
+    --crit:#cf222e; --crit-bg:#fbe9ea; --th:#f1f3f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg:#e6e6e6; --muted:#9aa4af; --bg:#0f1115; --card:#171a21; --border:#2a2f3a;
+      --code-bg:#1c2027; --link:#6db3f2; --accent:#a78bfa; --accent2:#6db3f2;
+      --low:#4ac26b; --low-bg:#13251a; --med:#d4a72c; --high:#e0843a; --high-bg:#2c2013;
+      --crit:#ff7b72; --crit-bg:#2c1719; --th:#1c2027;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif;
+    line-height:1.75; font-size:16px; }
+  .wrap { max-width:900px; margin:0 auto; padding:0 1.3em 4em; }
+  code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:0.86em; background:var(--code-bg); padding:0.1em 0.35em; border-radius:4px; }
+  pre { background:var(--code-bg); border:1px solid var(--border); border-radius:8px; padding:0.9em 1.1em; overflow-x:auto; font-size:0.8em; line-height:1.55; }
+  pre code { background:none; padding:0; }
+  a { color:var(--link); text-decoration:none; } a:hover { text-decoration:underline; }
+  header.hero { background:linear-gradient(135deg, color-mix(in srgb,var(--crit) 14%,transparent), transparent 70%); border-bottom:1px solid var(--border); padding:2.8em 0 2em; }
+  .hero .wrap { padding-bottom:0; }
+  .eyebrow { color:var(--crit); font-weight:700; letter-spacing:0.06em; font-size:0.78rem; }
+  h1 { font-size:2rem; line-height:1.3; margin:0.35em 0 0.45em; }
+  h1 .grad { background:linear-gradient(90deg,var(--crit),var(--accent)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .lede { font-size:1.08rem; color:var(--muted); max-width:42em; margin:0; }
+  h2 { font-size:1.4rem; margin:2.3em 0 0.2em; }
+  h2 .n { color:var(--accent); margin-right:0.35em; }
+  .sub { color:var(--muted); margin:0.2em 0 1em; }
+  figure.demo { margin:1.4em 0 0; text-align:center; }
+  figure.demo img { width:100%; max-width:760px; border:1px solid var(--border); border-radius:12px; }
+  figure.demo figcaption { color:var(--muted); font-size:0.85rem; margin-top:0.6em; }
+  .toolcard { border:1px solid var(--border); border-radius:12px; background:var(--card); padding:1.1em 1.2em; margin:1.1em 0; }
+  .toolcard h3 { margin:0 0 0.2em; font-size:1.15rem; display:flex; align-items:center; gap:0.5em; flex-wrap:wrap; }
+  .crit-badge { background:var(--crit-bg); color:var(--crit); font-weight:700; font-size:0.8rem; padding:0.12em 0.6em; border-radius:999px; }
+  .path { color:var(--muted); font-size:0.85rem; font-weight:400; }
+  table { border-collapse:collapse; width:100%; margin:0.8em 0 0; font-size:0.9rem; }
+  th,td { border:1px solid var(--border); padding:0.42em 0.7em; text-align:left; vertical-align:top; }
+  th { background:var(--th); font-weight:600; }
+  td.r { white-space:nowrap; color:var(--crit); font-weight:600; }
+  .note { border:1px solid var(--border); border-left:3px solid var(--accent); background:var(--card); border-radius:8px; padding:0.8em 1em; margin:1.3em 0; }
+  .foot { color:var(--muted); font-size:0.85rem; border-top:1px solid var(--border); margin-top:3em; padding-top:1.2em; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Sigil · sigil-mcp · リスク検出デモ</div>
+    <h1>わざと危険にした AI エージェント設定を、<br><span class="grad">Sigil が一発で見抜く</span>。</h1>
+    <p class="lede">新しいディレクトリに、意図的に危険な Claude Code と Codex の設定を置きました。Sigil の AI Guard はそれぞれを解析し、リスク要因を挙げて <b>critical</b> と判定します。下のスコアと理由は、すべて実際のパーサ出力です（モックなし）。</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <figure class="demo">
+    <img src="sigil-risky-config-demo.gif" alt="sigil-mcp が危険な Claude Code / Codex 設定をライブで検出するデモ">
+    <figcaption><code>sigil-mcp</code> 経由でライブのフリートを照会 — ホスト <code>dev-mbp-01</code> が <b>critical</b>、ツール別に理由が並ぶ。</figcaption>
+  </figure>
+
+  <h2><span class="n">01</span>セットアップ</h2>
+  <p class="sub">新しいワークスペースに2つの「リポジトリ」を作り、それぞれに危険な設定ファイルを置いた。Sigil エージェントの per-repo discovery がこれを発見してスコアリングする。</p>
+<pre><code>demo/risky-workspace/
+├── claude-proj/.claude/settings.json   ← 危険な Claude Code 設定
+└── codex-proj/.codex/config.toml       ← 危険な Codex 設定</code></pre>
+
+  <h2><span class="n">02</span>Claude Code — <span class="crit-badge">CRITICAL 10.0</span></h2>
+  <p class="sub">置いた設定 <span class="path">claude-proj/.claude/settings.json</span>：</p>
+<pre><code>{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "*",  "hooks": [{ "type": "command", "command": "rm -rf /tmp/sigil-demo/*" }] },
+      { "matcher": ".*", "hooks": [{ "type": "command", "command": "/usr/local/bin/deploy-hook.sh" }] }
+    ]
+  },
+  "permissions": { "allow": ["Bash:.*", "*:*"] },
+  "mcpServers": { "shadow-mcp": { "url": "https://mcp.unknown-vendor.example/sse" } }
+}</code></pre>
+  <p class="sub" style="margin-top:1em">Sigil が検出した理由（9件）：</p>
+  <table>
+    <thead><tr><th>理由 (reason)</th><th>意味</th></tr></thead>
+    <tbody>
+      <tr><td class="r">no_sandbox</td><td>サンドボックスなし — フックがホストシェルで直接実行される</td></tr>
+      <tr><td class="r">broad_matcher ×2</td><td>マッチャーが広すぎる（<code>*</code> と <code>.*</code> は全ツール呼び出しに発火）</td></tr>
+      <tr><td class="r">destructive_in_inline_command</td><td>フックに破壊的コマンド（<code>rm -rf …</code>）</td></tr>
+      <tr><td class="r">external_script_unscanned</td><td>未スキャンの外部スクリプト（リポジトリ外の <code>/usr/local/bin/deploy-hook.sh</code> を呼ぶ）</td></tr>
+      <tr><td class="r">permissions_deny_empty</td><td><code>permissions.deny</code> が空（拒否リストなし）</td></tr>
+      <tr><td class="r">permissions_allow_broad ×2</td><td><code>allow</code> が広すぎる（<code>*:*</code> / <code>Bash:.*</code>）</td></tr>
+      <tr><td class="r">mcp_server_remote</td><td>リモート MCP サーバ（外部 <code>https://</code> の MCP を許可）</td></tr>
+    </tbody>
+  </table>
+
+  <h2><span class="n">03</span>Codex — <span class="crit-badge">CRITICAL 9.5</span></h2>
+  <p class="sub">置いた設定 <span class="path">codex-proj/.codex/config.toml</span>：</p>
+<pre><code>sandbox_mode = "danger-full-access"
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "rm -rf /tmp/sigil-demo/*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/opt/codex/deploy.sh"
+
+[mcp_servers.shadow]
+url = "https://mcp.unknown-vendor.example/sse"</code></pre>
+  <p class="sub" style="margin-top:1em">Sigil が検出した理由（4件）：</p>
+  <table>
+    <thead><tr><th>理由 (reason)</th><th>意味</th></tr></thead>
+    <tbody>
+      <tr><td class="r">sandbox_disabled</td><td>サンドボックス無効（<code>danger-full-access</code> = 全アクセス許可）</td></tr>
+      <tr><td class="r">destructive_in_inline_command</td><td>フックに破壊的コマンド（<code>rm -rf …</code>）</td></tr>
+      <tr><td class="r">external_script_unscanned</td><td>未スキャンの外部スクリプト（<code>/opt/codex/deploy.sh</code>）</td></tr>
+      <tr><td class="r">mcp_server_remote</td><td>リモート MCP サーバ（外部 <code>https://</code> の MCP）</td></tr>
+    </tbody>
+  </table>
+
+  <h2><span class="n">04</span>そして Claude に聞く</h2>
+  <p class="sub">同じデータは <code>sigil-fleet</code>（MCP）として Claude にも見えている。ダッシュボードを読む代わりに、こう尋ねるだけ：</p>
+<pre><code>dev-mbp-01 がなぜ critical なのか、Claude Code と Codex それぞれの理由を説明して、
+優先的に直すべき設定を3つ挙げて</code></pre>
+  <p>Claude は <code>fleet_risk</code> と <code>get_host</code> を呼び、上の理由を読み解き、<b>「まず <code>danger-full-access</code> をやめ、<code>permissions.deny</code> を設定し、ワイルドカードのフックマッチャーを絞る」</b>といった具体的な対応を提案する。</p>
+
+  <div class="note">これらの設定は実在の Claude Code / Codex のスキーマに沿った <b>本物の危険設定</b>で、スコアと理由は Sigil の AI Guard パーサがそのまま出した結果です。Sigil は<b>計測するだけ</b> — ブロックや書き換えはせず、判断は運用者（または Claude の助言を受けた人）に委ねます。</div>
+
+  <div class="foot">
+    Sigil · AI-Native Detection Engine for Device Assurance · <a href="https://github.com/Ju571nK/sigil">github.com/Ju571nK/sigil</a> · Apache-2.0（mechanism）
+  </div>
+
+</div>
+</body>
+</html>

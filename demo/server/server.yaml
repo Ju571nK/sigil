@@ -1,0 +1,5 @@
+# Local demo server — plain HTTP + bearer (no mTLS: tls_* omitted = dev mode).
+# sigil-mcp points straight at http://127.0.0.1:18443 with SIGIL_SERVER_READ_TOKEN.
+bind: "127.0.0.1:18443"
+events_out_dir: "/Users/ju571nk3n/Documents/Dev-Factory/anti_i/demo/server/events"
+policy_bundle_path: "/Users/ju571nk3n/Documents/Dev-Factory/anti_i/demo/server/signed-policy.json"

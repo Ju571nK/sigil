@@ -1,0 +1,8 @@
+# Local demo policy: point the agent at the risky fixture workspace so per-repo
+# discovery scores the planted Claude Code + Codex projects.
+version: 1
+host_id_strategy: machine_id
+claude_code_workspaces:
+  - "/Users/ju571nk3n/Documents/Dev-Factory/anti_i/demo/risky-workspace"
+codex_workspaces:
+  - "/Users/ju571nk3n/Documents/Dev-Factory/anti_i/demo/risky-workspace"
