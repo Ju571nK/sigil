@@ -3,9 +3,17 @@
 use crate::auth::ReadToken;
 use crate::fleet_index::FleetIndex;
 use crate::persist::HighWater;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{header, Request, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use axum::{routing::get, routing::post, Router};
+use serde_json::json;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub struct AppState {
@@ -33,6 +41,11 @@ pub struct AppState {
 
 pub type SharedState = Arc<AppState>;
 
+/// Health-check route path. Referenced by both the route registration and the
+/// `boot_gate` middleware (which always lets it through), so it lives in one
+/// place to keep the two in sync under rename.
+pub const HEALTHZ_PATH: &str = "/v1/healthz";
+
 pub fn build_router(state: SharedState) -> Router {
     use crate::auth::require_bearer;
     use axum::middleware::from_fn_with_state;
@@ -41,7 +54,7 @@ pub fn build_router(state: SharedState) -> Router {
     Router::new()
         .route("/v1/events", post(crate::events_route::post_events))
         .route("/v1/policy", get(crate::policy_route::get_policy))
-        .route("/v1/healthz", get(crate::routes::healthz::get_healthz))
+        .route(HEALTHZ_PATH, get(crate::routes::healthz::get_healthz))
         .route(
             "/v1/meta",
             get(crate::routes::meta::get_meta)
@@ -83,4 +96,23 @@ pub fn build_router(state: SharedState) -> Router {
                 .route_layer(from_fn_with_state(token.clone(), require_bearer)),
         )
         .with_state(state)
+}
+
+/// Boot-gate middleware. While the in-memory fleet index is still being rebuilt
+/// (`boot_complete == false`), every route except `/v1/healthz` returns
+/// 503 + `Retry-After: 5` so agent senders and consoles back off and retry (#19).
+pub async fn boot_gate(
+    State(boot_complete): State<Arc<AtomicBool>>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    if req.uri().path() == HEALTHZ_PATH || boot_complete.load(Ordering::Relaxed) {
+        return next.run(req).await;
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(header::RETRY_AFTER, "5")],
+        Json(json!({"error": {"code": "rebuilding", "message": "fleet index rebuilding; retry shortly"}})),
+    )
+        .into_response()
 }

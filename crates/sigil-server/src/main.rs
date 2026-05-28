@@ -27,7 +27,6 @@ fn main() -> Result<()> {
 
 fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
     use sigil_server::auth::ReadToken;
-    use sigil_server::boot_rebuild::rebuild_from_jsonl;
     use sigil_server::fleet_index::FleetIndex;
 
     let allowlist =
@@ -41,13 +40,9 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         tracing::warn!("SIGIL_SERVER_READ_TOKEN unset — read API disabled (404)");
     }
 
+    // Fleet index starts empty; populated asynchronously in run() so the
+    // listener can open immediately and boot_gate can serve 503 until ready (#19).
     let fleet_index = FleetIndex::new();
-    tracing::info!("boot rebuild: scanning JSONL");
-    let t0 = std::time::Instant::now();
-    let built = rebuild_from_jsonl(&cfg.events_out_dir).context("boot rebuild")?;
-    let n = built.len();
-    fleet_index.replace(built);
-    tracing::info!(hosts = n, elapsed_ms = ?t0.elapsed().as_millis(), "boot rebuild complete");
 
     let now = time::OffsetDateTime::now_utc();
     let active_window_days = cfg
@@ -87,6 +82,39 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
 
 async fn run(cfg: ServerConfig) -> Result<()> {
     let state = build_state(&cfg)?;
+
+    // Boot rebuild runs off-thread so the listener opens immediately; boot_gate
+    // serves 503 + Retry-After until this flips boot_complete to true (#19).
+    let boot_complete = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        use sigil_server::boot_rebuild::rebuild_from_jsonl;
+        use std::sync::atomic::Ordering;
+        let fleet_index = state.fleet_index.clone();
+        let events_out_dir = cfg.events_out_dir.clone();
+        let boot_complete = boot_complete.clone();
+        tokio::spawn(async move {
+            tracing::info!("boot rebuild: scanning JSONL (async)");
+            let t0 = std::time::Instant::now();
+            match tokio::task::spawn_blocking(move || rebuild_from_jsonl(&events_out_dir)).await {
+                Ok(Ok(built)) => {
+                    let n = built.len();
+                    fleet_index.replace(built);
+                    tracing::info!(hosts = n, elapsed_ms = ?t0.elapsed().as_millis(), "boot rebuild complete");
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(error = ?e, "boot rebuild failed; serving empty index")
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "boot rebuild task panicked; serving empty index")
+                }
+            }
+            // Unconditionally flip ready on every completion path (success/error/panic-join)
+            // so a failed rebuild serves an empty index rather than 503-ing forever. (The
+            // only way this is skipped is if the spawned task itself panics before here —
+            // not reachable today: replace() is infallible and the join is matched above.)
+            boot_complete.store(true, Ordering::Relaxed);
+        });
+    }
 
     // License audit task: append a durable, signed, hash-chained record on
     // boot, every 6h, and on any ok/over_limit transition. Append-only;
@@ -147,7 +175,10 @@ async fn run(cfg: ServerConfig) -> Result<()> {
         });
     }
 
-    let app = build_router(state);
+    let app = build_router(state).layer(axum::middleware::from_fn_with_state(
+        boot_complete.clone(),
+        sigil_server::app::boot_gate,
+    ));
 
     if cfg.mtls_enabled() {
         let tls = build_mtls(&cfg)?;
