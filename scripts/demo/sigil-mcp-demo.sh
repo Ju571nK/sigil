@@ -4,11 +4,14 @@
 # Authentic — every number below is a real tool response, not mocked.
 set -euo pipefail
 
+# Local convenience: a gitignored demo/.env supplies SIGIL_SERVER_BASE_URL +
+# SIGIL_SERVER_READ_TOKEN so they stay out of committed source and recordings.
+[ -f demo/.env ] && { set -a; . demo/.env; set +a; }
 # Point at your sigil-server read API (direct :8443, or a bearer-only proxy).
 export SIGIL_SERVER_BASE_URL="${SIGIL_SERVER_BASE_URL:?set SIGIL_SERVER_BASE_URL=http://your-sigil-server:PORT}"
 export SIGIL_SERVER_READ_TOKEN="${SIGIL_SERVER_READ_TOKEN:?set SIGIL_SERVER_READ_TOKEN}"
 BIN="${SIGIL_MCP_BIN:-target/release/sigil-mcp}"
-HOST="825e46a2-04a2-43d9-8ba7-18e8177eec30"
+HOST="${SIGIL_DEMO_HOST:-4376ef7a-4fac-4644-b4cf-128fc471f783}"  # real id for the query; sanitize.py scrubs it on display
 
 P=$'\033[38;5;141m'; C=$'\033[38;5;80m'; D=$'\033[2m'; B=$'\033[1m'; R=$'\033[0m'
 

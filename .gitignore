@@ -41,3 +41,6 @@ rustc-ice-*.txt
 AGENTS.md
 docs/superpowers
 docs/**/superpowers*
+demo/
+scripts/
+scripts/demo/

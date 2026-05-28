@@ -12,7 +12,7 @@ Set Padding 26
 Set TypingSpeed 55ms
 
 Sleep 600ms
-Type "bash scripts/demo/sigil-mcp-demo.sh"
+Type "bash scripts/demo/sigil-mcp-demo.sh | python3 scripts/demo/sanitize.py"
 Sleep 500ms
 Enter
 Sleep 10s

@@ -1,4 +1,5 @@
 # Runtime artifacts from local demo runs — keep fixtures + configs, drop state.
+.env
 home/
 agent/events/
 agent/state.db
