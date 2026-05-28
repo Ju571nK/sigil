@@ -14,7 +14,7 @@
 set -eu
 
 REPO="Ju571nK/sigil"
-BINARIES="sigil sigil-sender sigil-server sigil-sign"
+BINARIES="sigil sigil-sender sigil-server sigil-sign sigil-mcp"
 INSTALL_DIR="${SIGIL_INSTALL_DIR:-$HOME/.local/bin}"
 
 say() { printf 'sigil-install: %s\n' "$1" >&2; }

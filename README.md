@@ -331,8 +331,8 @@ not a requirement.
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
 ```
 
-Installs the four binaries (`sigil`, `sigil-sender`, `sigil-server`,
-`sigil-sign`) to `~/.local/bin`. Pin a release with `SIGIL_VERSION`, or change
+Installs the five binaries (`sigil`, `sigil-sender`, `sigil-server`,
+`sigil-sign`, `sigil-mcp`) to `~/.local/bin`. Pin a release with `SIGIL_VERSION`, or change
 the location with `SIGIL_INSTALL_DIR`. Every release ships a `SHA256SUMS` file
 (the installer verifies it) plus a build-provenance attestation you can check:
 
