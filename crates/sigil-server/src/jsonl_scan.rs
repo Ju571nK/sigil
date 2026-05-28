@@ -49,6 +49,10 @@ pub fn find_by_id(events_out_dir: &Path, event_id: Uuid) -> std::io::Result<Opti
         if name.starts_with('.') {
             continue;
         }
+        // silent (no warn): scan/find run per-request — logging every bogus dir would spam.
+        if Uuid::parse_str(&name).is_err() {
+            continue;
+        }
         for d in &dates {
             let path = h.path().join(format!("received-{d}.jsonl"));
             let bytes = match std::fs::read(&path) {
@@ -116,6 +120,10 @@ pub fn scan(events_out_dir: &Path, f: &ScanFilters) -> std::io::Result<ScanResul
             None => continue,
         };
         if name.starts_with('.') {
+            continue;
+        }
+        // silent (no warn): scan/find run per-request — logging every bogus dir would spam.
+        if Uuid::parse_str(&name).is_err() {
             continue;
         }
         if let Some(hf) = &f.host_ids {
@@ -254,6 +262,9 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    // Valid UUIDs for host-dir names (the guard rejects non-UUIDs).
+    const HID: &str = "0190b8a0-1111-7abc-8def-000000000001";
+
     fn write_line(p: &std::path::Path, line: &serde_json::Value) {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()
@@ -287,17 +298,17 @@ mod tests {
     #[test]
     fn scan_returns_newest_first_within_limit() {
         let dir = tempdir().unwrap();
-        let host_dir = dir.path().join("h1");
+        let host_dir = dir.path().join(HID);
         std::fs::create_dir_all(&host_dir).unwrap();
         let f1 = host_dir.join("received-2026-05-16.jsonl");
         let f2 = host_dir.join("received-2026-05-17.jsonl");
         write_line(
             &f1,
-            &evjson("h1", "2026-05-16T12:00:00Z", "host_id_conflict"),
+            &evjson(HID, "2026-05-16T12:00:00Z", "host_id_conflict"),
         );
         write_line(
             &f2,
-            &evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict"),
+            &evjson(HID, "2026-05-17T12:00:00Z", "host_id_conflict"),
         );
         let r = scan(
             dir.path(),
@@ -315,14 +326,11 @@ mod tests {
     #[test]
     fn scan_filters_by_evidence_kind() {
         let dir = tempdir().unwrap();
-        let host_dir = dir.path().join("h1");
+        let host_dir = dir.path().join(HID);
         std::fs::create_dir_all(&host_dir).unwrap();
         let f = host_dir.join("received-2026-05-17.jsonl");
-        write_line(
-            &f,
-            &evjson("h1", "2026-05-17T11:00:00Z", "host_id_conflict"),
-        );
-        write_line(&f, &evjson("h1", "2026-05-17T12:00:00Z", "tls_failure"));
+        write_line(&f, &evjson(HID, "2026-05-17T11:00:00Z", "host_id_conflict"));
+        write_line(&f, &evjson(HID, "2026-05-17T12:00:00Z", "tls_failure"));
         let r = scan(
             dir.path(),
             &ScanFilters {
@@ -339,9 +347,9 @@ mod tests {
     #[test]
     fn find_by_id_targets_date_file_from_uuidv7() {
         let dir = tempdir().unwrap();
-        let host_dir = dir.path().join("h1");
+        let host_dir = dir.path().join(HID);
         std::fs::create_dir_all(&host_dir).unwrap();
-        let target = evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict");
+        let target = evjson(HID, "2026-05-17T12:00:00Z", "host_id_conflict");
         let target_id = target["event_id"].as_str().unwrap().to_string();
         let target_uuid = uuid::Uuid::parse_str(&target_id).unwrap();
         // Compute the date the UUIDv7 timestamp resolves to and write the line there.
@@ -359,7 +367,7 @@ mod tests {
         let f_decoy = host_dir.join("received-2020-01-01.jsonl");
         write_line(
             &f_decoy,
-            &evjson("h1", "2020-01-01T00:00:00Z", "host_id_conflict"),
+            &evjson(HID, "2020-01-01T00:00:00Z", "host_id_conflict"),
         );
         let got = find_by_id(dir.path(), target_uuid).unwrap();
         assert!(got.is_some());
@@ -369,13 +377,10 @@ mod tests {
     #[test]
     fn find_by_id_returns_none_when_absent() {
         let dir = tempdir().unwrap();
-        let host_dir = dir.path().join("h1");
+        let host_dir = dir.path().join(HID);
         std::fs::create_dir_all(&host_dir).unwrap();
         let f = host_dir.join("received-2026-05-17.jsonl");
-        write_line(
-            &f,
-            &evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict"),
-        );
+        write_line(&f, &evjson(HID, "2026-05-17T12:00:00Z", "host_id_conflict"));
         let missing = uuid::Uuid::now_v7();
         assert!(find_by_id(dir.path(), missing).unwrap().is_none());
     }
@@ -383,14 +388,11 @@ mod tests {
     #[test]
     fn scan_emits_cursor_when_limit_reached() {
         let dir = tempdir().unwrap();
-        let host_dir = dir.path().join("h1");
+        let host_dir = dir.path().join(HID);
         std::fs::create_dir_all(&host_dir).unwrap();
         let f = host_dir.join("received-2026-05-17.jsonl");
         for _ in 0..5 {
-            write_line(
-                &f,
-                &evjson("h1", "2026-05-17T12:00:00Z", "host_id_conflict"),
-            );
+            write_line(&f, &evjson(HID, "2026-05-17T12:00:00Z", "host_id_conflict"));
         }
         let r = scan(
             dir.path(),
@@ -402,5 +404,25 @@ mod tests {
         .unwrap();
         assert_eq!(r.events.len(), 3);
         assert!(r.next_cursor.is_some());
+    }
+
+    #[test]
+    fn scan_skips_non_uuid_host_dir() {
+        let dir = tempdir().unwrap();
+        let bogus = dir.path().join("not-a-uuid");
+        std::fs::create_dir_all(&bogus).unwrap();
+        write_line(
+            &bogus.join("received-2026-05-17.jsonl"),
+            &evjson("not-a-uuid", "2026-05-17T12:00:00Z", "host_id_conflict"),
+        );
+        let r = scan(
+            dir.path(),
+            &ScanFilters {
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(r.events.is_empty(), "non-UUID host dir must be skipped");
     }
 }

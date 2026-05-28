@@ -35,6 +35,10 @@ pub fn rebuild_from_jsonl(events_out_dir: &Path) -> std::io::Result<HashMap<Stri
         if host_id.starts_with('.') {
             continue; // skip .high-water.json and friends
         }
+        if uuid::Uuid::parse_str(&host_id).is_err() {
+            tracing::warn!(host_id = %host_id, "skip non-UUID host dir (boot rebuild)");
+            continue;
+        }
         let host_files = match std::fs::read_dir(&host_dir) {
             Ok(it) => it,
             Err(_) => continue,
@@ -99,6 +103,9 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    // Valid UUIDs for host-dir names (the guard rejects non-UUIDs).
+    const HID: &str = "0190b8a0-1111-7abc-8def-000000000001";
+
     fn write_line(p: &Path, line: &serde_json::Value) {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()
@@ -150,53 +157,53 @@ mod tests {
     #[test]
     fn rebuild_picks_up_host_meta_snapshot() {
         let dir = tempdir().unwrap();
-        let host_dir = dir.path().join("h1");
+        let host_dir = dir.path().join(HID);
         std::fs::create_dir_all(&host_dir).unwrap();
         let file = host_dir.join("received-2026-05-17.jsonl");
         write_line(
             &file,
-            &host_meta_event("h1", "alice", "2026-05-17T12:00:00Z"),
+            &host_meta_event(HID, "alice", "2026-05-17T12:00:00Z"),
         );
         let map = rebuild_from_jsonl(dir.path()).unwrap();
         assert_eq!(map.len(), 1);
-        let h = map.get("h1").unwrap();
+        let h = map.get(HID).unwrap();
         assert_eq!(h.hostname(), Some("alice"));
     }
 
     #[test]
     fn rebuild_applies_events_in_chronological_order_across_files() {
         let dir = tempdir().unwrap();
-        let host_dir = dir.path().join("h1");
+        let host_dir = dir.path().join(HID);
         std::fs::create_dir_all(&host_dir).unwrap();
         let f_old = host_dir.join("received-2026-05-16.jsonl");
         let f_new = host_dir.join("received-2026-05-17.jsonl");
         write_line(
             &f_old,
-            &host_meta_event("h1", "old-name", "2026-05-16T12:00:00Z"),
+            &host_meta_event(HID, "old-name", "2026-05-16T12:00:00Z"),
         );
         write_line(
             &f_new,
-            &host_meta_event("h1", "new-name", "2026-05-17T12:00:00Z"),
+            &host_meta_event(HID, "new-name", "2026-05-17T12:00:00Z"),
         );
         let map = rebuild_from_jsonl(dir.path()).unwrap();
         // newer overrides older
-        assert_eq!(map.get("h1").unwrap().hostname(), Some("new-name"));
+        assert_eq!(map.get(HID).unwrap().hostname(), Some("new-name"));
     }
 
     #[test]
     fn rebuild_skips_corrupt_lines() {
         let dir = tempdir().unwrap();
-        let host_dir = dir.path().join("h1");
+        let host_dir = dir.path().join(HID);
         std::fs::create_dir_all(&host_dir).unwrap();
         let file = host_dir.join("received-2026-05-17.jsonl");
         write_line(&file, &serde_json::json!("not-an-object"));
         write_line(
             &file,
-            &host_meta_event("h1", "alice", "2026-05-17T12:00:00Z"),
+            &host_meta_event(HID, "alice", "2026-05-17T12:00:00Z"),
         );
         let map = rebuild_from_jsonl(dir.path()).unwrap();
         // good line still applied; bad line warned + skipped
-        assert_eq!(map.get("h1").unwrap().hostname(), Some("alice"));
+        assert_eq!(map.get(HID).unwrap().hostname(), Some("alice"));
     }
 
     #[test]
@@ -206,5 +213,18 @@ mod tests {
         std::fs::write(dir.path().join(".high-water.json"), "{}").unwrap();
         let map = rebuild_from_jsonl(dir.path()).unwrap();
         assert!(map.is_empty());
+    }
+
+    #[test]
+    fn rebuild_skips_non_uuid_host_dir() {
+        let dir = tempdir().unwrap();
+        let bogus = dir.path().join("not-a-uuid");
+        std::fs::create_dir_all(&bogus).unwrap();
+        write_line(
+            &bogus.join("received-2026-05-17.jsonl"),
+            &host_meta_event("not-a-uuid", "x", "2026-05-17T12:00:00Z"),
+        );
+        let map = rebuild_from_jsonl(dir.path()).unwrap();
+        assert!(map.is_empty(), "non-UUID host dir must be skipped");
     }
 }

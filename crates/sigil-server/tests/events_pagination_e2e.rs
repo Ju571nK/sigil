@@ -10,10 +10,12 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
+const HID: &str = "0190b8a0-1111-7abc-8def-000000000001";
+
 fn ev_jsonl(uid: uuid::Uuid, ts: &str) -> String {
     let v = json!({
         "schema_version": 1, "event_id": uid.to_string(), "ts": ts,
-        "host_id": "h1", "agent_version": "0.5.0",
+        "host_id": HID, "agent_version": "0.5.0",
         "severity": "warn", "source": {"kind": "agent"}, "subject": {"kind": "self"},
         "evidence": {"kind": "host_id_conflict", "observed_status": 200},
         "target_id": null
@@ -24,7 +26,7 @@ fn ev_jsonl(uid: uuid::Uuid, ts: &str) -> String {
 #[tokio::test]
 async fn events_pagination_walks_in_pages() {
     let dir = tempfile::tempdir().unwrap();
-    let host_dir = dir.path().join("h1");
+    let host_dir = dir.path().join(HID);
     std::fs::create_dir_all(&host_dir).unwrap();
     let f = host_dir.join("received-2026-05-17.jsonl");
     let mut all_ids: Vec<uuid::Uuid> = (0..5).map(|_| uuid::Uuid::now_v7()).collect();

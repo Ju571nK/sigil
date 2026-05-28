@@ -37,14 +37,16 @@ fn host_meta_jsonl_line(host_id: &str, hostname: &str) -> String {
     format!("{v}\n")
 }
 
+const HID: &str = "0190b8a0-1111-7abc-8def-000000000001";
+
 #[tokio::test]
 async fn boot_rebuild_populates_fleet_hosts() {
     let dir = tempfile::tempdir().unwrap();
-    let host_dir = dir.path().join("h1");
+    let host_dir = dir.path().join(HID);
     std::fs::create_dir_all(&host_dir).unwrap();
     std::fs::write(
         host_dir.join("received-2026-05-17.jsonl"),
-        host_meta_jsonl_line("h1", "alice"),
+        host_meta_jsonl_line(HID, "alice"),
     )
     .unwrap();
 
