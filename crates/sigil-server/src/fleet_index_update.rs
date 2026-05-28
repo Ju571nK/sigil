@@ -143,12 +143,89 @@ pub fn apply_event(host: &mut HostSummary, event: &Event) {
 mod tests {
     use super::*;
     use sigil_core::event::{
-        AiGuardBucket, AiGuardScope, AiTool, Event, Evidence, HostMetaSnapshot,
+        AgentDyingReason, AiGuardBucket, AiGuardScope, AiTool, Event, Evidence, HostMetaSnapshot,
         PolicySignatureInvalidReason, Severity, SourceKind, Subject, SCHEMA_VERSION,
     };
     use std::collections::BTreeMap;
     use time::macros::datetime;
     use uuid::Uuid;
+
+    /// Drift guard (issue #52): every kind in `/v1/meta.alerts_definition_default`
+    /// must be recognized by `is_alert_evidence`, and a sampling of non-alert warns
+    /// must not be. Reads the live meta definition so changing one side without the
+    /// other fails here.
+    #[test]
+    fn is_alert_evidence_matches_meta_alerts_definition() {
+        use crate::routes::meta::alerts_definition_default;
+
+        fn ai_guard(bucket: AiGuardBucket) -> Evidence {
+            Evidence::AiGuardRiskAssessed {
+                tool: AiTool::ClaudeCode,
+                scope: AiGuardScope::UserGlobal,
+                score: 5.0,
+                bucket,
+                reasons: vec![],
+                is_reattestation: false,
+            }
+        }
+
+        let def = alerts_definition_default();
+
+        for k in def["additional_kinds"].as_array().unwrap() {
+            let kind = k.as_str().unwrap();
+            let ev = match kind {
+                "policy_signature_invalid" => Evidence::PolicySignatureInvalid {
+                    reason: PolicySignatureInvalidReason::SignatureInvalid,
+                    signing_pubkey_id: "k".into(),
+                    policy_version_in_envelope: 1,
+                    last_applied_policy_version: 0,
+                },
+                "tls_failure" => Evidence::TlsFailure { reason: "x".into() },
+                "host_id_fingerprint_drift" => Evidence::HostIdFingerprintDrift {
+                    prev_fingerprint: "a".into(),
+                    new_fingerprint: "b".into(),
+                },
+                "agent_dying" => Evidence::AgentDying {
+                    reason: AgentDyingReason::Panic,
+                    detail: "d".into(),
+                    task: None,
+                },
+                "sender_lag_critical" => Evidence::SenderLagCritical {
+                    lag_events: 1,
+                    lag_bytes: 1,
+                    oldest_unsent_age_s: 1,
+                },
+                other => panic!(
+                    "meta additional_kinds lists `{other}` but this test has no Evidence \
+                     mapping — add it AND ensure is_alert_evidence covers it"
+                ),
+            };
+            assert!(
+                is_alert_evidence(&ev),
+                "`{kind}` is in alerts_definition_default but is_alert_evidence returned false"
+            );
+        }
+
+        for b in def["ai_guard_buckets"].as_array().unwrap() {
+            let bucket = match b.as_str().unwrap() {
+                "high" => AiGuardBucket::High,
+                "critical" => AiGuardBucket::Critical,
+                other => panic!("unexpected ai_guard_bucket `{other}` in meta"),
+            };
+            assert!(
+                is_alert_evidence(&ai_guard(bucket)),
+                "AiGuard {b} should be an alert"
+            );
+        }
+        // Low/Medium AI Guard and a non-listed warn must NOT count as alerts.
+        assert!(!is_alert_evidence(&ai_guard(AiGuardBucket::Low)));
+        assert!(!is_alert_evidence(&ai_guard(AiGuardBucket::Medium)));
+        assert!(!is_alert_evidence(&Evidence::WatcherDegraded {
+            from: "fsevents".into(),
+            to: "poll".into(),
+            reason: "r".into(),
+        }));
+    }
 
     fn ev(evidence: Evidence, sev: Severity, ts: time::OffsetDateTime) -> Event {
         Event {
