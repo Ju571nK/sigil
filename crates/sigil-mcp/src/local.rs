@@ -16,14 +16,34 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 pub enum LocalError {
     #[error(
-        "local mode: no sigil-agent control socket at {0}: {1}. \
+        "local mode: cannot reach the sigil-agent control socket at {0}: {1}. \
          Start a local agent, set SIGIL_AGENT_CONTROL_SOCKET, or set SIGIL_SERVER_BASE_URL for fleet mode."
     )]
     Connect(String, String),
+    /// The socket's peer is neither root nor this user — likely a different
+    /// local user impersonating the agent. We refuse to report its data rather
+    /// than surface a posture we can't trust (#57).
+    #[error(
+        "local mode: refusing to trust the control socket at {socket}: its peer runs as uid {peer}, \
+         not root or this user (uid {self_uid}). Another local user may have created a fake socket."
+    )]
+    UntrustedPeer {
+        socket: String,
+        peer: u32,
+        self_uid: u32,
+    },
     #[error("agent error: {0}")]
     Agent(String),
     #[error("agent returned no AI Guard report (built without operator-cli?)")]
     Empty,
+}
+
+/// The control socket is trusted only if its peer is root (the system agent) or
+/// the same user as this process (the individual-developer case). Any other
+/// local user owning the socket is treated as a spoofing attempt (#57).
+#[cfg(unix)]
+fn peer_trusted(peer_euid: u32, self_uid: u32) -> bool {
+    peer_euid == 0 || peer_euid == self_uid
 }
 
 impl From<LocalError> for McpError {
@@ -53,29 +73,58 @@ impl LocalUpstream {
     }
 
     pub async fn doctor_report(&self) -> Result<DoctorAiGuardReport, LocalError> {
-        let resp = self
-            .query(&Request::DoctorAiGuardReport)
-            .await
-            .map_err(|e| LocalError::Connect(self.socket.display().to_string(), e.to_string()))?;
+        let resp = self.query(&Request::DoctorAiGuardReport).await?;
         if let Some(err) = resp.error {
             return Err(LocalError::Agent(err));
         }
         resp.doctor_ai_guard.ok_or(LocalError::Empty)
     }
 
+    /// Build a `Connect` error tagged with the socket path.
+    fn conn(&self, detail: impl std::fmt::Display) -> LocalError {
+        LocalError::Connect(self.socket.display().to_string(), detail.to_string())
+    }
+
+    /// Verify the connected peer is root or this user before trusting any data
+    /// it sends. Closes the spoofing gap where another local user could bind a
+    /// fake control socket at a predictable path (#57). Uses tokio's portable
+    /// peer-credential lookup (SO_PEERCRED on Linux, getpeereid on macOS).
     #[cfg(unix)]
-    async fn query(&self, req: &Request) -> anyhow::Result<Response> {
+    fn verify_peer(&self, cred: tokio::net::unix::UCred) -> Result<(), LocalError> {
+        let peer = cred.uid();
+        // SAFETY: getuid is always safe and cannot fail.
+        let self_uid = unsafe { libc::getuid() };
+        if !peer_trusted(peer, self_uid) {
+            return Err(LocalError::UntrustedPeer {
+                socket: self.socket.display().to_string(),
+                peer,
+                self_uid,
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    async fn query(&self, req: &Request) -> Result<Response, LocalError> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         use tokio::net::UnixStream;
-        let stream = UnixStream::connect(&self.socket).await?;
+        let stream = UnixStream::connect(&self.socket)
+            .await
+            .map_err(|e| self.conn(e))?;
+        // Authenticate the peer before sending or trusting anything.
+        let cred = stream.peer_cred().map_err(|e| self.conn(e))?;
+        self.verify_peer(cred)?;
         let (rd, mut wr) = stream.into_split();
-        let mut bytes = serde_json::to_vec(req)?;
+        let mut bytes = serde_json::to_vec(req).map_err(|e| self.conn(e))?;
         bytes.push(b'\n');
-        wr.write_all(&bytes).await?;
+        wr.write_all(&bytes).await.map_err(|e| self.conn(e))?;
         wr.shutdown().await.ok();
         let mut line = String::new();
-        BufReader::new(rd).read_line(&mut line).await?;
-        Ok(serde_json::from_str(line.trim())?)
+        BufReader::new(rd)
+            .read_line(&mut line)
+            .await
+            .map_err(|e| self.conn(e))?;
+        serde_json::from_str(line.trim()).map_err(|e| self.conn(format!("malformed reply: {e}")))
     }
 
     // Local mode reads the agent's Unix control socket. Windows uses a named
@@ -83,12 +132,12 @@ impl LocalUpstream {
     // spec scopes local mode to Unix for v1). On Windows, use fleet mode
     // (SIGIL_SERVER_BASE_URL). This stub keeps the crate compiling there.
     #[cfg(not(unix))]
-    async fn query(&self, req: &Request) -> anyhow::Result<Response> {
+    async fn query(&self, req: &Request) -> Result<Response, LocalError> {
         let _ = req;
-        anyhow::bail!(
-            "local mode (agent control socket) is only supported on Unix in v1; \
-             set SIGIL_SERVER_BASE_URL to use fleet mode on this platform"
-        )
+        Err(self.conn(
+            "local mode is only supported on Unix in v1; \
+             set SIGIL_SERVER_BASE_URL to use fleet mode on this platform",
+        ))
     }
 }
 
@@ -97,6 +146,16 @@ mod tests {
     use super::*;
     use sigil_core::control_proto::{DoctorAiGuardReport, PerRepoSummary, Response};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[test]
+    fn peer_trusted_accepts_root_and_self_rejects_others() {
+        assert!(peer_trusted(0, 501), "root agent is trusted");
+        assert!(peer_trusted(501, 501), "same user is trusted");
+        assert!(
+            !peer_trusted(1001, 501),
+            "a different local user is rejected"
+        );
+    }
 
     #[tokio::test]
     async fn doctor_report_round_trips_against_canned_agent() {
