@@ -41,7 +41,7 @@ impl LocalUpstream {
     /// Construct directly from a socket path. Test-only: `main` builds via
     /// [`LocalUpstream::from_cfg`]; this is exercised by the canned-agent tests
     /// here and in `local_tools`.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn new(socket: PathBuf) -> Self {
         Self { socket }
     }
