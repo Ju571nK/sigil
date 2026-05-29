@@ -24,11 +24,6 @@ pub enum ConfigError {
 }
 
 impl Config {
-    pub fn from_env() -> Result<Self, ConfigError> {
-        let map: HashMap<String, String> = std::env::vars().collect();
-        Self::from_map(&map)
-    }
-
     pub fn from_map(map: &HashMap<String, String>) -> Result<Self, ConfigError> {
         let base_url = map
             .get("SIGIL_SERVER_BASE_URL")
@@ -62,11 +57,6 @@ impl Config {
 /// Operating mode, selected from the environment. `SIGIL_SERVER_BASE_URL`
 /// present -> [`Mode::Fleet`] (the existing read-API client config); absent ->
 /// [`Mode::Local`], which talks to a local sigil-agent over its control socket.
-///
-/// `dead_code` is allowed because `sigil-mcp` is a binary crate and `Mode` is
-/// not yet wired into `main` — the local transport + tools that consume it land
-/// in later tasks of #55. Remove the allow once `main` calls `Mode::from_env`.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Mode {
     Fleet(Config),
@@ -74,13 +64,11 @@ pub enum Mode {
 }
 
 /// Local-mode config: the path to the local agent's control socket.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LocalConfig {
     pub socket: PathBuf,
 }
 
-#[allow(dead_code)]
 impl Mode {
     pub fn from_env() -> Result<Self, ConfigError> {
         Self::from_map(&std::env::vars().collect())
@@ -105,7 +93,6 @@ impl Mode {
 /// branch logic is shared via `sigil_core::control_proto::resolve_control_socket`;
 /// this wrapper supplies the euid/root/XDG/TMPDIR inputs. Override with
 /// `SIGIL_AGENT_CONTROL_SOCKET`.
-#[allow(dead_code)]
 fn default_control_socket() -> PathBuf {
     sigil_core::control_proto::resolve_control_socket(
         is_root(),
@@ -118,13 +105,11 @@ fn default_control_socket() -> PathBuf {
 }
 
 /// True when the process effective uid is 0 (root). Non-Unix: always false.
-#[allow(dead_code)]
 #[cfg(unix)]
 fn is_root() -> bool {
     // SAFETY: `geteuid` has no preconditions and cannot fail.
     unsafe { libc::geteuid() == 0 }
 }
-#[allow(dead_code)]
 #[cfg(not(unix))]
 fn is_root() -> bool {
     false
@@ -132,13 +117,11 @@ fn is_root() -> bool {
 
 /// Process real uid — namespaces the fallback socket dir in shared `/tmp`.
 /// Non-Unix: 0 (unused; Windows uses the named pipe).
-#[allow(dead_code)]
 #[cfg(unix)]
 fn current_uid() -> u32 {
     // SAFETY: `getuid` has no preconditions and cannot fail.
     unsafe { libc::getuid() }
 }
-#[allow(dead_code)]
 #[cfg(not(unix))]
 fn current_uid() -> u32 {
     0

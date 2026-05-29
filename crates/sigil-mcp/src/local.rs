@@ -5,8 +5,8 @@
 //! newline-terminated JSON request, shut down the write half so the agent sees
 //! EOF, then read one newline-terminated JSON `Response`.
 //!
-//! MCP tools that consume this land in the next task of #55; until then
-//! `from_cfg`/`query` are not yet called from `main`.
+//! Consumed by [`crate::local_tools::SigilLocal`]; `main` builds it via
+//! [`LocalUpstream::from_cfg`] in local mode.
 
 use crate::config::LocalConfig;
 use rmcp::ErrorData as McpError;
@@ -37,12 +37,11 @@ pub struct LocalUpstream {
     socket: PathBuf,
 }
 
-// `dead_code` is allowed because `sigil-mcp` is a binary crate and `LocalUpstream`
-// is not yet wired into `main` — the MCP tools that consume it land in Task 4 of
-// #55. The methods ARE exercised by this module's tests; the allow only silences
-// the non-test binary build. Remove it once `main` constructs `LocalUpstream`.
-#[allow(dead_code)]
 impl LocalUpstream {
+    /// Construct directly from a socket path. Test-only: `main` builds via
+    /// [`LocalUpstream::from_cfg`]; this is exercised by the canned-agent tests
+    /// here and in `local_tools`.
+    #[cfg(test)]
     pub fn new(socket: PathBuf) -> Self {
         Self { socket }
     }
