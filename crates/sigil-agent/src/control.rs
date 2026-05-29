@@ -4,16 +4,23 @@
 //! Heartbeat-equivalent payload as JSON.
 
 use parking_lot::RwLock;
-use serde::{Deserialize, Serialize};
-use sigil_core::policy::signed_envelope::SignedPolicyResponse;
-use sigil_core::stats::{Stats, StatsSnapshot};
-use sigil_core::PolicySignatureInvalidReason;
+use sigil_core::stats::Stats;
 #[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::policy_apply::{apply, ApplyContext, ApplyOutcome};
+
+// The control-socket wire protocol now lives in `sigil-core::control_proto`, so
+// `sigil-mcp` (local-mode client) can share the contract without depending on
+// this crate. Re-exported here so existing `crate::control::{...}` paths keep
+// working.
+pub use sigil_core::control_proto::{
+    ApplyPolicyResult, DoctorAiGuardReport, ExtScriptSummary, ParserInfo, PerRepoSummary,
+    PolicyStatusPayload, Request, Response, RiskPayload, RiskSummary, RubricEntry, RulePackInfo,
+    TargetSummary, TargetsPayload,
+};
 
 /// Default control-socket path. As root, the system path `/var/run/sigil`
 /// (matches the systemd unit's `RuntimeDirectory=`). A non-root agent (macOS,
@@ -22,8 +29,11 @@ use crate::policy_apply::{apply, ApplyContext, ApplyOutcome};
 /// control plane usable without elevation. Override with `--control-socket`.
 /// `sigil run` binds it; `sigil show stats` and `sigil-sender` connect to it.
 /// On Windows the named pipe is used instead and this value is ignored.
+///
+/// The pure branch logic lives in `sigil_core::control_proto::resolve_control_socket`;
+/// this wrapper supplies the euid/root/XDG/TMPDIR inputs.
 pub fn default_control_socket() -> PathBuf {
-    resolve_control_socket(
+    sigil_core::control_proto::resolve_control_socket(
         is_root(),
         std::env::var("XDG_RUNTIME_DIR")
             .ok()
@@ -31,27 +41,6 @@ pub fn default_control_socket() -> PathBuf {
         std::env::var("TMPDIR").ok().filter(|s| !s.is_empty()),
         current_uid(),
     )
-}
-
-/// Pure resolver for [`default_control_socket`] — split out so the
-/// root/non-root/XDG/TMPDIR branches can be unit-tested without touching the
-/// process euid or environment.
-fn resolve_control_socket(
-    is_root: bool,
-    xdg_runtime: Option<String>,
-    tmpdir: Option<String>,
-    uid: u32,
-) -> PathBuf {
-    if is_root {
-        return PathBuf::from("/var/run/sigil/control.sock");
-    }
-    if let Some(dir) = xdg_runtime {
-        return PathBuf::from(dir).join("sigil").join("control.sock");
-    }
-    let base = tmpdir.unwrap_or_else(|| "/tmp".to_string());
-    PathBuf::from(base)
-        .join(format!("sigil-{uid}"))
-        .join("control.sock")
 }
 
 /// True when the process effective uid is 0 (root). Non-Unix: always false.
@@ -81,186 +70,6 @@ fn current_uid() -> u32 {
 /// Default control named-pipe name on Windows.
 pub fn default_control_pipe_name() -> String {
     r"\\.\pipe\sigil-control".to_string()
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "cmd", rename_all = "snake_case")]
-pub enum Request {
-    /// Existing Phase 1 command — unchanged on the wire.
-    #[serde(rename = "stats")]
-    Stats,
-    /// Plan B `sigil-sender` hands a verified envelope here for application.
-    ApplyPolicy {
-        /// The full server response — agent re-verifies independently.
-        response: SignedPolicyResponse,
-    },
-    /// Operator + sender introspection: returns the agent's current
-    /// `last_applied_policy_version`, the active `valid_until`, and whether
-    /// the active policy is currently expired.
-    PolicyStatus,
-    /// Operator introspection: returns the agent's currently-active watch
-    /// targets and their compiled glob patterns.
-    #[cfg(feature = "operator-cli")]
-    Targets,
-    /// Operator action: re-read the policy file (after a hand-edit) without
-    /// verifying a signed envelope. Re-uses the existing live-reload pipeline
-    /// by nudging the policy-version watch channel.
-    #[cfg(feature = "operator-cli")]
-    ReloadPolicy,
-    /// Operator introspection: returns the latest AI Guard risk assessment
-    /// for each tool (or a single tool if `tool` is set).
-    #[cfg(feature = "operator-cli")]
-    Risk {
-        tool: Option<sigil_core::event::AiTool>,
-    },
-    /// Operator introspection: returns a snapshot of the AI Guard
-    /// subsystem state for `sigil doctor`. Phase 3b.5.
-    #[cfg(feature = "operator-cli")]
-    DoctorAiGuardReport,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Response {
-    pub ok: bool,
-    pub stats: Option<StatsSnapshot>,
-    /// Present iff the request was `ApplyPolicy`.
-    pub apply_policy: Option<ApplyPolicyResult>,
-    /// Present iff the request was `PolicyStatus`.
-    pub policy_status: Option<PolicyStatusPayload>,
-    /// Present iff the request was `Targets` (Phase 2 operator introspection).
-    pub targets: Option<TargetsPayload>,
-    /// Present iff the request was `Risk`.
-    pub risk: Option<RiskPayload>,
-    /// Present iff the request was `DoctorAiGuardReport`. Phase 3b.5.
-    #[cfg(feature = "operator-cli")]
-    pub doctor_ai_guard: Option<DoctorAiGuardReport>,
-    pub error: Option<String>,
-}
-
-/// Outcome of an `apply_policy` request.
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
-pub enum ApplyPolicyResult {
-    /// Verifier accepted; policy.yaml written; version advanced.
-    Accepted {
-        /// The new `last_applied_policy_version`.
-        applied_policy_version: i64,
-    },
-    /// Verifier rejected. The wire-stable `reason` matches the
-    /// `PolicySignatureInvalid` event variant emitted in parallel.
-    Rejected {
-        /// Which check failed.
-        reason: PolicySignatureInvalidReason,
-    },
-}
-
-/// Snapshot of the agent's current policy state.
-#[derive(Serialize, Deserialize, Debug)]
-pub struct PolicyStatusPayload {
-    pub last_applied_policy_version: i64,
-    /// RFC 3339; `None` if no envelope has ever been applied.
-    pub active_envelope_valid_until: Option<String>,
-    /// `true` iff `now >= active_envelope_valid_until`.
-    pub policy_expired_active: bool,
-}
-
-/// Summary of one active watch target — what the agent is currently watching
-/// post-policy-merge + post-canonicalization.
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TargetSummary {
-    pub id: String,
-    pub tier: sigil_core::policy::Tier,
-    pub globs: Vec<String>,
-}
-
-/// Payload for the `targets` control-IPC response: the agent's currently-active
-/// compiled targets.
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TargetsPayload {
-    pub targets: Vec<TargetSummary>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct RiskPayload {
-    pub assessments: Vec<RiskSummary>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct RiskSummary {
-    pub tool: sigil_core::event::AiTool,
-    pub scope: sigil_core::event::AiGuardScope,
-    pub score: f32,
-    pub bucket: sigil_core::event::AiGuardBucket,
-    pub reasons_count: usize,
-    /// RFC 3339.
-    pub last_assessed_ts: String,
-}
-
-/// Phase 3b.5 — serializable snapshot of the agent's AI Guard subsystem
-/// state, returned by `Request::DoctorAiGuardReport` for `sigil doctor`.
-#[derive(Serialize, Deserialize, Debug)]
-#[cfg(feature = "operator-cli")]
-pub struct DoctorAiGuardReport {
-    /// Active parser instances. One entry per (tool, scope) pair.
-    pub parsers: Vec<ParserInfo>,
-    /// Discovered per-repo workspaces, count per tool.
-    pub per_repo: PerRepoSummary,
-    /// Loaded rule packs (3b.7). Skipped packs are not currently retained;
-    /// only loaded ones are reported. Future enhancement may surface skip
-    /// reasons from the loader.
-    pub rule_packs: Vec<RulePackInfo>,
-    /// External hook scripts (3b.3) currently being watched.
-    pub ext_scripts: ExtScriptSummary,
-    /// Latest risk assessment per (tool, scope) from ai_guard_state cache.
-    pub latest_risk: Vec<RiskSummary>,
-    /// Effective rubric — every kind_key with current weight + whether it
-    /// came from an operator override.
-    pub effective_rubric: Vec<RubricEntry>,
-    /// Snake_case override keys the envelope referenced but didn't match
-    /// any known kind. Surfaced by doctor as `[WARN]`.
-    pub unknown_override_keys: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[cfg(feature = "operator-cli")]
-pub struct ParserInfo {
-    pub tool: sigil_core::event::AiTool,
-    pub scope: sigil_core::event::AiGuardScope,
-    pub watched_path_count: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-#[cfg(feature = "operator-cli")]
-pub struct PerRepoSummary {
-    pub continue_dev: usize,
-    pub claude_code: usize,
-    pub codex: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[cfg(feature = "operator-cli")]
-pub struct RulePackInfo {
-    pub id: String,
-    pub loaded: bool,
-    /// `None` when loaded. Reserved for future surfacing of skip reasons.
-    pub skip_reason: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-#[cfg(feature = "operator-cli")]
-pub struct ExtScriptSummary {
-    /// Total unique canonical script paths across all parsers.
-    pub unique_paths: usize,
-    /// Number of (tool, scope) entries that have at least one ext-script.
-    pub parser_entries: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[cfg(feature = "operator-cli")]
-pub struct RubricEntry {
-    pub kind_key: String,
-    pub weight: f32,
-    pub overridden: bool,
 }
 
 /// Shared context bundle passed to both platform `serve` functions.
@@ -299,7 +108,6 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
             policy_status: None,
             targets: None,
             risk: None,
-            #[cfg(feature = "operator-cli")]
             doctor_ai_guard: None,
             error: None,
         },
@@ -317,7 +125,6 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     policy_status: None,
                     targets: None,
                     risk: None,
-                    #[cfg(feature = "operator-cli")]
                     doctor_ai_guard: None,
                     error: None,
                 },
@@ -328,7 +135,6 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     policy_status: None,
                     targets: None,
                     risk: None,
-                    #[cfg(feature = "operator-cli")]
                     doctor_ai_guard: None,
                     error: None,
                 },
@@ -339,7 +145,6 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     policy_status: None,
                     targets: None,
                     risk: None,
-                    #[cfg(feature = "operator-cli")]
                     doctor_ai_guard: None,
                     error: Some(format!("internal: {detail}")),
                 },
@@ -372,7 +177,6 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 }),
                 targets: None,
                 risk: None,
-                #[cfg(feature = "operator-cli")]
                 doctor_ai_guard: None,
                 error: None,
             }
@@ -582,6 +386,23 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 error: None,
             }
         }
+        // The operator-cli request variants always exist on the wire (they live
+        // in sigil-core::control_proto), but their handlers compile only with
+        // the `operator-cli` feature. In a hardened build without it, reject.
+        #[cfg(not(feature = "operator-cli"))]
+        Request::Targets
+        | Request::ReloadPolicy
+        | Request::Risk { .. }
+        | Request::DoctorAiGuardReport => Response {
+            ok: false,
+            stats: None,
+            apply_policy: None,
+            policy_status: None,
+            targets: None,
+            risk: None,
+            doctor_ai_guard: None,
+            error: Some("operator-cli feature not enabled in this build".into()),
+        },
     }
 }
 
@@ -631,7 +452,6 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
                     policy_status: None,
                     targets: None,
                     risk: None,
-                    #[cfg(feature = "operator-cli")]
                     doctor_ai_guard: None,
                     error: Some(e.to_string()),
                 },
@@ -673,7 +493,6 @@ pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result
                     policy_status: None,
                     targets: None,
                     risk: None,
-                    #[cfg(feature = "operator-cli")]
                     doctor_ai_guard: None,
                     error: Some(e.to_string()),
                 },
@@ -683,250 +502,5 @@ pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result
                 let _ = wr.write_all(b"\n").await;
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod socket_path_tests {
-    use super::resolve_control_socket;
-    use std::path::PathBuf;
-
-    #[test]
-    fn root_uses_system_run_path() {
-        assert_eq!(
-            resolve_control_socket(
-                true,
-                Some("/run/user/1000".into()),
-                Some("/tmp".into()),
-                1000
-            ),
-            PathBuf::from("/var/run/sigil/control.sock")
-        );
-    }
-
-    #[test]
-    fn nonroot_prefers_xdg_runtime_dir() {
-        assert_eq!(
-            resolve_control_socket(
-                false,
-                Some("/run/user/501".into()),
-                Some("/tmp".into()),
-                501
-            ),
-            PathBuf::from("/run/user/501/sigil/control.sock")
-        );
-    }
-
-    #[test]
-    fn nonroot_without_xdg_uses_tmpdir_namespaced_by_uid() {
-        assert_eq!(
-            resolve_control_socket(false, None, Some("/custom/tmp".into()), 501),
-            PathBuf::from("/custom/tmp/sigil-501/control.sock")
-        );
-    }
-
-    #[test]
-    fn nonroot_without_xdg_or_tmpdir_falls_back_to_slash_tmp() {
-        assert_eq!(
-            resolve_control_socket(false, None, None, 42),
-            PathBuf::from("/tmp/sigil-42/control.sock")
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sigil_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
-    use time::macros::datetime;
-
-    fn sample_response() -> SignedPolicyResponse {
-        SignedPolicyResponse {
-            etag: "abc".into(),
-            signed_envelope: SignedEnvelope {
-                policy_version: 7,
-                policy_bytes_b64: "AAA=".into(),
-                valid_until: datetime!(2026-06-15 0:00 UTC),
-                issued_at: datetime!(2026-05-15 8:00 UTC),
-            },
-            signature: "sig".into(),
-            signing_pubkey_id: "k1".into(),
-            applied_at: datetime!(2026-05-15 8:01 UTC),
-        }
-    }
-
-    #[test]
-    fn apply_policy_request_round_trips() {
-        let req = Request::ApplyPolicy {
-            response: sample_response(),
-        };
-        let s = serde_json::to_string(&req).unwrap();
-        // The cmd discriminator MUST be exactly "apply_policy" (snake_case is
-        // wrong here — the existing Phase 1 control protocol uses lowercase).
-        assert!(s.contains("\"cmd\":\"apply_policy\""));
-        let back: Request = serde_json::from_str(&s).unwrap();
-        match back {
-            Request::ApplyPolicy { response } => {
-                assert_eq!(response.signed_envelope.policy_version, 7);
-            }
-            _ => panic!("expected ApplyPolicy, got {back:?}"),
-        }
-    }
-
-    #[test]
-    fn policy_status_request_round_trips() {
-        let req = Request::PolicyStatus;
-        let s = serde_json::to_string(&req).unwrap();
-        assert!(s.contains("\"cmd\":\"policy_status\""));
-        let _: Request = serde_json::from_str(&s).unwrap();
-    }
-
-    #[test]
-    fn response_includes_optional_apply_policy_payload() {
-        let r = Response {
-            ok: true,
-            stats: None,
-            apply_policy: Some(ApplyPolicyResult::Accepted {
-                applied_policy_version: 9,
-            }),
-            policy_status: None,
-            targets: None,
-            risk: None,
-            #[cfg(feature = "operator-cli")]
-            doctor_ai_guard: None,
-            error: None,
-        };
-        let s = serde_json::to_string(&r).unwrap();
-        assert!(s.contains("\"apply_policy\""));
-        assert!(s.contains("\"applied_policy_version\":9"));
-    }
-
-    #[test]
-    fn response_apply_policy_rejected_carries_reason() {
-        let r = Response {
-            ok: false,
-            stats: None,
-            apply_policy: Some(ApplyPolicyResult::Rejected {
-                reason: sigil_core::PolicySignatureInvalidReason::Expired,
-            }),
-            policy_status: None,
-            targets: None,
-            risk: None,
-            #[cfg(feature = "operator-cli")]
-            doctor_ai_guard: None,
-            error: None,
-        };
-        let s = serde_json::to_string(&r).unwrap();
-        assert!(s.contains("\"reason\":\"expired\""));
-    }
-
-    #[test]
-    fn response_with_targets_round_trips() {
-        let resp = Response {
-            ok: true,
-            stats: None,
-            apply_policy: None,
-            policy_status: None,
-            targets: Some(TargetsPayload {
-                targets: vec![TargetSummary {
-                    id: "tgt-1".into(),
-                    tier: sigil_core::policy::Tier::Critical,
-                    globs: vec!["/etc/foo.yaml".into(), "/var/log/bar/*.log".into()],
-                }],
-            }),
-            risk: None,
-            #[cfg(feature = "operator-cli")]
-            doctor_ai_guard: None,
-            error: None,
-        };
-        let s = serde_json::to_string(&resp).unwrap();
-        assert!(s.contains("\"targets\""));
-        assert!(s.contains("\"tgt-1\""));
-        assert!(
-            s.contains("\"critical\""),
-            "Tier::Critical serializes lowercase, got: {s}"
-        );
-        let back: Response = serde_json::from_str(&s).unwrap();
-        assert!(back.targets.is_some());
-        assert_eq!(back.targets.as_ref().unwrap().targets[0].id, "tgt-1");
-    }
-
-    #[cfg(feature = "operator-cli")]
-    #[test]
-    fn request_targets_round_trips() {
-        let req = Request::Targets;
-        let s = serde_json::to_string(&req).unwrap();
-        assert_eq!(s, r#"{"cmd":"targets"}"#);
-        let back: Request = serde_json::from_str(&s).unwrap();
-        assert!(matches!(back, Request::Targets));
-    }
-
-    #[cfg(feature = "operator-cli")]
-    #[test]
-    fn request_reload_policy_round_trips() {
-        let req = Request::ReloadPolicy;
-        let s = serde_json::to_string(&req).unwrap();
-        assert_eq!(s, r#"{"cmd":"reload_policy"}"#);
-        let back: Request = serde_json::from_str(&s).unwrap();
-        assert!(matches!(back, Request::ReloadPolicy));
-    }
-
-    #[cfg(feature = "operator-cli")]
-    #[test]
-    fn request_risk_round_trips_no_filter() {
-        let req = Request::Risk { tool: None };
-        let s = serde_json::to_string(&req).unwrap();
-        assert!(s.contains("\"cmd\":\"risk\""), "got: {s}");
-        let back: Request = serde_json::from_str(&s).unwrap();
-        assert!(matches!(back, Request::Risk { tool: None }));
-    }
-
-    #[cfg(feature = "operator-cli")]
-    #[test]
-    fn request_risk_round_trips_with_tool_filter() {
-        let req = Request::Risk {
-            tool: Some(sigil_core::event::AiTool::ClaudeCode),
-        };
-        let s = serde_json::to_string(&req).unwrap();
-        assert!(s.contains("\"tool\":\"claude_code\""), "got: {s}");
-        let back: Request = serde_json::from_str(&s).unwrap();
-        assert!(matches!(
-            back,
-            Request::Risk {
-                tool: Some(sigil_core::event::AiTool::ClaudeCode)
-            }
-        ));
-    }
-
-    #[cfg(feature = "operator-cli")]
-    #[test]
-    fn response_with_risk_payload_round_trips() {
-        use sigil_core::event::{AiGuardBucket, AiGuardScope, AiTool};
-        let resp = Response {
-            ok: true,
-            stats: None,
-            apply_policy: None,
-            policy_status: None,
-            targets: None,
-            risk: Some(RiskPayload {
-                assessments: vec![RiskSummary {
-                    tool: AiTool::Codex,
-                    scope: AiGuardScope::UserGlobal,
-                    score: 2.0,
-                    bucket: AiGuardBucket::Medium,
-                    reasons_count: 1,
-                    last_assessed_ts: "2026-05-16T06:00:00Z".into(),
-                }],
-            }),
-            doctor_ai_guard: None,
-            error: None,
-        };
-        let s = serde_json::to_string(&resp).unwrap();
-        assert!(s.contains("\"risk\""));
-        assert!(s.contains("\"tool\":\"codex\""));
-        assert!(s.contains("\"bucket\":\"medium\""));
-        let back: Response = serde_json::from_str(&s).unwrap();
-        assert!(back.risk.is_some());
-        assert_eq!(back.risk.as_ref().unwrap().assessments.len(), 1);
     }
 }
