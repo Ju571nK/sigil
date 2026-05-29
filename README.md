@@ -184,10 +184,13 @@ one operator CLI, one read-only MCP server, and three shared libraries.
 
 **MCP server**
 
-- `sigil-mcp` — read-only fleet MCP server (`sigil-mcp` binary). Exposes a
-  `sigil-server`'s bearer-gated read API as Model Context Protocol tools so an
-  MCP client (Claude Desktop/Code) can read and reason over fleet posture.
-  Read-only by construction: GET only, no write or remediation tools.
+- `sigil-mcp` — read-only MCP server (`sigil-mcp` binary), two auto-detected
+  modes. **Fleet mode** exposes a `sigil-server`'s bearer-gated read API as
+  Model Context Protocol tools so an MCP client (Claude Desktop/Code) can read
+  and reason over fleet posture. **Local mode** (no server URL) reads the local
+  `sigil-agent` control socket to surface *this machine's* AI Guard posture —
+  no server, no fleet. Read-only by construction: no write or remediation tools.
+  See [`crates/sigil-mcp/README.md`](crates/sigil-mcp/README.md).
 
 **Libraries**
 

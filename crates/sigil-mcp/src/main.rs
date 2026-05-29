@@ -1,8 +1,12 @@
 mod config;
+mod local;
+mod local_tools;
 mod tools;
 mod upstream;
 
-use crate::config::Config;
+use crate::config::Mode;
+use crate::local::LocalUpstream;
+use crate::local_tools::SigilLocal;
 use crate::tools::SigilFleet;
 use crate::upstream::Upstream;
 use rmcp::transport::stdio;
@@ -20,10 +24,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let cfg = Config::from_env()?;
-    tracing::info!(base_url = %cfg.base_url, mtls = cfg.mtls.is_some(), "starting sigil-mcp");
-    let upstream = Arc::new(Upstream::new(&cfg)?);
-    let service = SigilFleet::new(upstream).serve(stdio()).await?;
-    service.waiting().await?;
+    match Mode::from_env()? {
+        Mode::Fleet(cfg) => {
+            tracing::info!(mode = "fleet", base_url = %cfg.base_url, mtls = cfg.mtls.is_some(), "starting sigil-mcp");
+            let up = Arc::new(Upstream::new(&cfg)?);
+            SigilFleet::new(up).serve(stdio()).await?.waiting().await?;
+        }
+        Mode::Local(cfg) => {
+            tracing::info!(mode = "local", socket = %cfg.socket.display(), "starting sigil-mcp");
+            let up = Arc::new(LocalUpstream::from_cfg(&cfg));
+            SigilLocal::new(up).serve(stdio()).await?.waiting().await?;
+        }
+    }
     Ok(())
 }

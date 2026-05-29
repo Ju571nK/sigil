@@ -6,6 +6,7 @@
 #![warn(rust_2018_idioms)]
 
 pub mod audit;
+pub mod control_proto;
 pub mod debounce;
 pub mod event;
 pub mod hashing;

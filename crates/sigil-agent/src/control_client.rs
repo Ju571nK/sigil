@@ -100,7 +100,6 @@ mod tests {
                 policy_status: None,
                 targets: None,
                 risk: None,
-                #[cfg(feature = "operator-cli")]
                 doctor_ai_guard: None,
                 error: None,
             };
