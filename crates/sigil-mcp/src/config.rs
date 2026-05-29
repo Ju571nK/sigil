@@ -59,6 +59,91 @@ impl Config {
     }
 }
 
+/// Operating mode, selected from the environment. `SIGIL_SERVER_BASE_URL`
+/// present -> [`Mode::Fleet`] (the existing read-API client config); absent ->
+/// [`Mode::Local`], which talks to a local sigil-agent over its control socket.
+///
+/// `dead_code` is allowed because `sigil-mcp` is a binary crate and `Mode` is
+/// not yet wired into `main` — the local transport + tools that consume it land
+/// in later tasks of #55. Remove the allow once `main` calls `Mode::from_env`.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub enum Mode {
+    Fleet(Config),
+    Local(LocalConfig),
+}
+
+/// Local-mode config: the path to the local agent's control socket.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct LocalConfig {
+    pub socket: PathBuf,
+}
+
+#[allow(dead_code)]
+impl Mode {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_map(&std::env::vars().collect())
+    }
+
+    pub fn from_map(map: &HashMap<String, String>) -> Result<Self, ConfigError> {
+        if map.contains_key("SIGIL_SERVER_BASE_URL") {
+            Ok(Mode::Fleet(Config::from_map(map)?))
+        } else {
+            let socket = map
+                .get("SIGIL_AGENT_CONTROL_SOCKET")
+                .map(PathBuf::from)
+                .unwrap_or_else(default_control_socket);
+            Ok(Mode::Local(LocalConfig { socket }))
+        }
+    }
+}
+
+/// Default agent control-socket path, mirroring sigil-agent's
+/// `default_control_socket()`: as root, the system path `/var/run/sigil`;
+/// else `$XDG_RUNTIME_DIR/sigil`; else `$TMPDIR`/`/tmp/sigil-<uid>`. The pure
+/// branch logic is shared via `sigil_core::control_proto::resolve_control_socket`;
+/// this wrapper supplies the euid/root/XDG/TMPDIR inputs. Override with
+/// `SIGIL_AGENT_CONTROL_SOCKET`.
+#[allow(dead_code)]
+fn default_control_socket() -> PathBuf {
+    sigil_core::control_proto::resolve_control_socket(
+        is_root(),
+        std::env::var("XDG_RUNTIME_DIR")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        std::env::var("TMPDIR").ok().filter(|s| !s.is_empty()),
+        current_uid(),
+    )
+}
+
+/// True when the process effective uid is 0 (root). Non-Unix: always false.
+#[allow(dead_code)]
+#[cfg(unix)]
+fn is_root() -> bool {
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    unsafe { libc::geteuid() == 0 }
+}
+#[allow(dead_code)]
+#[cfg(not(unix))]
+fn is_root() -> bool {
+    false
+}
+
+/// Process real uid — namespaces the fallback socket dir in shared `/tmp`.
+/// Non-Unix: 0 (unused; Windows uses the named pipe).
+#[allow(dead_code)]
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    // SAFETY: `getuid` has no preconditions and cannot fail.
+    unsafe { libc::getuid() }
+}
+#[allow(dead_code)]
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +213,29 @@ mod tests {
             Config::from_map(&m),
             Err(ConfigError::PartialMtls)
         ));
+    }
+
+    #[test]
+    fn server_url_present_selects_fleet() {
+        let m = map(&[
+            ("SIGIL_SERVER_BASE_URL", "http://h:8443"),
+            ("SIGIL_SERVER_READ_TOKEN", "t"),
+        ]);
+        assert!(matches!(Mode::from_map(&m).unwrap(), Mode::Fleet(_)));
+    }
+
+    #[test]
+    fn no_server_url_selects_local() {
+        let m = map(&[]);
+        assert!(matches!(Mode::from_map(&m).unwrap(), Mode::Local(_)));
+    }
+
+    #[test]
+    fn explicit_socket_env_honored() {
+        let m = map(&[("SIGIL_AGENT_CONTROL_SOCKET", "/tmp/x/control.sock")]);
+        match Mode::from_map(&m).unwrap() {
+            Mode::Local(c) => assert_eq!(c.socket.to_str().unwrap(), "/tmp/x/control.sock"),
+            _ => panic!("expected local"),
+        }
     }
 }

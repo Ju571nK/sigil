@@ -3114,10 +3114,13 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "httpmock",
+ "libc",
  "reqwest",
  "rmcp",
  "serde",
  "serde_json",
+ "sigil-core",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
