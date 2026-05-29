@@ -63,6 +63,7 @@ impl LocalUpstream {
         resp.doctor_ai_guard.ok_or(LocalError::Empty)
     }
 
+    #[cfg(unix)]
     async fn query(&self, req: &Request) -> anyhow::Result<Response> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         use tokio::net::UnixStream;
@@ -75,6 +76,19 @@ impl LocalUpstream {
         let mut line = String::new();
         BufReader::new(rd).read_line(&mut line).await?;
         Ok(serde_json::from_str(line.trim())?)
+    }
+
+    // Local mode reads the agent's Unix control socket. Windows uses a named
+    // pipe for that socket; wiring sigil-mcp to it is tracked separately (the
+    // spec scopes local mode to Unix for v1). On Windows, use fleet mode
+    // (SIGIL_SERVER_BASE_URL). This stub keeps the crate compiling there.
+    #[cfg(not(unix))]
+    async fn query(&self, req: &Request) -> anyhow::Result<Response> {
+        let _ = req;
+        anyhow::bail!(
+            "local mode (agent control socket) is only supported on Unix in v1; \
+             set SIGIL_SERVER_BASE_URL to use fleet mode on this platform"
+        )
     }
 }
 
