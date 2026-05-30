@@ -32,6 +32,17 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
   `UnixStream::peer_cred`) before trusting its `DoctorAiGuardReport`, closing a
   local security-telemetry spoofing gap where another user could serve a
   fabricated "all-clear" posture. Returns a distinct `UntrustedPeer` error.
+- **`sigil doctor` events-dir check now validates the owner, not just the group**
+  (#60). `classify_events_dir_perms` previously checked only group + mode, so a
+  dir owned by a non-root user with group `sigil` and mode `0750` was falsely
+  reported as `root:sigil`-hardened while that owner could still mutate it. It
+  now warns on a non-root owner, mirroring the control-socket classifier.
+- **Standalone `sigil-sender` install no longer fails on `Group=sigil`** (#61).
+  The sender unit runs `root:sigil`, but the sender package neither created the
+  group nor depended on the agent package, so a sender-only install left
+  `systemctl enable --now sigil-sender` failing on group credential resolution.
+  The sender package now ships and applies the same idempotent
+  `sysusers.d`/`tmpfiles.d` `sigil.conf` as the agent package.
 
 ### Changed
 
