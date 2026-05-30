@@ -89,6 +89,8 @@ assets = [
     ["../../config/policy.example.yaml", "etc/sigil/policy.yaml.example", "644"],
     ["../../README.md", "usr/share/doc/sigil/README.md", "644"],
     ["../../LICENSE", "usr/share/doc/sigil/LICENSE", "644"],
+    ["../../packaging/sysusers.d/sigil.conf", "usr/lib/sysusers.d/sigil.conf", "644"],
+    ["../../packaging/tmpfiles.d/sigil.conf", "usr/lib/tmpfiles.d/sigil.conf", "644"],
 ]
 
 # cargo-deb picks up sigil.service from `unit-scripts`, installs it to
@@ -109,10 +111,14 @@ assets = [
     { source = "../../config/policy.example.yaml", dest = "/etc/sigil/policy.yaml.example", mode = "0644" },
     { source = "../../README.md", dest = "/usr/share/doc/sigil/README.md", mode = "0644", doc = true },
     { source = "../../LICENSE", dest = "/usr/share/doc/sigil/LICENSE", mode = "0644", doc = true },
+    { source = "../../packaging/sysusers.d/sigil.conf", dest = "/usr/lib/sysusers.d/sigil.conf", mode = "0644" },
+    { source = "../../packaging/tmpfiles.d/sigil.conf", dest = "/usr/lib/tmpfiles.d/sigil.conf", mode = "0644" },
 ]
 # No hard runtime deps beyond glibc, which is always present; leave Requires empty.
 post_install_script = """\
 systemctl daemon-reload >/dev/null 2>&1 || :
+command -v systemd-sysusers >/dev/null 2>&1 && systemd-sysusers /usr/lib/sysusers.d/sigil.conf >/dev/null 2>&1 || :
+command -v systemd-tmpfiles >/dev/null 2>&1 && systemd-tmpfiles --create /usr/lib/tmpfiles.d/sigil.conf >/dev/null 2>&1 || :
 """
 pre_uninstall_script = """\
 if [ "$1" = 0 ] ; then
