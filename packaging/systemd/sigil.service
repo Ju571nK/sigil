@@ -19,6 +19,7 @@
 # (~/.cursor/mcp.json, ~/.aws/credentials, etc.). To run unprivileged,
 # set User=/Group= to a dedicated account and accept that coverage is
 # limited to files that account can read. See `sigil doctor`.
+# As of #10 the unit runs root:sigil — dirs + control socket are root:sigil 0750/0660.
 
 [Unit]
 Description=Sigil — AI-Native Detection Engine for Device Assurance (agent)
@@ -32,6 +33,10 @@ ExecStart=/usr/bin/sigil run
 Restart=on-failure
 RestartSec=5
 User=root
+Group=sigil
+RuntimeDirectoryMode=0750
+StateDirectoryMode=0750
+LogsDirectoryMode=0750
 # State / log directories the agent writes to (created by systemd if missing).
 StateDirectory=sigil
 LogsDirectory=sigil
