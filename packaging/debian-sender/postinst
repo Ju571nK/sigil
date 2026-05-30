@@ -3,4 +3,15 @@ set -e
 
 #DEBHELPER#
 
+# Sigil hardening (#61): a standalone sender install must create the sigil
+# group/user + own the dirs so the unit's Group=sigil resolves before start.
+# Guarded so non-systemd hosts no-op. Idempotent (sysusers/tmpfiles are
+# declarative; a no-op when the agent package already created them).
+if command -v systemd-sysusers >/dev/null 2>&1; then
+    systemd-sysusers /usr/lib/sysusers.d/sigil.conf >/dev/null 2>&1 || true
+fi
+if command -v systemd-tmpfiles >/dev/null 2>&1; then
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/sigil.conf >/dev/null 2>&1 || true
+fi
+
 exit 0

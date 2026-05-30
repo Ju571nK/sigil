@@ -64,6 +64,11 @@ assets = [
     ["../../config/sender.example.yaml", "etc/sigil/sender.yaml.example", "644"],
     ["../../README.md", "usr/share/doc/sigil-sender/README.md", "644"],
     ["../../LICENSE", "usr/share/doc/sigil-sender/LICENSE", "644"],
+    # Ship the sigil group/user + dir declarations so a standalone sender install
+    # establishes Group=sigil before the unit starts (#61). Idempotent — a no-op
+    # when the agent package already created them.
+    ["../../packaging/sysusers.d/sigil.conf", "usr/lib/sysusers.d/sigil.conf", "644"],
+    ["../../packaging/tmpfiles.d/sigil.conf", "usr/lib/tmpfiles.d/sigil.conf", "644"],
 ]
 
 [package.metadata.deb.systemd-units]
@@ -82,9 +87,15 @@ assets = [
     { source = "../../config/sender.example.yaml", dest = "/etc/sigil/sender.yaml.example", mode = "0644" },
     { source = "../../README.md", dest = "/usr/share/doc/sigil-sender/README.md", mode = "0644", doc = true },
     { source = "../../LICENSE", dest = "/usr/share/doc/sigil-sender/LICENSE", mode = "0644", doc = true },
+    { source = "../../packaging/sysusers.d/sigil.conf", dest = "/usr/lib/sysusers.d/sigil.conf", mode = "0644" },
+    { source = "../../packaging/tmpfiles.d/sigil.conf", dest = "/usr/lib/tmpfiles.d/sigil.conf", mode = "0644" },
 ]
+# Apply sysusers/tmpfiles so a standalone sender install creates the sigil
+# group/user + dirs before the unit's Group=sigil resolves (#61). Idempotent.
 post_install_script = """\
 systemctl daemon-reload >/dev/null 2>&1 || :
+command -v systemd-sysusers >/dev/null 2>&1 && systemd-sysusers /usr/lib/sysusers.d/sigil.conf >/dev/null 2>&1 || :
+command -v systemd-tmpfiles >/dev/null 2>&1 && systemd-tmpfiles --create /usr/lib/tmpfiles.d/sigil.conf >/dev/null 2>&1 || :
 """
 pre_uninstall_script = """\
 if [ "$1" = 0 ] ; then

@@ -683,25 +683,34 @@ fn check_events_dir_perms(
     classify_events_dir_perms(
         &events_dir.display().to_string(),
         meta.is_dir(),
+        meta.uid(),
         meta.mode() & 0o777,
         meta.gid(),
         read_group_gid_from(group_file, "sigil"),
     )
 }
 
-/// Pure classifier for the events dir (testable without a real dir). Accepts
-/// 0750 (group-read for sigil) or 0755 (world-read); world-write is always Warn;
-/// if the sigil group exists, the dir gid must match it (#10).
+/// Pure classifier for the events dir (testable without a real dir). The dir must
+/// be root-owned (mirrors the control-socket check); accepts 0750 (group-read for
+/// sigil) or 0755 (world-read); world-write is always Warn; if the sigil group
+/// exists, the dir gid must match it (#10). A non-root owner is a Warn even with
+/// `root:sigil`-looking group/mode, since that owner can still mutate the dir (#60).
 #[cfg(target_os = "linux")]
 fn classify_events_dir_perms(
     path: &str,
     is_dir: bool,
+    uid: u32,
     mode: u32,
     gid: u32,
     sigil_gid: Option<u32>,
 ) -> CheckResult {
     if !is_dir {
         return CheckResult::warn(format!("events dir: {path} exists but is not a directory"));
+    }
+    if uid != 0 {
+        return CheckResult::warn(format!(
+            "events dir owner: uid={uid}, expected root (uid 0) at {path}"
+        ));
     }
     if mode & 0o002 != 0 {
         return CheckResult::warn(format!(
@@ -859,30 +868,39 @@ mod linux_tests {
 
     #[test]
     fn classify_events_dir_ok_root_sigil_0750() {
-        let r = classify_events_dir_perms("/var/log/sigil", true, 0o750, 996, Some(996));
+        let r = classify_events_dir_perms("/var/log/sigil", true, 0, 0o750, 996, Some(996));
         assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
         assert!(r.message.contains("root:sigil(996)"), "{r:?}");
     }
     #[test]
     fn classify_events_dir_ok_without_group_0755() {
-        let r = classify_events_dir_perms("/var/log/sigil", true, 0o755, 0, None);
+        let r = classify_events_dir_perms("/var/log/sigil", true, 0, 0o755, 0, None);
         assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
     }
     #[test]
+    fn classify_events_dir_warn_not_root_owned() {
+        // Owned by a non-root user but group=sigil mode=0750: must NOT pass as
+        // root:sigil — the owner can still mutate the dir (#60).
+        let r = classify_events_dir_perms("/var/log/sigil", true, 1000, 0o750, 996, Some(996));
+        assert_eq!(r.level, CheckLevel::Warn, "{r:?}");
+        assert!(r.message.contains("uid=1000"), "{r:?}");
+        assert!(!r.message.contains("root:sigil"), "{r:?}");
+    }
+    #[test]
     fn classify_events_dir_warn_world_writable() {
-        let r = classify_events_dir_perms("/var/log/sigil", true, 0o757, 0, None);
+        let r = classify_events_dir_perms("/var/log/sigil", true, 0, 0o757, 0, None);
         assert_eq!(r.level, CheckLevel::Warn, "{r:?}");
         assert!(r.message.contains("world-writable"), "{r:?}");
     }
     #[test]
     fn classify_events_dir_warn_group_mismatch() {
-        let r = classify_events_dir_perms("/var/log/sigil", true, 0o750, 0, Some(996));
+        let r = classify_events_dir_perms("/var/log/sigil", true, 0, 0o750, 0, Some(996));
         assert_eq!(r.level, CheckLevel::Warn, "{r:?}");
         assert!(r.message.contains("expected gid=996"), "{r:?}");
     }
     #[test]
     fn classify_events_dir_warn_not_a_dir() {
-        let r = classify_events_dir_perms("/var/log/sigil", false, 0o750, 0, None);
+        let r = classify_events_dir_perms("/var/log/sigil", false, 0, 0o750, 0, None);
         assert_eq!(r.level, CheckLevel::Warn, "{r:?}");
         assert!(r.message.contains("not a directory"), "{r:?}");
     }
@@ -964,7 +982,7 @@ mod linux_tests {
 
     #[test]
     fn check_events_dir_perms_warns_when_world_writable() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let dir = tempfile::tempdir().unwrap();
         let ev = dir.path().join("events");
         std::fs::create_dir(&ev).unwrap();
@@ -975,12 +993,19 @@ mod linux_tests {
         std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
         let r = check_events_dir_perms(&ev, &group_file);
         assert_eq!(r.level, CheckLevel::Warn);
-        assert!(r.message.contains("777"), "{:?}", r);
+        // A non-root owner is flagged before the mode (#60), so only a
+        // root-owned tempdir (CI container jobs run as root) reaches the
+        // world-writable message; a non-root runner sees the owner warning.
+        if std::fs::metadata(&ev).unwrap().uid() == 0 {
+            assert!(r.message.contains("777"), "{:?}", r);
+        } else {
+            assert!(r.message.contains("uid="), "{:?}", r);
+        }
     }
 
     #[test]
     fn check_events_dir_perms_ok_for_0750() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let dir = tempfile::tempdir().unwrap();
         let ev = dir.path().join("events");
         std::fs::create_dir(&ev).unwrap();
@@ -990,12 +1015,18 @@ mod linux_tests {
         // Empty group file → `read_group_gid_from` returns None → the gid
         // ownership check inside `check_events_dir_perms` is skipped. We can't
         // chown the tempdir to a real `sigil` gid in a unit test, so this
-        // isolates the mode check.
+        // isolates the mode check — but only when the dir is root-owned.
         let group_file = dir.path().join("group");
         std::fs::write(&group_file, "").unwrap();
         let r = check_events_dir_perms(&ev, &group_file);
-        assert_eq!(r.level, CheckLevel::Ok);
-        assert!(r.message.contains("0750"), "{:?}", r);
+        if std::fs::metadata(&ev).unwrap().uid() == 0 {
+            assert_eq!(r.level, CheckLevel::Ok);
+            assert!(r.message.contains("0750"), "{:?}", r);
+        } else {
+            // A non-root runner owns the tempdir, so the owner check warns (#60).
+            assert_eq!(r.level, CheckLevel::Warn, "{r:?}");
+            assert!(r.message.contains("uid="), "{:?}", r);
+        }
     }
 }
 
