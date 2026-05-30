@@ -18,7 +18,7 @@ first place. Sigil measures that surface; it does not block.
 
 ## See it
 
-![Sigil scores a dangerous AI coding agent config 7.5 out of 10 (critical) in real time](demo/aiguard-demo.gif)
+![Sigil scores a dangerous AI coding agent config 7.5 out of 10 (critical) in real time](docs/sigil-mcp-myscreen03.gif)
 
 A clean repo config scores 0 / low — until a `.*` `PreToolUse` hook running
 `rm -rf $HOME` lands, and Sigil re-scores that project **7.5 / critical** with
