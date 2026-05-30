@@ -982,7 +982,7 @@ mod linux_tests {
 
     #[test]
     fn check_events_dir_perms_warns_when_world_writable() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let dir = tempfile::tempdir().unwrap();
         let ev = dir.path().join("events");
         std::fs::create_dir(&ev).unwrap();
@@ -993,12 +993,19 @@ mod linux_tests {
         std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
         let r = check_events_dir_perms(&ev, &group_file);
         assert_eq!(r.level, CheckLevel::Warn);
-        assert!(r.message.contains("777"), "{:?}", r);
+        // A non-root owner is flagged before the mode (#60), so only a
+        // root-owned tempdir (CI container jobs run as root) reaches the
+        // world-writable message; a non-root runner sees the owner warning.
+        if std::fs::metadata(&ev).unwrap().uid() == 0 {
+            assert!(r.message.contains("777"), "{:?}", r);
+        } else {
+            assert!(r.message.contains("uid="), "{:?}", r);
+        }
     }
 
     #[test]
     fn check_events_dir_perms_ok_for_0750() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let dir = tempfile::tempdir().unwrap();
         let ev = dir.path().join("events");
         std::fs::create_dir(&ev).unwrap();
@@ -1008,12 +1015,18 @@ mod linux_tests {
         // Empty group file → `read_group_gid_from` returns None → the gid
         // ownership check inside `check_events_dir_perms` is skipped. We can't
         // chown the tempdir to a real `sigil` gid in a unit test, so this
-        // isolates the mode check.
+        // isolates the mode check — but only when the dir is root-owned.
         let group_file = dir.path().join("group");
         std::fs::write(&group_file, "").unwrap();
         let r = check_events_dir_perms(&ev, &group_file);
-        assert_eq!(r.level, CheckLevel::Ok);
-        assert!(r.message.contains("0750"), "{:?}", r);
+        if std::fs::metadata(&ev).unwrap().uid() == 0 {
+            assert_eq!(r.level, CheckLevel::Ok);
+            assert!(r.message.contains("0750"), "{:?}", r);
+        } else {
+            // A non-root runner owns the tempdir, so the owner check warns (#60).
+            assert_eq!(r.level, CheckLevel::Warn, "{r:?}");
+            assert!(r.message.contains("uid="), "{:?}", r);
+        }
     }
 }
 
