@@ -680,41 +680,51 @@ fn check_events_dir_perms(
             return CheckResult::warn(format!("events dir: not found at {}", events_dir.display()));
         }
     };
-    if !meta.is_dir() {
+    classify_events_dir_perms(
+        &events_dir.display().to_string(),
+        meta.is_dir(),
+        meta.mode() & 0o777,
+        meta.gid(),
+        read_group_gid_from(group_file, "sigil"),
+    )
+}
+
+/// Pure classifier for the events dir (testable without a real dir). Accepts
+/// 0750 (group-read for sigil) or 0755 (world-read); world-write is always Warn;
+/// if the sigil group exists, the dir gid must match it (#10).
+#[cfg(target_os = "linux")]
+fn classify_events_dir_perms(
+    path: &str,
+    is_dir: bool,
+    mode: u32,
+    gid: u32,
+    sigil_gid: Option<u32>,
+) -> CheckResult {
+    if !is_dir {
+        return CheckResult::warn(format!("events dir: {path} exists but is not a directory"));
+    }
+    if mode & 0o002 != 0 {
         return CheckResult::warn(format!(
-            "events dir: {} exists but is not a directory",
-            events_dir.display()
+            "events dir perms: mode={mode:o} is world-writable at {path}"
         ));
     }
-    let mode = meta.mode() & 0o777;
-    let gid_expected = read_group_gid_from(group_file, "sigil");
-    let gid_actual = meta.gid();
-    let mode_ok = mode == 0o750 || mode == 0o755;
-    let mode_world_writable = mode & 0o002 != 0;
-    if mode_world_writable {
+    if mode != 0o750 && mode != 0o755 {
         return CheckResult::warn(format!(
-            "events dir perms: mode={mode:o} is world-writable at {}",
-            events_dir.display()
+            "events dir perms: mode={mode:o}; expected 0750 or 0755 at {path}"
         ));
     }
-    if !mode_ok {
-        return CheckResult::warn(format!(
-            "events dir perms: mode={mode:o}; expected 0750 or 0755 at {}",
-            events_dir.display()
-        ));
-    }
-    if let Some(g) = gid_expected {
-        if gid_actual != g {
+    if let Some(g) = sigil_gid {
+        if gid != g {
             return CheckResult::warn(format!(
-                "events dir owner: gid={gid_actual}; expected gid={g} (sigil group) at {}",
-                events_dir.display()
+                "events dir owner: gid={gid}; expected gid={g} (sigil group) at {path}"
             ));
         }
     }
-    CheckResult::ok(format!(
-        "events dir: mode 0{mode:o} at {}",
-        events_dir.display()
-    ))
+    let group = match sigil_gid {
+        Some(g) if g == gid => format!("root:sigil({g})"),
+        _ => format!("gid({gid})"),
+    };
+    CheckResult::ok(format!("events dir: {group} mode 0{mode:o} at {path}"))
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -845,6 +855,36 @@ mod linux_tests {
         let r = classify_socket_perms("/run/sigil/control.sock", 1000, 1000, 0o660, Some(996));
         assert_eq!(r.level, CheckLevel::Warn);
         assert!(r.message.contains("uid=1000"), "{r:?}");
+    }
+
+    #[test]
+    fn classify_events_dir_ok_root_sigil_0750() {
+        let r = classify_events_dir_perms("/var/log/sigil", true, 0o750, 996, Some(996));
+        assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
+        assert!(r.message.contains("root:sigil(996)"), "{r:?}");
+    }
+    #[test]
+    fn classify_events_dir_ok_without_group_0755() {
+        let r = classify_events_dir_perms("/var/log/sigil", true, 0o755, 0, None);
+        assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
+    }
+    #[test]
+    fn classify_events_dir_warn_world_writable() {
+        let r = classify_events_dir_perms("/var/log/sigil", true, 0o757, 0, None);
+        assert_eq!(r.level, CheckLevel::Warn, "{r:?}");
+        assert!(r.message.contains("world-writable"), "{r:?}");
+    }
+    #[test]
+    fn classify_events_dir_warn_group_mismatch() {
+        let r = classify_events_dir_perms("/var/log/sigil", true, 0o750, 0, Some(996));
+        assert_eq!(r.level, CheckLevel::Warn, "{r:?}");
+        assert!(r.message.contains("expected gid=996"), "{r:?}");
+    }
+    #[test]
+    fn classify_events_dir_warn_not_a_dir() {
+        let r = classify_events_dir_perms("/var/log/sigil", false, 0o750, 0, None);
+        assert_eq!(r.level, CheckLevel::Warn, "{r:?}");
+        assert!(r.message.contains("not a directory"), "{r:?}");
     }
 
     #[test]
