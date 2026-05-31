@@ -15,8 +15,11 @@ use uuid::Uuid;
 pub struct EventsQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
-    #[serde(default)]
-    pub host_id: Vec<String>,
+    // Comma-separated, like the other multi-value filters below (evidence_kind,
+    // severity, source). A `Vec<String>` here can't be deserialized by axum's
+    // serde_urlencoded `Query` extractor (it reports "expected a sequence" even
+    // for a single value), which is what broke the MCP `query_events` tool (#73).
+    pub host_id: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
     pub evidence_kind: Option<String>,
@@ -81,11 +84,7 @@ pub async fn get_events(
 
     let filters = ScanFilters {
         cursor,
-        host_ids: if q.host_id.is_empty() {
-            None
-        } else {
-            Some(q.host_id.clone())
-        },
+        host_ids: comma_split(&q.host_id),
         since,
         until,
         evidence_kinds: comma_split(&q.evidence_kind),

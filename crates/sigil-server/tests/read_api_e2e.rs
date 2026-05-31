@@ -107,6 +107,36 @@ async fn events_empty_returns_empty_list() {
 }
 
 #[tokio::test]
+async fn events_host_id_filter_does_not_400() {
+    // #73: a host_id filter (single or comma-separated) must deserialize and
+    // return 200 — the old `Vec<String>` field made serde_urlencoded reject it
+    // with "expected a sequence" → HTTP 400, breaking the MCP query_events tool.
+    let dir = tempfile::tempdir().unwrap();
+    let app = build_router(state_with_token(dir.path(), "tok"));
+
+    let (status, body) = get(
+        &app,
+        "/v1/events?host_id=4376ef7a-4fac-4644-b4cf-128fc471f783&limit=100",
+        Some("tok"),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "single host_id must not 400: {body}"
+    );
+    assert!(body["events"].as_array().unwrap().is_empty());
+
+    let (status, body) = get(&app, "/v1/events?host_id=h1,h2&limit=100", Some("tok")).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "comma-separated host_id must not 400: {body}"
+    );
+    assert!(body["events"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn fleet_host_by_id_404_when_unknown() {
     let dir = tempfile::tempdir().unwrap();
     let app = build_router(state_with_token(dir.path(), "tok"));
