@@ -22,10 +22,17 @@ first place. Sigil measures that surface; it does not block.
 
 ## See it
 
-Sigil scores the guard surface of every AI coding agent it watches, then makes
-that posture **queryable** over plain MCP. Here a real Codex (`gpt-5.5`) session
-asks Sigil's read-only tools to find the riskiest host in the fleet and explain
-it — no config is touched, the model just *reads* posture and reasons over it:
+A security team's view first: **`sigil-manager`** renders the fleet's posture as
+a triage console — every AI Guard risk event across every host and agent, with
+severity, status, and assignee, the way a SOC already works. (The dashboard is a
+separate project: [`sigil-manager`](https://github.com/Ju571nK/sigil-manager).)
+
+![sigil-manager fleet dashboard — an Alerts console listing AI Guard risk events across multiple hosts: Sandbox Disabled on Codex and No Sandbox on Claude Code flagged CRITICAL, an MCP Server Local Command on Cursor at MEDIUM, plus lower-severity findings across Gemini, Continue.dev, and Claude Desktop, each with host, severity, and status](docs/sigil-manager01.png)
+
+Underneath that dashboard the same posture is **queryable** over plain MCP. Here
+a real Codex (`gpt-5.5`) session asks Sigil's read-only tools to find the
+riskiest host in the fleet and explain it — no config is touched, the model just
+*reads* posture and reasons over it:
 
 ![A Codex session calls Sigil's fleet_risk and get_host MCP tools, identifies dev-mbp-01 as the top risk at critical 10.0, and explains why Claude Code and Codex are dangerous with three prioritized mitigations](docs/sigil-mcp-codex01-en.gif)
 
