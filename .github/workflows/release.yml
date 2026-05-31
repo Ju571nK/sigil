@@ -2,8 +2,11 @@ name: Release
 
 # Cut a release by pushing a tag, e.g.:
 #   git tag v0.1.0 && git push origin v0.1.0
-# This builds prebuilt binaries for each target, publishes them to a GitHub
-# Release with a SHA256SUMS file, and attaches build-provenance attestations.
+# This builds prebuilt binaries for each target (x86_64 + aarch64), publishes
+# them to a GitHub Release with a SHA256SUMS file, attaches build-provenance
+# attestations, and — when the SIGIL_BUILD_SIGNING_KEY secret is set — an
+# ed25519-signed build manifest (per-arch blake3) that `sigil doctor
+# --verify-self` checks against the compiled-in SIGIL_BUILD_PUBKEYS (#13).
 on:
   push:
     tags: ["v*"]
@@ -26,6 +29,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl   # static — runs on any Linux (incl. RHEL/Rocky)
             os: ubuntu-22.04
+          - target: aarch64-unknown-linux-musl  # static ARM64 — Graviton, Ampere, Pi 4+ (#12)
+            os: ubuntu-22.04-arm                 # GitHub-hosted ARM64 Linux runner
           - target: aarch64-apple-darwin        # Apple Silicon only (Intel Macs not supported)
             os: macos-14
           - target: x86_64-pc-windows-msvc
@@ -40,7 +45,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: ${{ endsWith(matrix.target, '-linux-musl') }}
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
@@ -82,46 +87,46 @@ jobs:
           if-no-files-found: error
 
   packages:
-    name: linux packages (server, static)
-    runs-on: ubuntu-22.04
+    name: linux packages (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+          - arch: aarch64                         # #12
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
       - name: Install musl tools + packagers
         run: |
           sudo apt-get update && sudo apt-get install -y musl-tools
           cargo install cargo-deb cargo-generate-rpm
 
-      # Static (musl) binary so the .rpm/.deb run on any glibc — incl. RHEL/Rocky 9.
-      - name: Build static sigil-server
-        run: cargo build --release --locked -p sigil-server --target x86_64-unknown-linux-musl
+      # Static (musl) binaries so the .rpm/.deb run on any glibc — incl. RHEL/Rocky 9.
+      # build.sh cross-builds into target/<triple>/release, stages into
+      # target/release, and stamps the package arch (deb via --target, rpm via --arch).
+      - name: Build all packages (.deb + .rpm)
+        run: packaging/build.sh all --target ${{ matrix.target }}
 
-      - name: Stage binary where the packagers expect it
-        run: |
-          mkdir -p target/release
-          cp target/x86_64-unknown-linux-musl/release/sigil-server target/release/sigil-server
-
-      - name: Build .deb + .rpm
-        working-directory: crates/sigil-server
-        run: |
-          mkdir -p ../../target/generate-rpm
-          cargo deb --no-build
-          cargo generate-rpm --output ../../target/generate-rpm/
-
-      # Flatten into one dir so the artifact (and dist/) has the packages at the
-      # root — the release job globs dist/sigil-* non-recursively.
       - name: Collect packages into a flat dir
         run: |
           mkdir -p pkgs
-          cp target/debian/*.deb target/generate-rpm/*.rpm pkgs/
+          cp target/${{ matrix.target }}/debian/*.deb pkgs/
+          cp target/generate-rpm/*.rpm pkgs/
+          ls -l pkgs/
 
       - uses: actions/upload-artifact@v7
         with:
-          name: linux-packages
+          name: linux-packages-${{ matrix.arch }}
           path: pkgs/*
           if-no-files-found: error
 
@@ -129,6 +134,9 @@ jobs:
     name: publish release
     needs: [build, packages]
     runs-on: ubuntu-latest
+    env:
+      # Empty unless the repo provisions the secret; gates the signing step below.
+      SIGNING_KEY: ${{ secrets.SIGIL_BUILD_SIGNING_KEY }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -139,6 +147,42 @@ jobs:
         working-directory: dist
         run: sha256sum sigil-* | tee SHA256SUMS
 
+      # Phase 3c (#13): sign a per-arch blake3 build manifest with the dedicated
+      # build-signing key. Runs only when the secret is set; the freshly-built
+      # x86_64 sigil-sign signs it (dogfood). `sigil doctor --verify-self`
+      # checks a host's binary against this manifest + SIGIL_BUILD_PUBKEYS.
+      - name: Sign build manifest
+        if: ${{ env.SIGNING_KEY != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          tar -xzf "dist/sigil-${ver}-x86_64-unknown-linux-musl.tar.gz" -C /tmp
+          SIGN="/tmp/sigil-${ver}-x86_64-unknown-linux-musl/sigil-sign"
+          chmod +x "$SIGN"
+          # Hash each binary in the two static Linux tarballs (the canonical
+          # daemon binaries install.sh ships); one --artifact per (name,target).
+          args=()
+          for tgt in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            tgz="dist/sigil-${ver}-${tgt}.tar.gz"
+            d="$(mktemp -d)"; tar -xzf "$tgz" -C "$d"
+            inner="$d/sigil-${ver}-${tgt}"
+            for b in sigil sigil-sender sigil-server sigil-sign sigil-mcp; do
+              args+=(--artifact "name=${b},target=${tgt},file=${inner}/${b}")
+            done
+          done
+          printf '%s' "$SIGNING_KEY" > /tmp/build-key.json
+          "$SIGN" manifest \
+            --key /tmp/build-key.json \
+            --git-sha "$GITHUB_SHA" \
+            --run-url "$run_url" \
+            "${args[@]}" \
+            --out dist/build-manifest.json
+          rm -f /tmp/build-key.json
+          echo ">> signed build manifest:"
+          head -c 600 dist/build-manifest.json; echo
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
@@ -147,6 +191,7 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           cat > notes.md <<'EOF'
           ## Install (macOS / Linux)
@@ -164,6 +209,13 @@ jobs:
           gh attestation verify <archive> --repo Ju571nK/sigil # provenance
           ```
 
+          If `build-manifest.json` is attached, an installed agent can verify itself
+          against it:
+
+          ```sh
+          sigil doctor --verify-self --manifest build-manifest.json
+          ```
+
           ## Windows
 
           Download the `.zip` for your architecture (`x86_64` for most PCs,
@@ -173,26 +225,34 @@ jobs:
 
           `sigil-mcp` is the read-only fleet MCP server — point an MCP client (Claude Desktop/Code) at a `sigil-server`'s read API to query and reason over fleet posture. See [crates/sigil-mcp/README.md](https://github.com/Ju571nK/sigil/blob/main/crates/sigil-mcp/README.md).
 
-          ## Server (Linux)
+          ## Server + agent (Linux, x86_64 and aarch64)
 
-          Run the collector from a prebuilt package (static binary — works on RHEL/Rocky and Debian/Ubuntu). See [docs/install-server.md](https://github.com/Ju571nK/sigil/blob/main/docs/install-server.md).
+          Prebuilt `.deb` / `.rpm` packages (static binaries — work on RHEL/Rocky and
+          Debian/Ubuntu, on both x86_64 and ARM64). See [docs/install-server.md](https://github.com/Ju571nK/sigil/blob/main/docs/install-server.md).
 
           ```sh
-          sudo dnf install ./sigil-server-*.x86_64.rpm     # RHEL / Rocky / Fedora
-          sudo apt  install ./sigil-server_*_amd64.deb     # Debian / Ubuntu
+          sudo dnf install ./sigil-server-*.x86_64.rpm     # RHEL / Rocky / Fedora (x86_64)
+          sudo dnf install ./sigil-server-*.aarch64.rpm    # … ARM64
+          sudo apt  install ./sigil-server_*_amd64.deb     # Debian / Ubuntu (x86_64)
+          sudo apt  install ./sigil-server_*_arm64.deb     # … ARM64
           ```
 
           Each package ships a hardened, disabled-by-default systemd unit + config example.
+          (`armv7` is supported by `packaging/build.sh --target armv7-unknown-linux-gnueabihf`
+          but is not built in CI.)
           EOF
           # Tags with a pre-release suffix (e.g. v0.1.0-rc.1) are marked
           # --prerelease so they don't become "latest" — install.sh won't pick
           # them up, which makes them safe for dry-runs.
           prerelease=""
           case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          # build-manifest.json is only present when the signing secret is set.
+          manifest=""
+          [ -f dist/build-manifest.json ] && manifest="dist/build-manifest.json"
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --verify-tag \
             $prerelease \
             --notes-file notes.md \
-            dist/sigil-* dist/SHA256SUMS
+            dist/sigil-* dist/SHA256SUMS $manifest

@@ -1,6 +1,6 @@
 //! Phase 3c — vendor-signed build manifest 검증. license 의 sibling: 같은
 //! ed25519 + RFC 8785 canonical-JSON primitive 를 쓰고, trust anchor 는
-//! 컴파일드인 SIGIL_BUILD_PUBKEYS (이 slice 는 빈 채로 ship).
+//! 컴파일드인 SIGIL_BUILD_PUBKEYS.
 
 use crate::policy::canonical::to_canonical_bytes;
 use serde::{Deserialize, Serialize};
@@ -10,9 +10,14 @@ use time::OffsetDateTime;
 /// 이 interpreter 가 지원하는 manifest 포맷 버전.
 pub const MANIFEST_SCHEMA_VERSION: u8 = 1;
 
-/// 컴파일드인 vendor trust anchor — PUBLIC 키만. 이 slice 는 빈 채 ship.
-/// `(key_id, "ed25519:<base64 pubkey>")`.
-pub const SIGIL_BUILD_PUBKEYS: &[(&str, &str)] = &[];
+/// 컴파일드인 vendor trust anchor — PUBLIC 키만 (#13). `(key_id, "ed25519:<base64
+/// pubkey>")`. The matching private key is held only as the `SIGIL_BUILD_SIGNING_KEY`
+/// CI secret and is used by the release workflow to sign each release's build
+/// manifest; `sigil doctor --verify-self` checks a manifest against these keys.
+pub const SIGIL_BUILD_PUBKEYS: &[(&str, &str)] = &[(
+    "sigil-build-2026a",
+    "ed25519:NfkTZEW7tjw/XMoBc39dUs05mpqO+tUGhaqqt1tEy9c=",
+)];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactEntry {
