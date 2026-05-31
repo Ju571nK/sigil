@@ -24,6 +24,15 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
   package applies both at install (deb postinst + rpm scriptlet, guarded and
   idempotent). Foundation for de-rooting the sender/server daemons in later
   slices; the agent stays root for file-integrity monitoring.
+- **`sigil-server` runs as the unprivileged `sigil` user** (#10 slice 2). The
+  server unit switches from `User=root` to `User=sigil` + `Group=sigil`; systemd
+  owns its `StateDirectory`/`LogsDirectory` (`/var/lib/sigil-server`,
+  `/var/log/sigil-server`) as `sigil:sigil 0750`. The server package now creates
+  the `sigil` user at install (sysusers.d via deb postinst + rpm scriptlet,
+  idempotent), so a standalone server install resolves `User=sigil` before start.
+  No code change — the server binds a non-privileged port (`:8443`) and writes
+  only under its state dir. When mTLS is enabled, the operator must make
+  `tls_key_path` readable by the `sigil` user.
 
 ### Fixed
 

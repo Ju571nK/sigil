@@ -63,6 +63,11 @@ assets = [
     ["../../config/server.example.yaml", "etc/sigil/server.yaml.example", "644"],
     ["../../README.md", "usr/share/doc/sigil-server/README.md", "644"],
     ["../../LICENSE", "usr/share/doc/sigil-server/LICENSE", "644"],
+    # Create the sigil group/user so the unit's User=sigil resolves at start
+    # (#10 slice 2). Idempotent. No tmpfiles here: systemd StateDirectory=
+    # sigil-server owns /var/lib/sigil-server as sigil:sigil; the agent's
+    # /var/lib/sigil is not used on a server-only host.
+    ["../../packaging/sysusers.d/sigil.conf", "usr/lib/sysusers.d/sigil.conf", "644"],
 ]
 
 [package.metadata.deb.systemd-units]
@@ -80,9 +85,13 @@ assets = [
     { source = "../../config/server.example.yaml", dest = "/etc/sigil/server.yaml.example", mode = "0644" },
     { source = "../../README.md", dest = "/usr/share/doc/sigil-server/README.md", mode = "0644", doc = true },
     { source = "../../LICENSE", dest = "/usr/share/doc/sigil-server/LICENSE", mode = "0644", doc = true },
+    { source = "../../packaging/sysusers.d/sigil.conf", dest = "/usr/lib/sysusers.d/sigil.conf", mode = "0644" },
 ]
+# Create the sigil user/group so the unit's User=sigil resolves before start
+# (#10 slice 2). Idempotent; no-op when the agent package already created it.
 post_install_script = """\
 systemctl daemon-reload >/dev/null 2>&1 || :
+command -v systemd-sysusers >/dev/null 2>&1 && systemd-sysusers /usr/lib/sysusers.d/sigil.conf >/dev/null 2>&1 || :
 """
 pre_uninstall_script = """\
 if [ "$1" = 0 ] ; then

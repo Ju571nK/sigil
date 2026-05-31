@@ -19,9 +19,18 @@ Type=simple
 ExecStart=/usr/bin/sigil-server serve --config /etc/sigil/server.yaml
 Restart=on-failure
 RestartSec=5
-User=root
+# Runs as the unprivileged sigil user (#10 slice 2). systemd creates
+# StateDirectory/LogsDirectory owned sigil:sigil. The sigil user/group is
+# created by this package at install (sysusers.d). NOTE: when mTLS is enabled,
+# the operator must make tls_key_path readable by the sigil user (e.g.
+# `chown root:sigil server.key && chmod 0640 server.key`) — the private key is
+# operator-provided, not packaged.
+User=sigil
+Group=sigil
 StateDirectory=sigil-server
 LogsDirectory=sigil-server
+StateDirectoryMode=0750
+LogsDirectoryMode=0750
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/sigil-server /var/log/sigil-server
