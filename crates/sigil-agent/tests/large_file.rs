@@ -1,6 +1,5 @@
 mod common;
-use common::{policy_for_paths, TestAgentBuilder};
-use std::time::Duration;
+use common::{fs_event_timeout, policy_for_paths, TestAgentBuilder};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn it_large_file_emits_incomplete() {
@@ -20,7 +19,7 @@ async fn it_large_file_emits_incomplete() {
                     && v["evidence"]["evidence_quality"] == "incomplete"
                     && v["evidence"]["size_after"] == 11 * 1024 * 1024
             },
-            Duration::from_secs(8),
+            fs_event_timeout(),
         )
         .await
         .expect("expected incomplete-quality file_change");

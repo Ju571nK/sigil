@@ -7,7 +7,7 @@
 #![cfg(all(unix, feature = "operator-cli"))]
 
 mod common;
-use common::TestAgentBuilder;
+use common::{fs_event_timeout, TestAgentBuilder};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -84,7 +84,7 @@ targets:
                     && v["evidence"]["tool"] == "claude_code"
                     && v["evidence"]["bucket"] == "critical"
             },
-            Duration::from_secs(10),
+            fs_event_timeout(),
         )
         .await
         .expect("expected an AiGuardRiskAssessed event with bucket=critical");
@@ -115,7 +115,7 @@ targets:
     // ── Second emission: low bucket ──────────────────────────────────────────
     // Poll until we see an AiGuardRiskAssessed event for claude_code that is
     // NOT the original boot event and carries score < 1.0 (bucket = low).
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + fs_event_timeout();
     let mut clean_seen = false;
     while std::time::Instant::now() < deadline {
         let found = agent
@@ -198,7 +198,7 @@ targets:
                     && v["evidence"]["scope"]["kind"] == "application"
                     && v["evidence"]["scope"]["app"] == "claude_desktop"
             },
-            Duration::from_secs(10),
+            fs_event_timeout(),
         )
         .await
         .expect("expected an AiGuardRiskAssessed event for claude_desktop");
@@ -257,7 +257,7 @@ targets:
                     && v["evidence"]["scope"]["kind"] == "application"
                     && v["evidence"]["scope"]["app"] == "continue"
             },
-            Duration::from_secs(10),
+            fs_event_timeout(),
         )
         .await
         .expect("expected an AiGuardRiskAssessed event for continue_dev");
@@ -323,7 +323,7 @@ targets: []
                     && v["evidence"]["scope"]["kind"] == "project"
                     && v["evidence"]["scope"]["path"] == canonical_a.as_str()
             },
-            Duration::from_secs(15),
+            fs_event_timeout(),
         )
         .await
         .expect("expected AiGuardRiskAssessed with project scope = repoA");
@@ -339,7 +339,7 @@ targets: []
                     && v["evidence"]["scope"]["kind"] == "project"
                     && v["evidence"]["scope"]["path"] == canonical_b.as_str()
             },
-            Duration::from_secs(15),
+            fs_event_timeout(),
         )
         .await
         .expect("expected AiGuardRiskAssessed with project scope = repoB");
@@ -400,7 +400,7 @@ targets: []
                     && v["evidence"]["scope"]["kind"] == "project"
                     && v["evidence"]["scope"]["path"] == canonical_a.as_str()
             },
-            Duration::from_secs(15),
+            fs_event_timeout(),
         )
         .await
         .expect("expected AiGuardRiskAssessed for claude_code repoA");
@@ -417,7 +417,7 @@ targets: []
                     && v["evidence"]["scope"]["kind"] == "project"
                     && v["evidence"]["scope"]["path"] == canonical_b.as_str()
             },
-            Duration::from_secs(15),
+            fs_event_timeout(),
         )
         .await
         .expect("expected AiGuardRiskAssessed for claude_code repoB");
@@ -482,7 +482,7 @@ targets: []
                     && v["evidence"]["scope"]["kind"] == "project"
                     && v["evidence"]["scope"]["path"] == canonical_a.as_str()
             },
-            Duration::from_secs(15),
+            fs_event_timeout(),
         )
         .await
         .expect("expected AiGuardRiskAssessed for codex repoA");
@@ -497,7 +497,7 @@ targets: []
                     && v["evidence"]["scope"]["kind"] == "project"
                     && v["evidence"]["scope"]["path"] == canonical_b.as_str()
             },
-            Duration::from_secs(15),
+            fs_event_timeout(),
         )
         .await
         .expect("expected AiGuardRiskAssessed for codex repoB");
@@ -555,7 +555,7 @@ targets:
                     && v["evidence"]["tool"] == "gemini"
                     && v["evidence"]["scope"]["kind"] == "user_global"
             },
-            Duration::from_secs(15),
+            fs_event_timeout(),
         )
         .await
         .expect("expected AiGuardRiskAssessed for gemini");
@@ -613,7 +613,7 @@ targets:
                     && v["evidence"]["scope"]["kind"] == "application"
                     && v["evidence"]["scope"]["app"] == "cursor"
             },
-            Duration::from_secs(15),
+            fs_event_timeout(),
         )
         .await
         .expect("expected AiGuardRiskAssessed for cursor");
@@ -721,7 +721,7 @@ targets:
                 v["evidence"]["kind"] == "ai_guard_risk_assessed"
                     && v["evidence"]["tool"] == "claude_code"
             },
-            Duration::from_secs(10),
+            fs_event_timeout(),
         )
         .await
         .expect("expected an AiGuardRiskAssessed event for claude_code");
@@ -827,7 +827,7 @@ targets:
                 v["evidence"]["kind"] == "ai_guard_risk_assessed"
                     && v["evidence"]["tool"] == "claude_code"
             },
-            Duration::from_secs(10),
+            fs_event_timeout(),
         )
         .await
         .expect("expected an AiGuardRiskAssessed event for claude_code");
@@ -953,7 +953,7 @@ targets:
                 v["evidence"]["kind"] == "ai_guard_risk_assessed"
                     && v["evidence"]["tool"] == "claude_code"
             },
-            Duration::from_secs(10),
+            fs_event_timeout(),
         )
         .await
         .expect("expected an AiGuardRiskAssessed event for claude_code");
