@@ -83,8 +83,11 @@ impl SigilFleet {
         Parameters(p): Parameters<QueryEventsParams>,
     ) -> Result<CallToolResult, McpError> {
         let mut q: Vec<(&str, String)> = Vec::new();
-        for h in &p.host_id {
-            q.push(("host_id", h.clone()));
+        // The server reads `host_id` as a comma-separated filter (like
+        // evidence_kind/severity/source), not repeated params — sending repeats
+        // tripped its serde_urlencoded deserializer with "expected a sequence" (#73).
+        if !p.host_id.is_empty() {
+            q.push(("host_id", p.host_id.join(",")));
         }
         if let Some(s) = &p.since {
             q.push(("since", s.clone()));
@@ -212,6 +215,35 @@ mod tests {
                 since: Some("2026-05-01T00:00:00Z".to_string()),
                 limit: Some(50),
                 cursor: Some("abc-cursor".to_string()),
+            }))
+            .await
+            .unwrap();
+
+        m.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn query_events_joins_multiple_host_ids_into_one_comma_param() {
+        // #73: multiple host_ids must go out as a single comma-separated value,
+        // not repeated params — the server reads it like its other multi-value
+        // filters, and repeated params broke its deserializer.
+        let server = MockServer::start_async().await;
+        let m = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/v1/events")
+                    .query_param("host_id", "H1,H2");
+                then.status(200)
+                    .json_body(json!({"events": [], "next_cursor": null}));
+            })
+            .await;
+
+        fleet(server.base_url())
+            .query_events(Parameters(QueryEventsParams {
+                host_id: vec!["H1".to_string(), "H2".to_string()],
+                since: None,
+                limit: None,
+                cursor: None,
             }))
             .await
             .unwrap();
