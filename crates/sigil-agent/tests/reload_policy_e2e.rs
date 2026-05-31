@@ -3,7 +3,7 @@
 #![cfg(all(unix, feature = "operator-cli"))]
 
 mod common;
-use common::{policy_for_paths, TestAgentBuilder};
+use common::{fs_event_timeout, policy_for_paths, TestAgentBuilder};
 use serde_json::json;
 use std::time::Duration;
 
@@ -50,7 +50,7 @@ async fn reload_policy_picks_up_on_disk_edits() {
 
     // The IPC reply returns as soon as the watch is nudged, not when the
     // reload completes, so poll `targets` until the new policy is visible.
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + fs_event_timeout();
     let mut after_glob: Option<String> = None;
     while std::time::Instant::now() < deadline {
         let after = agent.control(&json!({"cmd": "targets"})).await;

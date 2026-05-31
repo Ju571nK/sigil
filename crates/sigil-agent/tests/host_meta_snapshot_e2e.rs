@@ -5,8 +5,7 @@
 #![cfg(all(unix, feature = "operator-cli"))]
 
 mod common;
-use common::TestAgentBuilder;
-use std::time::Duration;
+use common::{fs_event_timeout, TestAgentBuilder};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent_emits_host_meta_snapshot_on_boot() {
@@ -18,7 +17,7 @@ async fn agent_emits_host_meta_snapshot_on_boot() {
     let ev = agent
         .wait_for_event(
             |v| v["evidence"]["kind"] == "host_meta_snapshot",
-            Duration::from_secs(10),
+            fs_event_timeout(),
         )
         .await
         .expect("expected a HostMetaSnapshot event within 10s");

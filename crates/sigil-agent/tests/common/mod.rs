@@ -24,10 +24,18 @@ pub fn policy_for_paths(paths: &[&str], tier: &str) -> String {
     yaml
 }
 
-/// Wait budget for OS-watcher-driven (`wait_for_event`) assertions. macOS
-/// FSEvents delivery can lag well past a few seconds under parallel test load
-/// (issue #25), so give it more headroom there; other platforms keep the tight
-/// 5s and fail fast.
+/// Wait budget for OS-watcher-driven (`wait_for_event` and equivalent poll
+/// loops) assertions. `wait_for_event` returns as soon as the event arrives, so
+/// a generous budget is free on success and only bounds the *failure* deadline.
+/// OS watcher delivery (FSEvents, inotify) lags badly under the heavy
+/// cross-process parallelism of `cargo test --workspace` (issues #25, #66), so
+/// keep ample headroom — and let a loaded host raise it further without a
+/// rebuild via `SIGIL_TEST_FS_TIMEOUT_SECS`.
 pub fn fs_event_timeout() -> std::time::Duration {
-    std::time::Duration::from_secs(if cfg!(target_os = "macos") { 15 } else { 5 })
+    let base = if cfg!(target_os = "macos") { 30 } else { 15 };
+    let secs = std::env::var("SIGIL_TEST_FS_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(base);
+    std::time::Duration::from_secs(secs)
 }
