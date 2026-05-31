@@ -1,6 +1,7 @@
 mod config;
 mod local;
 mod local_tools;
+mod print_config;
 mod tools;
 mod upstream;
 
@@ -13,8 +14,38 @@ use rmcp::transport::stdio;
 use rmcp::ServiceExt;
 use std::sync::Arc;
 
+/// Handle `--print-config [client]` before any async/server setup. Returns
+/// `Some(exit_code)` when the flag was handled (the caller then exits), else
+/// `None` to start the server as usual.
+fn handle_print_config() -> Option<i32> {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() != Some("--print-config") {
+        return None;
+    }
+    let client = args.next();
+    // Pin the absolute path of THIS binary so the emitted config works even when
+    // the MCP client doesn't see the user's interactive-shell PATH (#72).
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+        .unwrap_or_else(|| "sigil-mcp".to_string());
+    match print_config::render_config(&exe, client.as_deref()) {
+        Ok(block) => {
+            print!("{block}");
+            Some(0)
+        }
+        Err(msg) => {
+            eprintln!("sigil-mcp --print-config: {msg}");
+            Some(2)
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if let Some(code) = handle_print_config() {
+        std::process::exit(code);
+    }
     // MCP speaks JSON-RPC over stdout; ALL logs MUST go to stderr.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
