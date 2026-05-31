@@ -18,13 +18,36 @@ first place. Sigil measures that surface; it does not block.
 
 ## See it
 
-![Sigil scores a dangerous AI coding agent config 7.5 out of 10 (critical) in real time](docs/sigil-mcp-myscreen03.gif)
+Sigil scores the guard surface of every AI coding agent it watches, then makes
+that posture **queryable**. Here a real Claude Code (Opus 4.7) session asks
+Sigil's read-only MCP tools to find the riskiest host in the fleet and explain
+it — no config is touched, the model just *reads* posture and reasons over it:
 
-A clean repo config scores 0 / low — until a `.*` `PreToolUse` hook running
-`rm -rf $HOME` lands, and Sigil re-scores that project **7.5 / critical** with
-the reasons (`destructive_in_inline_command`, `no_sandbox`, `broad_matcher`).
-Reproduce it locally with [`demo/aiguard-demo.sh`](demo/aiguard-demo.sh), or
-bring up the full end-to-end stack via [`demo/`](demo/) (`docker compose up`).
+![A Claude Code session calls Sigil's MCP tools, surveys the fleet risk index, finds dev-mbp-01 is the top risk at critical 10.0, pulls its full posture, and explains why Claude Code and Codex are dangerous with the top mitigations](docs/sigil-mcp-myscreen03.gif)
+
+The agent calls Sigil's MCP server (here registered as `sigil-fleet`), gets back
+`dev-mbp-01` at **critical / 10.0**, and the reasons are concrete: `no_sandbox`
+on a host shell, a `.*` `PreToolUse` matcher that allows `Bash`, an external
+`rm -rf` hook, and a remote MCP server — for both Claude Code and Codex. (The
+prompt and final answer are in Japanese; the tool calls and scoring are in
+English.)
+
+Want the raw tool output behind that? It's produced by
+[`docs/sigil-mcp-demo.sh`](docs/sigil-mcp-demo.sh) (every number is a real tool
+response, not mocked):
+
+![sigil-mcp queried over MCP: fleet_risk ranks host-alpha at critical 10.0, and get_host breaks the score down per agent — claude_code 10.0, codex 9.50, the rest low — with the reasons behind it](docs/sigil-mcp-demo.gif)
+
+`fleet_risk` ranks hosts, `get_host` breaks one host's score down per agent
+(`claude_code` 10.0, `codex` 9.50, the rest `low`) and lists exactly why. That's
+nine read-only GET tools in total — no write or remediation path, by construction.
+
+To watch the underlying file-posture scoring happen locally — a clean repo config
+scoring **0 / low** until a `.*` `PreToolUse` hook running `rm -rf $HOME` lands
+and Sigil re-scores that project **7.5 / critical**
+(`destructive_in_inline_command`, `no_sandbox`, `broad_matcher`) — run
+[`docs/aiguard-demo.sh`](docs/aiguard-demo.sh) from the repo root (fully
+sandboxed; it never touches your real `~/.claude`).
 
 ## Why now
 
