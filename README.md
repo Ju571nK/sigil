@@ -19,18 +19,25 @@ first place. Sigil measures that surface; it does not block.
 ## See it
 
 Sigil scores the guard surface of every AI coding agent it watches, then makes
-that posture **queryable**. Here a real Claude Code (Opus 4.7) session asks
-Sigil's read-only MCP tools to find the riskiest host in the fleet and explain
+that posture **queryable** over plain MCP. Here a real Codex (`gpt-5.5`) session
+asks Sigil's read-only tools to find the riskiest host in the fleet and explain
 it — no config is touched, the model just *reads* posture and reasons over it:
 
-![A Claude Code session calls Sigil's MCP tools, surveys the fleet risk index, finds dev-mbp-01 is the top risk at critical 10.0, pulls its full posture, and explains why Claude Code and Codex are dangerous with the top mitigations](docs/sigil-mcp-myscreen03.gif)
+![A Codex session calls Sigil's fleet_risk and get_host MCP tools, identifies dev-mbp-01 as the top risk at critical 10.0, and explains why Claude Code and Codex are dangerous with three prioritized mitigations](docs/sigil-mcp-codex01-en.gif)
 
 The agent calls Sigil's MCP server (here registered as `sigil-fleet`), gets back
 `dev-mbp-01` at **critical / 10.0**, and the reasons are concrete: `no_sandbox`
 on a host shell, a `.*` `PreToolUse` matcher that allows `Bash`, an external
-`rm -rf` hook, and a remote MCP server — for both Claude Code and Codex. (The
-prompt and final answer are in Japanese; the tool calls and scoring are in
-English.)
+`rm -rf` hook, and a remote MCP server — for both Claude Code and Codex.
+
+And it isn't Codex-specific. Here's the **same fleet** read from **Claude Code**
+(Opus 4.7) instead — same tools, same posture (its prompt and answer happen to
+be in Japanese; the tool calls and scoring are in English):
+
+![A Claude Code session calls Sigil's MCP tools, surveys the fleet risk index, finds dev-mbp-01 is the top risk at critical 10.0, pulls its full posture, and explains why Claude Code and Codex are dangerous with the top mitigations](docs/sigil-mcp-myscreen03.gif)
+
+Same posture, different agent — because Sigil exposes it as plain MCP, not a
+vendor-specific plugin.
 
 Want the raw tool output behind that? It's produced by
 [`docs/sigil-mcp-demo.sh`](docs/sigil-mcp-demo.sh) (every number is a real tool
