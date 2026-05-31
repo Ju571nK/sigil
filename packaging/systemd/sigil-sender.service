@@ -17,17 +17,22 @@ Type=simple
 ExecStart=/usr/bin/sigil-sender --config /etc/sigil/sender.yaml start
 Restart=on-failure
 RestartSec=5
-User=root
+# Runs as the unprivileged sigil user (#10 slice 2). Group=sigil lets it READ
+# the agent's root:sigil spool (/var/log/sigil/events) and connect to the
+# agent's control socket (/run/sigil/control.sock, root:sigil 0660). It WRITES
+# only its own state/log dirs, which systemd owns as sigil:sigil 0750. The
+# sigil user is created by this package at install (sysusers.d). NOTE: existing
+# sender.yaml files must move offset_path/dead_letter_dir to the sender-owned
+# dirs below (see CHANGELOG); fresh configs that omit them get these defaults.
+User=sigil
 Group=sigil
-RuntimeDirectoryMode=0750
 StateDirectoryMode=0750
 LogsDirectoryMode=0750
-StateDirectory=sigil
-LogsDirectory=sigil
-RuntimeDirectory=sigil
+StateDirectory=sigil-sender
+LogsDirectory=sigil-sender
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/sigil /var/log/sigil /var/run/sigil
+ReadWritePaths=/var/lib/sigil-sender /var/log/sigil-sender
 ProtectHome=read-only
 ProtectControlGroups=yes
 ProtectKernelTunables=yes

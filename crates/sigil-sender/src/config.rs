@@ -17,13 +17,21 @@ pub struct SenderConfig {
     pub client_key_path: PathBuf,
     /// Path to CA bundle that signs the server cert (PEM).
     pub server_ca_path: PathBuf,
-    /// Path to the agent's events directory (where JSONL spool lives).
+    /// Path to the agent's events directory (where JSONL spool lives). The
+    /// sender only *reads* this (the agent owns it `root:sigil`), so it is
+    /// reachable by the `sigil` group.
     pub events_dir: PathBuf,
-    /// Path where `sender-offset.json` is persisted.
+    /// Path where `sender-offset.json` is persisted. Sender-owned and writable;
+    /// defaults to the sender's own state dir (`/var/lib/sigil-sender`) so the
+    /// non-root sender (#10 slice 2) can write it without touching the agent's
+    /// `root:sigil` `/var/lib/sigil`.
+    #[serde(default = "default_offset_path")]
     pub offset_path: PathBuf,
     /// Path to the agent's control IPC (Unix socket on unix; pipe name on Windows).
     pub agent_control: PathBuf,
-    /// Path to host-side dead-letter spool dir.
+    /// Path to host-side dead-letter spool dir. Sender-owned and writable;
+    /// defaults to the sender's own log dir (`/var/log/sigil-sender`).
+    #[serde(default = "default_dead_letter_dir")]
     pub dead_letter_dir: PathBuf,
     /// Maximum events per batch (spec default 256).
     #[serde(default = "default_max_batch_events")]
@@ -41,6 +49,12 @@ pub struct SenderConfig {
     pub host_id: Option<String>,
 }
 
+fn default_offset_path() -> PathBuf {
+    PathBuf::from("/var/lib/sigil-sender/sender-offset.json")
+}
+fn default_dead_letter_dir() -> PathBuf {
+    PathBuf::from("/var/log/sigil-sender/dead-letter")
+}
 fn default_max_batch_events() -> usize {
     256
 }
@@ -122,6 +136,35 @@ dead_letter_dir: "/var/log/sigil/dead-letter"
         assert_eq!(cfg.max_batch_events, 256);
         assert_eq!(cfg.max_batch_bytes, 1024 * 1024);
         assert_eq!(cfg.policy_poll_interval.as_secs(), 300);
+    }
+
+    #[test]
+    fn writable_paths_default_to_sender_owned_dirs_when_omitted() {
+        // #10 slice 2: when offset_path / dead_letter_dir are omitted, they
+        // default to the sender's own state/log dirs so the non-root sender can
+        // write them without touching the agent's root:sigil dirs.
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender.yaml");
+        write(
+            &p,
+            r#"
+server_base_url: "https://sigil.example.com"
+client_cert_path: "/etc/sigil/client.crt"
+client_key_path: "/etc/sigil/client.key"
+server_ca_path: "/etc/sigil/server-ca.pem"
+events_dir: "/var/log/sigil/events"
+agent_control: "/var/run/sigil/control.sock"
+"#,
+        );
+        let cfg = SenderConfig::load(&p).unwrap();
+        assert_eq!(
+            cfg.offset_path,
+            PathBuf::from("/var/lib/sigil-sender/sender-offset.json")
+        );
+        assert_eq!(
+            cfg.dead_letter_dir,
+            PathBuf::from("/var/log/sigil-sender/dead-letter")
+        );
     }
 
     #[test]

@@ -33,6 +33,23 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
   No code change — the server binds a non-privileged port (`:8443`) and writes
   only under its state dir. When mTLS is enabled, the operator must make
   `tls_key_path` readable by the `sigil` user.
+- **`sigil-sender` runs as the unprivileged `sigil` user** (#10 slice 2). The
+  sender unit switches from `User=root` to `User=sigil` (keeping `Group=sigil`)
+  and writes only its own state/log dirs — `StateDirectory=sigil-sender` /
+  `LogsDirectory=sigil-sender` (`/var/lib/sigil-sender`, `/var/log/sigil-sender`,
+  owned `sigil:sigil 0750`). It still *reads* the agent's `root:sigil` spool and
+  connects to the control socket via the `sigil` group, and no longer declares a
+  `RuntimeDirectory`. `offset_path` and `dead_letter_dir` now default to the
+  sender-owned dirs when omitted.
+
+  **Breaking (operator action on upgrade):** an existing `/etc/sigil/sender.yaml`
+  that sets `offset_path: /var/lib/sigil/sender-offset.json` and
+  `dead_letter_dir: /var/log/sigil/dead-letter` must move them to
+  `/var/lib/sigil-sender/sender-offset.json` and `/var/log/sigil-sender/dead-letter`
+  (or delete both lines to take the new defaults) — the non-root sender cannot
+  write the agent's `root:sigil` dirs. To preserve the read position (avoid
+  re-shipping the spool), move the offset file too:
+  `install -o sigil -g sigil -m700 -d /var/lib/sigil-sender && mv /var/lib/sigil/sender-offset.json /var/lib/sigil-sender/ && chown sigil:sigil /var/lib/sigil-sender/sender-offset.json`.
 
 ### Fixed
 
