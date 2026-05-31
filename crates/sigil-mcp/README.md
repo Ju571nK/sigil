@@ -23,13 +23,27 @@ Local mode: `my_risk`, `my_guard_detail`, `my_findings`.
 | `SIGIL_SERVER_READ_TOKEN` | bearer token |
 | `SIGIL_CLIENT_CERT` / `SIGIL_CLIENT_KEY` / `SIGIL_CA_CERT` | optional, for direct mTLS to `:8443` (omit when using a bearer-only reverse proxy) |
 
-## Claude Desktop / Code (stdio)
+## Register with an MCP client
+
+The fastest, paste-proof way — `--print-config` stamps the **absolute path** of
+the running binary, so it works even when the client doesn't see your shell PATH:
+
+```sh
+sigil-mcp --print-config codex     # Codex (~/.codex/config.toml)
+sigil-mcp --print-config claude    # Claude Code / Claude Desktop (mcpServers JSON)
+sigil-mcp --print-config           # both
+```
+
+Then fill in `SIGIL_SERVER_BASE_URL` / `SIGIL_SERVER_READ_TOKEN` (fleet mode), or
+delete the `env` for [local mode](#local-mode-individual-self-assessment-no-server).
+
+Claude Desktop / Code (stdio) looks like:
 
 ```json
 {
   "mcpServers": {
     "sigil-fleet": {
-      "command": "sigil-mcp",
+      "command": "/absolute/path/to/sigil-mcp",
       "env": {
         "SIGIL_SERVER_BASE_URL": "http://127.0.0.1:9090",
         "SIGIL_SERVER_READ_TOKEN": "..."
@@ -38,6 +52,15 @@ Local mode: `my_risk`, `my_guard_detail`, `my_findings`.
   }
 }
 ```
+
+> **`command` must be an absolute path** (or a name on the *client's* PATH). MCP
+> clients are usually GUI/login-launched and don't inherit your interactive shell
+> PATH, and a build-from-source binary lives at `target/release/sigil-mcp` —
+> never on PATH.
+>
+> **Troubleshooting — `MCP startup failed: No such file or directory (os error 2)`**:
+> the client can't find the binary. Use the absolute path (run
+> `sigil-mcp --print-config <client>` to get a correct block).
 
 ## Local mode (individual self-assessment, no server)
 
