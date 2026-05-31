@@ -9,20 +9,23 @@ client_cert_path: "/etc/sigil/client.crt"
 client_key_path: "/etc/sigil/client.key"
 server_ca_path: "/etc/sigil/server-ca.pem"
 
-# Where the agent writes its JSONL posture events. The sender tails this dir
-# and ships unsent records.
+# Where the agent writes its JSONL posture events. The sender only READS this
+# dir (the agent owns it root:sigil) and ships unsent records.
 events_dir: "/var/log/sigil/events"
 
-# The sender's durable read-offset checkpoint (atomic-rename writes).
-offset_path: "/var/lib/sigil/sender-offset.json"
+# The sender's durable read-offset checkpoint (atomic-rename writes). This is
+# sender-owned and writable — it lives in the sender's own state dir so the
+# non-root sender can write it. Defaults to this path if omitted.
+offset_path: "/var/lib/sigil-sender/sender-offset.json"
 
 # Agent control IPC. Used by the sender to forward apply_policy responses
 # pulled from /v1/policy.
 agent_control: "/var/run/sigil/control.sock"
 
 # Where the sender quarantines events the server permanently rejects (HTTP
-# 4xx that aren't transient). Operator audits these out-of-band.
-dead_letter_dir: "/var/log/sigil/dead-letter"
+# 4xx that aren't transient). Sender-owned/writable; defaults to this path if
+# omitted. Operator audits these out-of-band.
+dead_letter_dir: "/var/log/sigil-sender/dead-letter"
 
 # REQUIRED — this host's identifier. Must equal the agent's host_id (the UUID
 # stored in the agent's state.db, shown by `sigil show host-id`). The server
