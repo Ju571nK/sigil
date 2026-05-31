@@ -1,9 +1,10 @@
-# Sigil
+# Sigil — MCP & AI coding agent security, at the config layer
 
-> **Host-side AI Security Posture Management.** Sigil watches what your AI
-> coding agents are actually allowed to do — the hooks, permissions, and
-> sandbox boundaries in their config — scores the risk, and ships
-> hash-anchored events to your SIEM.
+> Sigil **continuously monitors** what your AI coding agents (Claude Code,
+> Cursor, Codex, Gemini CLI) are actually *allowed* to do — the `mcp.json`
+> servers, hooks, permissions, and sandbox boundaries in their config — scores
+> the risk, and ships hash-anchored events to your SIEM. Host-side **AI Security
+> Posture Management (AI-SPM)**, in Rust.
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![macOS](https://img.shields.io/badge/macOS-supported-success)
