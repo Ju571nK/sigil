@@ -113,12 +113,15 @@ assets = [
     { source = "../../LICENSE", dest = "/usr/share/doc/sigil/LICENSE", mode = "0644", doc = true },
     { source = "../../packaging/sysusers.d/sigil.conf", dest = "/usr/lib/sysusers.d/sigil.conf", mode = "0644" },
     { source = "../../packaging/tmpfiles.d/sigil.conf", dest = "/usr/lib/tmpfiles.d/sigil.conf", mode = "0644" },
+    { source = "../../packaging/selinux/sigil.te", dest = "/usr/share/selinux/packages/sigil/sigil.te", mode = "0644" },
+    { source = "../../packaging/selinux/sigil.fc", dest = "/usr/share/selinux/packages/sigil/sigil.fc", mode = "0644" },
 ]
 # No hard runtime deps beyond glibc, which is always present; leave Requires empty.
 post_install_script = """\
 systemctl daemon-reload >/dev/null 2>&1 || :
 command -v systemd-sysusers >/dev/null 2>&1 && systemd-sysusers /usr/lib/sysusers.d/sigil.conf >/dev/null 2>&1 || :
 command -v systemd-tmpfiles >/dev/null 2>&1 && systemd-tmpfiles --create /usr/lib/tmpfiles.d/sigil.conf >/dev/null 2>&1 || :
+if command -v semodule >/dev/null 2>&1 && [ -f /usr/share/selinux/devel/Makefile ]; then ( cd /usr/share/selinux/packages/sigil && make -f /usr/share/selinux/devel/Makefile sigil.pp >/dev/null 2>&1 && semodule -i sigil.pp >/dev/null 2>&1 ) || : ; command -v restorecon >/dev/null 2>&1 && restorecon -R /usr/bin/sigil /var/lib/sigil /var/log/sigil /etc/sigil >/dev/null 2>&1 || : ; fi
 """
 pre_uninstall_script = """\
 if [ "$1" = 0 ] ; then
