@@ -134,4 +134,26 @@ mod tests {
             HookAction::Other { .. }
         ));
     }
+
+    // Latency microbench (spec §11): the in-process normalize+redact+serialize
+    // path is the per-tool-call tax that "always exit 0" would otherwise hide.
+    // 5ms/call is a hugely generous ceiling (real cost is microseconds); the
+    // test exists to catch a pathological regression, not to micro-tune.
+    #[test]
+    fn normalize_redact_serialize_is_fast() {
+        let p = serde_json::json!({
+            "tool_name":"Bash","tool_input":{"command":"a".repeat(200)}
+        });
+        let start = std::time::Instant::now();
+        for _ in 0..1000 {
+            let inv = ClaudeCode.normalize(&p, CaptureLevel::Redacted).unwrap();
+            let _ = serde_json::to_string(&inv).unwrap();
+        }
+        let per = start.elapsed() / 1000;
+        println!("normalize+redact+serialize per-call: {per:?}");
+        assert!(
+            per < std::time::Duration::from_millis(5),
+            "per-call {per:?}"
+        );
+    }
 }
