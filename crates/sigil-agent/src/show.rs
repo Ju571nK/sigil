@@ -518,6 +518,8 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
             format!("tool={tool:?} bucket={bucket:?}"),
         ),
         Evidence::HostMetaSnapshot { .. } => ("host_meta_snapshot", String::new()),
+        Evidence::HookInvocation(_) => ("hook_invocation", String::new()),
+        Evidence::Unknown => ("unknown", String::new()),
     }
 }
 

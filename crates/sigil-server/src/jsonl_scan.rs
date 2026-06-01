@@ -228,6 +228,8 @@ fn filter_match(e: &Event, f: &ScanFilters) -> bool {
         let s = match e.source {
             sigil_core::event::SourceKind::FileSystem => "file_system",
             sigil_core::event::SourceKind::Agent => "agent",
+            sigil_core::event::SourceKind::AgentHook => "agent_hook",
+            sigil_core::event::SourceKind::Unknown => "unknown",
         };
         if !srcs.iter().any(|x| x == s) {
             return false;
