@@ -9,6 +9,7 @@ pub mod doctor;
 pub mod gc_config;
 pub mod hasher;
 pub mod heartbeat;
+pub mod hook_listener;
 pub mod host_meta_snapshot;
 pub mod host_meta_snapshot_task;
 pub mod host_meta_task;
