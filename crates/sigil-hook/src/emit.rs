@@ -1,5 +1,3 @@
-use std::io::Write;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
@@ -10,7 +8,10 @@ use std::time::Duration;
 /// NOTE: `UnixStream::connect()` itself is NOT separately bounded — the
 /// caller's process watchdog (`arm_watchdog`) is the backstop for a stuck
 /// connect.
+#[cfg(unix)]
 pub fn send_envelope(socket: &Path, line: &str, write_timeout: Duration) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
     let stream = match UnixStream::connect(socket) {
         Ok(s) => s,
         Err(_) => return Ok(()), // agent down / socket missing → silent success
@@ -19,6 +20,15 @@ pub fn send_envelope(socket: &Path, line: &str, write_timeout: Duration) -> std:
     let mut stream = stream;
     let _ = stream.write_all(line.as_bytes());
     let _ = stream.write_all(b"\n");
+    Ok(())
+}
+
+/// Non-unix stub. The agent's IPC on Windows is a named pipe (see `control.rs`'s
+/// `#[cfg(windows)]` path); Stage 1 does not wire a named-pipe hook emit yet, so
+/// the emit is a no-op here (fail-open, consistent with a down agent). Named-pipe
+/// emit is a follow-up.
+#[cfg(not(unix))]
+pub fn send_envelope(_socket: &Path, _line: &str, _write_timeout: Duration) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -31,7 +41,7 @@ pub fn arm_watchdog(budget: Duration) {
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[test]

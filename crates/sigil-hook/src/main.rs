@@ -83,6 +83,7 @@ fn minimal_unparsed(
 /// Rocky 9). So: prefer the system socket when it exists (root-daemon), else fall
 /// back to the per-user path (non-root/local agent on the same uid).
 /// `SIGIL_HOOK_SOCKET` overrides both.
+#[cfg(unix)]
 fn hook_socket_path() -> PathBuf {
     if let Ok(p) = std::env::var("SIGIL_HOOK_SOCKET") {
         return PathBuf::from(p);
@@ -96,6 +97,15 @@ fn hook_socket_path() -> PathBuf {
     let tmp = std::env::var("TMPDIR").ok();
     sigil_core::control_proto::resolve_control_socket(uid == 0, xdg, tmp, uid)
         .with_file_name("hook.sock")
+}
+
+/// Non-unix: only the `SIGIL_HOOK_SOCKET` override (the emit is a no-op stub on
+/// Windows — see `emit::send_envelope`), so the value is effectively unused.
+#[cfg(not(unix))]
+fn hook_socket_path() -> PathBuf {
+    std::env::var("SIGIL_HOOK_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_default()
 }
 
 #[derive(Parser)]
