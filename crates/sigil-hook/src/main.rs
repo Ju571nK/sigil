@@ -1,3 +1,4 @@
+mod adapters;
 mod redact;
 
 fn main() {
