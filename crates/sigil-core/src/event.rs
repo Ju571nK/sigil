@@ -207,6 +207,9 @@ pub struct HookInvocationEvidence {
     pub tool_use_id: Option<String>,
     /// Normalized action kind: "bash" | "file_edit" | "mcp_call" | "other".
     pub action_kind: String,
+    /// Tool name when `action_kind == "other"`, else `None`. Carries the
+    /// original tool name (e.g. "WebFetch") for non-Bash/Edit/MCP tools.
+    pub other_label: Option<String>,
     /// blake3 over the raw pre-mask normalized action (lowercase hex).
     pub action_hash: String,
     /// Redacted/capped preview, or `None` under hash_only.
@@ -1010,6 +1013,7 @@ mod tests {
             agent_session_id: None,
             tool_use_id: Some("tu".into()),
             action_kind: "bash".into(),
+            other_label: None,
             action_hash: "cd".repeat(32),
             action_preview: Some("ls".into()),
             capture_level: "redacted".into(),

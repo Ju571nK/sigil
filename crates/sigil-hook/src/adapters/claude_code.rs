@@ -135,6 +135,70 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn normalizes_edit() {
+        // I3: FileEdit adapter — path_hash is a 64-char blake3 hex, path_preview
+        // contains the path under Redacted, and hash is stable across capture levels.
+        let payload = serde_json::json!({
+            "tool_name": "Edit",
+            "tool_input": { "file_path": "/repo/src/main.rs" }
+        });
+        let inv_redacted = ClaudeCode
+            .normalize(&payload, CaptureLevel::Redacted)
+            .unwrap();
+        let inv_hash_only = ClaudeCode
+            .normalize(&payload, CaptureLevel::HashOnly)
+            .unwrap();
+
+        match (inv_redacted.action, inv_hash_only.action) {
+            (
+                HookAction::FileEdit {
+                    path_hash: hash_r,
+                    path_preview: preview_r,
+                    ..
+                },
+                HookAction::FileEdit {
+                    path_hash: hash_h,
+                    path_preview: preview_h,
+                    ..
+                },
+            ) => {
+                // Hash must be 64-char blake3 hex.
+                assert_eq!(hash_r.len(), 64, "path_hash must be 64 hex chars");
+                // Hash must be stable across capture levels (hashed over raw path).
+                assert_eq!(hash_r, hash_h, "path_hash must be identical across levels");
+                // Under Redacted, preview contains the path.
+                let preview = preview_r.expect("Redacted must include path_preview");
+                assert!(
+                    preview.contains("/repo/src/main.rs"),
+                    "path_preview must contain the file path; got: {preview:?}"
+                );
+                // Under HashOnly, no preview.
+                assert!(
+                    preview_h.is_none(),
+                    "HashOnly must not include path_preview"
+                );
+            }
+            _ => panic!("expected FileEdit action for Edit tool"),
+        }
+    }
+
+    #[test]
+    fn normalizes_write_and_multiedit() {
+        // Write and MultiEdit must also produce FileEdit actions.
+        for tool in ["Write", "MultiEdit"] {
+            let p = serde_json::json!({
+                "tool_name": tool,
+                "tool_input": { "file_path": "/tmp/out.txt" }
+            });
+            let inv = ClaudeCode.normalize(&p, CaptureLevel::Redacted).unwrap();
+            assert!(
+                matches!(inv.action, HookAction::FileEdit { .. }),
+                "{tool} must normalize to FileEdit"
+            );
+        }
+    }
+
     // Latency microbench (spec §11): the in-process normalize+redact+serialize
     // path is the per-tool-call tax that "always exit 0" would otherwise hide.
     // 5ms/call is a hugely generous ceiling (real cost is microseconds); the

@@ -5,12 +5,17 @@ use std::time::Duration;
 
 /// Best-effort one-line emit. NEVER returns Err for a normal failure (agent
 /// down, reset, pipe broken) — those are success from the agent's POV.
-pub fn send_envelope(socket: &Path, line: &str, connect_timeout: Duration) -> std::io::Result<()> {
+///
+/// `write_timeout` is applied via `set_write_timeout` on the stream.
+/// NOTE: `UnixStream::connect()` itself is NOT separately bounded — the
+/// caller's process watchdog (`arm_watchdog`) is the backstop for a stuck
+/// connect.
+pub fn send_envelope(socket: &Path, line: &str, write_timeout: Duration) -> std::io::Result<()> {
     let stream = match UnixStream::connect(socket) {
         Ok(s) => s,
         Err(_) => return Ok(()), // agent down / socket missing → silent success
     };
-    stream.set_write_timeout(Some(connect_timeout)).ok();
+    stream.set_write_timeout(Some(write_timeout)).ok();
     let mut stream = stream;
     let _ = stream.write_all(line.as_bytes());
     let _ = stream.write_all(b"\n");

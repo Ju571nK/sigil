@@ -1,6 +1,3 @@
-// Consumed by later tasks (per-agent adapters). Unused items are expected until then.
-#![allow(dead_code)]
-
 use regex::Regex;
 use sigil_core::hook_proto::CaptureLevel;
 use std::sync::OnceLock;

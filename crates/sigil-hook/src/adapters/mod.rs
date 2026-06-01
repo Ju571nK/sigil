@@ -1,6 +1,3 @@
-// Consumed by later tasks (hook dispatch). Unused items are expected until then.
-#![allow(dead_code)]
-
 use sigil_core::event::AiTool;
 use sigil_core::hook_proto::{CaptureLevel, CaptureStatus, HookInvocation};
 pub mod claude_code;

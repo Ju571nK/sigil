@@ -15,6 +15,9 @@ const INSTALL_AGENT_DEFAULT: &str = "claude-code";
 const MAX_STDIN: usize = 1024 * 1024;
 
 fn run_hook(agent: &str, capture: CaptureLevel) -> ! {
+    // Spec §7: a panic on the hot path must never print to stderr and must
+    // still exit 0 so the agent's tool call is never blocked.
+    std::panic::set_hook(Box::new(|_| std::process::exit(0)));
     emit::arm_watchdog(Duration::from_millis(200));
     let adapter = match adapters::for_agent(agent) {
         Some(a) => a,

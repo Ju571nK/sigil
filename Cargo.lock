@@ -3120,8 +3120,6 @@ dependencies = [
  "serde_json",
  "sigil-core",
  "tempfile",
- "time",
- "tokio",
  "uuid",
 ]
 

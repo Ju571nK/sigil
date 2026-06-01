@@ -134,26 +134,33 @@ fn to_event(env: HookEnvelope, peer_uid: u32, host_id: &str) -> sigil_core::even
     let inv = env.payload;
 
     // Decompose the action into normalized fields.
-    let (kind, hash, preview) = match &inv.action {
+    // 4-tuple: (kind, hash, preview, other_label)
+    // other_label is Some(tool_name) only for the Other arm, None for all others.
+    let (kind, hash, preview, other_label) = match &inv.action {
         HookAction::Bash {
             command_hash,
             command_preview,
-        } => ("bash", command_hash.clone(), command_preview.clone()),
+        } => ("bash", command_hash.clone(), command_preview.clone(), None),
         HookAction::FileEdit {
             path_hash,
             path_preview,
             ..
-        } => ("file_edit", path_hash.clone(), path_preview.clone()),
+        } => ("file_edit", path_hash.clone(), path_preview.clone(), None),
         HookAction::McpCall {
             args_hash,
             args_preview,
             ..
-        } => ("mcp_call", args_hash.clone(), args_preview.clone()),
+        } => ("mcp_call", args_hash.clone(), args_preview.clone(), None),
         HookAction::Other {
+            label,
             detail_hash,
             detail_preview,
-            ..
-        } => ("other", detail_hash.clone(), detail_preview.clone()),
+        } => (
+            "other",
+            detail_hash.clone(),
+            detail_preview.clone(),
+            Some(label.clone()),
+        ),
     };
 
     sigil_core::event::Event {
@@ -171,6 +178,7 @@ fn to_event(env: HookEnvelope, peer_uid: u32, host_id: &str) -> sigil_core::even
             agent_session_id: inv.agent_session_id,
             tool_use_id: inv.tool_use_id,
             action_kind: kind.to_string(),
+            other_label,
             action_hash: hash,
             action_preview: preview,
             capture_level: enum_str(&inv.capture_level),
@@ -248,6 +256,44 @@ mod tests {
                 assert_eq!(h.capture_status, "unsupported_agent_schema");
                 assert_eq!(h.action_kind, "bash");
                 assert_eq!(h.peer_uid, 1000);
+                assert_eq!(h.other_label, None, "bash action must not set other_label");
+            }
+            other => panic!("expected HookInvocation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_event_persists_other_label_for_other_action() {
+        // I2: HookAction::Other carries the tool name; it must persist in
+        // HookInvocationEvidence.other_label so operators can filter by tool.
+        let env = HookEnvelope {
+            protocol_version: HOOK_PROTOCOL_VERSION,
+            msg_type: HookMsgType::HookInvocation,
+            request_id: uuid::Uuid::now_v7(),
+            sent_at_unix_ms: 1_700_000_000_000,
+            payload: HookInvocation {
+                agent: sigil_core::event::AiTool::ClaudeCode,
+                agent_session_id: None,
+                tool_use_id: None,
+                action: HookAction::Other {
+                    label: "WebFetch".into(),
+                    detail_hash: "ab".repeat(32),
+                    detail_preview: None,
+                },
+                capture_level: CaptureLevel::Redacted,
+                capture_status: CaptureStatus::Ok,
+                cwd: None,
+            },
+        };
+        let ev = to_event(env, 501, "host-y");
+        match ev.evidence {
+            Evidence::HookInvocation(h) => {
+                assert_eq!(h.action_kind, "other");
+                assert_eq!(
+                    h.other_label,
+                    Some("WebFetch".into()),
+                    "other_label must carry the tool name"
+                );
             }
             other => panic!("expected HookInvocation, got {other:?}"),
         }

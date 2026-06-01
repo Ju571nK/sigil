@@ -136,6 +136,12 @@ mod unix_only {
     /// once the lingering connections close (freeing permits), a valid emit
     /// flows through. Deterministic via timeouts; the core assertion is that the
     /// listener never deadlocks under saturation.
+    ///
+    /// NOTE on non-determinism: the assertion that exactly 32 permits become
+    /// saturated depends on async scheduling — some of the 36 lingering connects
+    /// may be dropped-before-read by the overload guard rather than consuming a
+    /// permit. The REAL invariant being tested is "the accept loop never
+    /// deadlocks under connection saturation", not exact permit accounting.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn hook_listener_survives_connection_overload() {
         let dir = tempfile::tempdir().unwrap();
