@@ -202,8 +202,9 @@ Out of the box, with built-in defaults plus your policy YAML:
 
 ## Architecture
 
-Sigil is a Rust workspace with eight crates: three long-running binaries,
-one operator CLI, one read-only MCP server, and three shared libraries.
+Sigil is a Rust workspace with nine crates: three long-running binaries,
+one operator CLI, one read-only MCP server, one runtime hook, and three
+shared libraries.
 
 **Long-running binaries**
 
@@ -238,6 +239,18 @@ one operator CLI, one read-only MCP server, and three shared libraries.
   Read-only by construction: no write or remediation tools.
   See [`crates/sigil-mcp/README.md`](crates/sigil-mcp/README.md).
 
+**Runtime hook**
+
+- `sigil-hook` — runtime observer at the AI agent **tool boundary**
+  (`sigil-hook` binary). A short-lived process the agent spawns per tool call
+  (Claude Code `PreToolUse` first; the per-agent adapter shape generalizes to
+  Codex/Gemini/Cursor). It normalizes and redacts the call (blake3 hash over
+  the raw text + masked preview) and emits one event to `sigil-agent` over a
+  dedicated `hook.sock`, reusing the spool → sender pipeline. **Observe-only**
+  — never denies, always exits 0, latency-bounded; the agent stamps the kernel
+  peer-uid for attribution. The *runtime* companion to AI Guard's *static*
+  config scoring (#64, Stage 1).
+
 **Libraries**
 
 - `sigil-core` — pure domain library (event, policy, state, hashing, …).
@@ -265,7 +278,7 @@ flowchart LR
             direction TB
             a_pipe["watcher · debouncer · normalizer<br/>hasher · sink_task · state_task"]
             a_aiguard["ai_guard<br/>parsers · rule_packs · ext_script<br/>per-repo discovery · rubric"]
-            a_ctrl["supervisor · policy_apply<br/>policy_reload · doctor · show"]
+            a_ctrl["supervisor · policy_apply · hook_listener<br/>policy_reload · doctor · show"]
         end
 
         subgraph spool["sigil-spool (JSONL=IPC)"]
@@ -274,6 +287,11 @@ flowchart LR
 
         subgraph sender["sigil-sender (bin: sigil-sender)"]
             s_pipe["batch_reader · manifest · transport (HTTPS + rustls)<br/>control_task · agent_ipc · dead_letter · heartbeat"]
+        end
+
+        aiagent(["AI coding agent<br/>Claude Code · Codex · …"])
+        subgraph hook["sigil-hook (bin: sigil-hook)"]
+            hookmods["PreToolUse adapter · redact<br/>one-shot per tool call · observe-only"]
         end
     end
 
@@ -308,6 +326,11 @@ flowchart LR
     FS --> a_aiguard
     a_pipe -- "writes JSONL" --> spool
     a_aiguard -- "writes JSONL" --> spool
+
+    %% Runtime observe plane (#64) — the agent spawns sigil-hook per tool call;
+    %% it emits a redacted HookInvocation into the agent's sink over hook.sock.
+    aiagent -- "PreToolUse spawns" --> hookmods
+    hookmods -- "HookInvocation<br/>hook.sock" --> a_pipe
     spool -- "reads JSONL" --> s_pipe
     s_pipe -- "HTTPS" --> SIEM
     s_pipe -- "mTLS (alt)" --> server
@@ -333,6 +356,7 @@ flowchart LR
     style signer fill:#d1fae5,stroke:#059669,color:#064e3b
     style server fill:#d1fae5,stroke:#059669,color:#064e3b
     style mcp    fill:#d1fae5,stroke:#059669,color:#064e3b
+    style hook   fill:#d1fae5,stroke:#059669,color:#064e3b
 ```
 
 ## Status
@@ -395,8 +419,8 @@ not a requirement.
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
 ```
 
-Installs the five binaries (`sigil`, `sigil-sender`, `sigil-server`,
-`sigil-sign`, `sigil-mcp`) to `~/.local/bin`. Pin a release with `SIGIL_VERSION`, or change
+Installs the six binaries (`sigil`, `sigil-sender`, `sigil-server`,
+`sigil-sign`, `sigil-mcp`, `sigil-hook`) to `~/.local/bin`. Pin a release with `SIGIL_VERSION`, or change
 the location with `SIGIL_INSTALL_DIR`. Every release ships a `SHA256SUMS` file
 (the installer verifies it) plus a build-provenance attestation you can check:
 
