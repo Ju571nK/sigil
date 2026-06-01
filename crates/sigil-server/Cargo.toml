@@ -86,12 +86,16 @@ assets = [
     { source = "../../README.md", dest = "/usr/share/doc/sigil-server/README.md", mode = "0644", doc = true },
     { source = "../../LICENSE", dest = "/usr/share/doc/sigil-server/LICENSE", mode = "0644", doc = true },
     { source = "../../packaging/sysusers.d/sigil.conf", dest = "/usr/lib/sysusers.d/sigil.conf", mode = "0644" },
+    { source = "../../packaging/selinux/sigil.te", dest = "/usr/share/selinux/packages/sigil/sigil.te", mode = "0644" },
+    { source = "../../packaging/selinux/sigil.fc", dest = "/usr/share/selinux/packages/sigil/sigil.fc", mode = "0644" },
 ]
 # Create the sigil user/group so the unit's User=sigil resolves before start
 # (#10 slice 2). Idempotent; no-op when the agent package already created it.
+# Also load the SELinux module (#69) when the policy devel toolchain is present.
 post_install_script = """\
 systemctl daemon-reload >/dev/null 2>&1 || :
 command -v systemd-sysusers >/dev/null 2>&1 && systemd-sysusers /usr/lib/sysusers.d/sigil.conf >/dev/null 2>&1 || :
+if command -v semodule >/dev/null 2>&1 && [ -f /usr/share/selinux/devel/Makefile ]; then ( cd /usr/share/selinux/packages/sigil && make -f /usr/share/selinux/devel/Makefile sigil.pp >/dev/null 2>&1 && semodule -i sigil.pp >/dev/null 2>&1 ) || : ; command -v restorecon >/dev/null 2>&1 && restorecon -R /usr/bin/sigil-server /var/lib/sigil-server /var/log/sigil-server /etc/sigil >/dev/null 2>&1 || : ; fi
 """
 pre_uninstall_script = """\
 if [ "$1" = 0 ] ; then

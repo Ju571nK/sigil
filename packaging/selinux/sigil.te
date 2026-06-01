@@ -1,0 +1,154 @@
+policy_module(sigil, 0.1.0)
+
+## Sigil SELinux policy (#69). Confines the three de-rooted sigil daemons (#10)
+## into dedicated domains instead of unconfined_service_t. Authored from the
+## observed access on Rocky/RHEL 9 (audit2allow), tightened to interfaces.
+
+require {
+    type cgroup_t;
+    type var_run_t;
+}
+
+########################################
+# Domains. The units keep systemd's NoNewPrivileges=yes + sandboxing;
+# init_nnp_daemon_domain grants nnp_transition so the exec-time domain
+# transition still happens under NNP — both hardenings coexist, no drop-in.
+########################################
+type sigil_agent_t;
+type sigil_agent_exec_t;
+init_daemon_domain(sigil_agent_t, sigil_agent_exec_t)
+init_nnp_daemon_domain(sigil_agent_t)
+
+type sigil_sender_t;
+type sigil_sender_exec_t;
+init_daemon_domain(sigil_sender_t, sigil_sender_exec_t)
+init_nnp_daemon_domain(sigil_sender_t)
+
+type sigil_server_t;
+type sigil_server_exec_t;
+init_daemon_domain(sigil_server_t, sigil_server_exec_t)
+init_nnp_daemon_domain(sigil_server_t)
+
+########################################
+# File / dir / socket / port types.
+########################################
+type sigil_conf_t;
+files_config_file(sigil_conf_t)
+
+type sigil_var_lib_t;
+files_type(sigil_var_lib_t)
+
+type sigil_var_log_t;
+logging_log_file(sigil_var_log_t)
+
+type sigil_sender_var_lib_t;
+files_type(sigil_sender_var_lib_t)
+
+type sigil_sender_var_log_t;
+logging_log_file(sigil_sender_var_log_t)
+
+type sigil_server_var_lib_t;
+files_type(sigil_server_var_lib_t)
+
+type sigil_server_var_log_t;
+logging_log_file(sigil_server_var_log_t)
+
+########################################
+# Common to all three daemons.
+########################################
+# systemd places each service in a cgroup it reads at startup.
+allow sigil_agent_t cgroup_t:dir search;
+allow sigil_agent_t cgroup_t:file getattr;
+allow sigil_sender_t cgroup_t:dir search;
+allow sigil_sender_t cgroup_t:file getattr;
+allow sigil_server_t cgroup_t:dir search;
+allow sigil_server_t cgroup_t:file getattr;
+
+# Read /etc/sigil (config + mTLS material).
+read_files_pattern(sigil_agent_t, sigil_conf_t, sigil_conf_t)
+list_dirs_pattern(sigil_agent_t, sigil_conf_t, sigil_conf_t)
+read_files_pattern(sigil_sender_t, sigil_conf_t, sigil_conf_t)
+list_dirs_pattern(sigil_sender_t, sigil_conf_t, sigil_conf_t)
+read_files_pattern(sigil_server_t, sigil_conf_t, sigil_conf_t)
+list_dirs_pattern(sigil_server_t, sigil_conf_t, sigil_conf_t)
+
+########################################
+# Agent — file-integrity monitoring (reads arbitrary files by design),
+# user enumeration, host fingerprint, own state/events/control-socket.
+########################################
+# FIM: read any file/dir and watch them for changes (inotify).
+files_read_all_files(sigil_agent_t)
+files_list_all(sigil_agent_t)
+files_getattr_all_dirs(sigil_agent_t)
+# Reading other users' files as root needs DAC override.
+allow sigil_agent_t self:capability { dac_read_search dac_override };
+# inotify watches across the tree.
+allow sigil_agent_t { file_type }:dir watch;
+allow sigil_agent_t { file_type }:file watch;
+
+# User enumeration (passwd / nsswitch).
+auth_use_nsswitch(sigil_agent_t)
+
+# Host fingerprint: hostname, resolv.conf, network interfaces (runs `ip`/ifconfig,
+# reads /proc/net + netlink).
+sysnet_read_config(sigil_agent_t)
+sysnet_exec_ifconfig(sigil_agent_t)
+kernel_read_network_state(sigil_agent_t)
+kernel_read_system_state(sigil_agent_t)
+corecmd_exec_bin(sigil_agent_t)
+allow sigil_agent_t self:netlink_route_socket { bind create getattr nlmsg_read read setopt write };
+allow sigil_agent_t self:unix_dgram_socket { create ioctl };
+
+# Own state.db (/var/lib/sigil) + events JSONL (/var/log/sigil).
+manage_dirs_pattern(sigil_agent_t, sigil_var_lib_t, sigil_var_lib_t)
+manage_files_pattern(sigil_agent_t, sigil_var_lib_t, sigil_var_lib_t)
+allow sigil_agent_t sigil_var_lib_t:file map;
+manage_dirs_pattern(sigil_agent_t, sigil_var_log_t, sigil_var_log_t)
+manage_files_pattern(sigil_agent_t, sigil_var_log_t, sigil_var_log_t)
+
+# Control socket. systemd's RuntimeDirectory=sigil creates /run/sigil and
+# labels it var_run_t; the agent creates + listens on the stream socket there.
+allow sigil_agent_t var_run_t:dir { search getattr add_name remove_name write };
+allow sigil_agent_t var_run_t:sock_file manage_sock_file_perms;
+allow sigil_agent_t self:unix_stream_socket { create bind listen accept getattr getopt setopt };
+
+########################################
+# Sender — reads the agent spool, connects the control socket, ships over the
+# network (mTLS), writes its own state/dead-letter.
+########################################
+# Read the agent's events spool (sigil_var_log_t).
+list_dirs_pattern(sigil_sender_t, sigil_var_log_t, sigil_var_log_t)
+read_files_pattern(sigil_sender_t, sigil_var_log_t, sigil_var_log_t)
+
+# Own state + dead-letter.
+manage_dirs_pattern(sigil_sender_t, sigil_sender_var_lib_t, sigil_sender_var_lib_t)
+manage_files_pattern(sigil_sender_t, sigil_sender_var_lib_t, sigil_sender_var_lib_t)
+manage_dirs_pattern(sigil_sender_t, sigil_sender_var_log_t, sigil_sender_var_log_t)
+manage_files_pattern(sigil_sender_t, sigil_sender_var_log_t, sigil_sender_var_log_t)
+
+# Connect to the agent's control socket (under /run/sigil = var_run_t).
+allow sigil_sender_t var_run_t:dir search;
+allow sigil_sender_t var_run_t:sock_file { getattr write };
+allow sigil_sender_t sigil_agent_t:unix_stream_socket connectto;
+
+# Network egress (HTTPS/mTLS to the server) + DNS.
+allow sigil_sender_t self:tcp_socket { create connect getattr getopt setopt read write };
+corenet_tcp_connect_all_ports(sigil_sender_t)
+corenet_tcp_sendrecv_generic_node(sigil_sender_t)
+sysnet_dns_name_resolve(sigil_sender_t)
+auth_use_nsswitch(sigil_sender_t)
+
+########################################
+# Server — listens on its TCP port, accepts mTLS, writes its own state.
+########################################
+manage_dirs_pattern(sigil_server_t, sigil_server_var_lib_t, sigil_server_var_lib_t)
+manage_files_pattern(sigil_server_t, sigil_server_var_lib_t, sigil_server_var_lib_t)
+manage_dirs_pattern(sigil_server_t, sigil_server_var_log_t, sigil_server_var_log_t)
+manage_files_pattern(sigil_server_t, sigil_server_var_log_t, sigil_server_var_log_t)
+
+# Listen + accept on the sigil port.
+allow sigil_server_t self:tcp_socket { create bind listen accept getattr getopt setopt shutdown read write };
+corenet_tcp_bind_generic_node(sigil_server_t)
+corenet_tcp_bind_all_unreserved_ports(sigil_server_t)
+sysnet_dns_name_resolve(sigil_server_t)
+auth_use_nsswitch(sigil_server_t)
