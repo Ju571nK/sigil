@@ -1,5 +1,6 @@
 mod adapters;
 mod emit;
+mod install;
 mod redact;
 
 use sigil_core::hook_proto::*;
@@ -8,6 +9,8 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand, ValueEnum};
+
+const INSTALL_AGENT_DEFAULT: &str = "claude-code";
 
 const MAX_STDIN: usize = 1024 * 1024;
 
@@ -97,6 +100,29 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
         capture: CaptureArg,
     },
+
+    /// Print (or write) the sigil-hook registration into an agent's settings.
+    Install {
+        /// Agent to register with. Currently only "claude-code" is supported.
+        #[arg(long, default_value = INSTALL_AGENT_DEFAULT)]
+        agent: String,
+        /// Apply the change to the settings file (default: print only).
+        #[arg(long)]
+        write: bool,
+        /// Capture level for the registered hook command.
+        #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
+        capture: CaptureArg,
+    },
+
+    /// Remove the sigil-hook registration from an agent's settings.
+    Uninstall {
+        /// Agent to deregister from.
+        #[arg(long, default_value = INSTALL_AGENT_DEFAULT)]
+        agent: String,
+        /// Apply the change to the settings file (default: print what would be removed).
+        #[arg(long)]
+        write: bool,
+    },
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -120,5 +146,156 @@ fn main() {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::ClaudeCode { capture } => run_hook("claude-code", capture.into()),
+        Cmd::Install {
+            agent,
+            write,
+            capture,
+        } => cmd_install(&agent, write, capture),
+        Cmd::Uninstall { agent, write } => cmd_uninstall(&agent, write),
     }
+}
+
+fn exe_path() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "sigil-hook".to_string())
+}
+
+fn cmd_install(agent: &str, write: bool, capture: CaptureArg) {
+    let capture_str = match capture {
+        CaptureArg::Redacted => "redacted",
+        CaptureArg::Raw => "raw",
+        CaptureArg::HashOnly => "hash-only",
+    };
+    let exe = exe_path();
+
+    if !write {
+        print!("{}", install::render_block(&exe, agent, capture_str));
+        return;
+    }
+
+    // Resolve the settings path for this agent.
+    let sp = match install::settings_path(agent) {
+        Some(p) => p,
+        None => {
+            eprintln!("error: unsupported agent '{agent}'");
+            std::process::exit(1);
+        }
+    };
+
+    // Read existing settings or start from an empty object.
+    let mut root: serde_json::Value = if sp.exists() {
+        let raw = match std::fs::read(&sp) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error reading {}: {e}", sp.display());
+                std::process::exit(1);
+            }
+        };
+        serde_json::from_slice(&raw).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let changed = install::merge_into(&mut root, &exe, agent, capture_str);
+
+    // Write back atomically: write to a temp file beside the target, then rename.
+    let pretty = serde_json::to_string_pretty(&root).unwrap_or_default();
+    if let Some(parent) = sp.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("error creating {}: {e}", parent.display());
+            std::process::exit(1);
+        }
+    }
+
+    // Atomic write: temp file + rename.
+    let tmp_path = sp.with_extension("json.sigil-tmp");
+    if let Err(e) = std::fs::write(&tmp_path, pretty.as_bytes()) {
+        eprintln!("error writing temp file {}: {e}", tmp_path.display());
+        std::process::exit(1);
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &sp) {
+        eprintln!("error renaming to {}: {e}", sp.display());
+        let _ = std::fs::remove_file(&tmp_path);
+        std::process::exit(1);
+    }
+
+    // Write baseline / update discovery index.
+    if let Err(e) = install::write_baseline(agent, &sp, &exe, agent, capture_str, "*") {
+        eprintln!("warning: could not write baseline: {e}");
+    }
+
+    if changed {
+        eprintln!("sigil-hook: installed for {agent} in {}", sp.display());
+    } else {
+        eprintln!("sigil-hook: already installed for {agent} (no change)");
+    }
+}
+
+fn cmd_uninstall(agent: &str, write: bool) {
+    let exe = exe_path();
+
+    let sp = match install::settings_path(agent) {
+        Some(p) => p,
+        None => {
+            eprintln!("error: unsupported agent '{agent}'");
+            std::process::exit(1);
+        }
+    };
+
+    if !sp.exists() {
+        eprintln!(
+            "sigil-hook: settings file not found at {} — nothing to remove",
+            sp.display()
+        );
+        return;
+    }
+
+    let raw = match std::fs::read(&sp) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error reading {}: {e}", sp.display());
+            std::process::exit(1);
+        }
+    };
+    let mut root: serde_json::Value = serde_json::from_slice(&raw).unwrap_or(serde_json::json!({}));
+
+    let count = install::count_sigil_entries(&root, &exe);
+    if count == 0 {
+        eprintln!(
+            "sigil-hook: no entries found for {} in {}",
+            exe,
+            sp.display()
+        );
+        return;
+    }
+
+    if !write {
+        eprintln!(
+            "sigil-hook: would remove {count} entry/entries for {exe} from {} (pass --write to apply)",
+            sp.display()
+        );
+        return;
+    }
+
+    install::remove_from(&mut root, &exe);
+
+    let pretty = serde_json::to_string_pretty(&root).unwrap_or_default();
+    let tmp_path = sp.with_extension("json.sigil-tmp");
+    if let Err(e) = std::fs::write(&tmp_path, pretty.as_bytes()) {
+        eprintln!("error writing temp file {}: {e}", tmp_path.display());
+        std::process::exit(1);
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &sp) {
+        eprintln!("error renaming to {}: {e}", sp.display());
+        let _ = std::fs::remove_file(&tmp_path);
+        std::process::exit(1);
+    }
+
+    eprintln!(
+        "sigil-hook: removed {count} entry/entries for {agent} from {}",
+        sp.display()
+    );
 }
