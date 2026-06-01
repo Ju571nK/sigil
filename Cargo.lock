@@ -3109,6 +3109,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sigil-hook"
+version = "0.2.1"
+dependencies = [
+ "blake3",
+ "clap",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sigil-core",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "sigil-mcp"
 version = "0.2.1"
 dependencies = [

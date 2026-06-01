@@ -20,6 +20,11 @@ pub enum Severity {
 pub enum SourceKind {
     FileSystem,
     Agent,
+    /// sigil-hook runtime observation (#64).
+    AgentHook,
+    /// Forward-compat fallback (see Evidence::Unknown).
+    #[serde(other)]
+    Unknown,
 }
 
 /// Technical identifier of the observed thing.
@@ -188,6 +193,29 @@ pub enum AiGuardReason {
     /// Phase 3b.8 — the agent's default approval mode auto-approves a class
     /// of tool calls without prompting (e.g. Gemini `defaultApprovalMode: "auto_edit"`).
     AutoApprovalEnabled { mode: String },
+}
+
+/// Persisted form of a hook observation (#64). Distinct from the IPC
+/// `hook_proto::HookInvocation` so the SIEM schema and the IPC schema evolve
+/// independently. `peer_uid` is stamped by the agent from the kernel
+/// (`SO_PEERCRED`), never self-reported by the hook.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct HookInvocationEvidence {
+    pub agent: AiTool,
+    pub peer_uid: u32,
+    pub agent_session_id: Option<String>,
+    pub tool_use_id: Option<String>,
+    /// Normalized action kind: "bash" | "file_edit" | "mcp_call" | "other".
+    pub action_kind: String,
+    /// Tool name when `action_kind == "other"`, else `None`. Carries the
+    /// original tool name (e.g. "WebFetch") for non-Bash/Edit/MCP tools.
+    pub other_label: Option<String>,
+    /// blake3 over the raw pre-mask normalized action (lowercase hex).
+    pub action_hash: String,
+    /// Redacted/capped preview, or `None` under hash_only.
+    pub action_preview: Option<String>,
+    pub capture_level: String,
+    pub capture_status: String,
 }
 
 /// Phase 3b.4-pre — full host identity / OS / network snapshot, emitted by
@@ -407,6 +435,12 @@ pub enum Evidence {
         /// unchanged since last emit). `false` = boot scan or change detected.
         is_reattestation: bool,
     },
+    /// sigil-hook Stage 1 (#64). One observed agent tool call.
+    HookInvocation(HookInvocationEvidence),
+    /// Forward-compat: an evidence kind this build doesn't recognize. A newer
+    /// producer's variant deserializes here instead of failing the whole event.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Schema version. Bumps follow the policy in spec section 3.3.
@@ -969,6 +1003,40 @@ mod tests {
         let j = serde_json::to_value(&a).unwrap();
         assert_eq!(j["kind"], "auto_approval_enabled");
         assert_eq!(j["mode"], "auto_edit");
+    }
+
+    #[test]
+    fn hook_invocation_event_round_trips() {
+        let ev = Evidence::HookInvocation(HookInvocationEvidence {
+            agent: AiTool::ClaudeCode,
+            peer_uid: 1000,
+            agent_session_id: None,
+            tool_use_id: Some("tu".into()),
+            action_kind: "bash".into(),
+            other_label: None,
+            action_hash: "cd".repeat(32),
+            action_preview: Some("ls".into()),
+            capture_level: "redacted".into(),
+            capture_status: "ok".into(),
+        });
+        let j = serde_json::to_string(&ev).unwrap();
+        assert!(j.contains("\"kind\":\"hook_invocation\""));
+        let back: Evidence = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn unknown_evidence_kind_does_not_fail_deserialize() {
+        let j = r#"{"kind":"some_future_kind","whatever":1}"#;
+        let back: Evidence = serde_json::from_str(j).unwrap();
+        assert!(matches!(back, Evidence::Unknown));
+    }
+
+    #[test]
+    fn unknown_source_kind_does_not_fail_deserialize() {
+        let j = r#"{"kind":"some_future_source"}"#;
+        let back: SourceKind = serde_json::from_str(j).unwrap();
+        assert!(matches!(back, SourceKind::Unknown));
     }
 
     #[test]

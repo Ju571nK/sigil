@@ -136,6 +136,7 @@ pub fn apply_event(host: &mut HostSummary, event: &Event) {
         | Evidence::TlsFailure { .. }
         | Evidence::EventUnprocessableLocal { .. }
         | Evidence::ServerProtocolViolation { .. } => { /* identity + severity only */ }
+        Evidence::HookInvocation(_) | Evidence::Unknown => { /* not indexed in Stage 1 */ }
     }
 }
 

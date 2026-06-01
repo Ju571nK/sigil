@@ -691,6 +691,31 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         );
     }
 
+    // Hook IPC listener (sigil-hook Stage 1 #64): sits in the same socket
+    // directory as the control socket, at `hook.sock`. One-way: emitters write
+    // HookEnvelope JSON lines; no response is ever sent. Peer-cred stamping,
+    // overload reject, and try_send are handled inside `hook_listener::serve`.
+    #[cfg(unix)]
+    {
+        let hook_sock = cfg.control_socket.with_file_name("hook.sock");
+        let tx_hook = tx_sink.clone();
+        let host_id_hook = host_id.clone();
+        sup.track(
+            "hook_listener",
+            tokio::spawn(async move {
+                if let Err(e) =
+                    crate::hook_listener::serve(hook_sock.clone(), tx_hook, host_id_hook).await
+                {
+                    tracing::error!(
+                        error = ?e,
+                        socket = %hook_sock.display(),
+                        "hook IPC listener exited; hook events will not be captured"
+                    );
+                }
+            }),
+        );
+    }
+
     // Drop-report fan-in: forward DropReports to sink as RateLimitExceeded events.
     {
         let tx_sink_dr = tx_sink.clone();

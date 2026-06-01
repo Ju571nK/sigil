@@ -10,6 +10,7 @@ pub mod control_proto;
 pub mod debounce;
 pub mod event;
 pub mod hashing;
+pub mod hook_proto;
 pub mod host_id;
 pub mod host_meta;
 pub mod license;

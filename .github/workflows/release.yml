@@ -59,7 +59,7 @@ jobs:
           ver="${GITHUB_REF_NAME#v}"
           dist="sigil-${ver}-${{ matrix.target }}"
           mkdir "$dist"
-          for b in sigil sigil-sender sigil-server sigil-sign sigil-mcp; do
+          for b in sigil sigil-sender sigil-server sigil-sign sigil-mcp sigil-hook; do
             cp "target/${{ matrix.target }}/release/$b" "$dist/"
           done
           cp README.md LICENSE NOTICE "$dist/" 2>/dev/null || true
@@ -72,7 +72,7 @@ jobs:
           $ver = "${env:GITHUB_REF_NAME}" -replace '^v',''
           $dist = "sigil-$ver-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $dist | Out-Null
-          foreach ($b in 'sigil','sigil-sender','sigil-server','sigil-sign','sigil-mcp') {
+          foreach ($b in 'sigil','sigil-sender','sigil-server','sigil-sign','sigil-mcp','sigil-hook') {
             Copy-Item "target/${{ matrix.target }}/release/$b.exe" $dist
           }
           Copy-Item README.md,LICENSE,NOTICE $dist -ErrorAction SilentlyContinue
@@ -168,7 +168,7 @@ jobs:
             tgz="dist/sigil-${ver}-${tgt}.tar.gz"
             d="$(mktemp -d)"; tar -xzf "$tgz" -C "$d"
             inner="$d/sigil-${ver}-${tgt}"
-            for b in sigil sigil-sender sigil-server sigil-sign sigil-mcp; do
+            for b in sigil sigil-sender sigil-server sigil-sign sigil-mcp sigil-hook; do
               args+=(--artifact "name=${b},target=${tgt},file=${inner}/${b}")
             done
           done
@@ -221,7 +221,7 @@ jobs:
           Download the `.zip` for your architecture (`x86_64` for most PCs,
           `aarch64` for Arm devices such as Surface Pro X) and add it to your PATH.
 
-          Every archive contains all five binaries: `sigil`, `sigil-sender`, `sigil-server`, `sigil-sign`, `sigil-mcp`.
+          Every archive contains all six binaries: `sigil`, `sigil-sender`, `sigil-server`, `sigil-sign`, `sigil-mcp`, `sigil-hook`.
 
           `sigil-mcp` is the read-only fleet MCP server — point an MCP client (Claude Desktop/Code) at a `sigil-server`'s read API to query and reason over fleet posture. See [crates/sigil-mcp/README.md](https://github.com/Ju571nK/sigil/blob/main/crates/sigil-mcp/README.md).
 
