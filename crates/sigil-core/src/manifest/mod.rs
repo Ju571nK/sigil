@@ -15,8 +15,8 @@ pub const MANIFEST_SCHEMA_VERSION: u8 = 1;
 /// CI secret and is used by the release workflow to sign each release's build
 /// manifest; `sigil doctor --verify-self` checks a manifest against these keys.
 pub const SIGIL_BUILD_PUBKEYS: &[(&str, &str)] = &[(
-    "sigil-build-2026a",
-    "ed25519:NfkTZEW7tjw/XMoBc39dUs05mpqO+tUGhaqqt1tEy9c=",
+    "sigil-build-2026b",
+    "ed25519:82p5N6z+3HmSUPg/AmZlQO8CVIyZIjriYwiPJAXMDn8=",
 )];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
