@@ -1,6 +1,6 @@
 use crate::local::LocalUpstream;
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
+use rmcp::model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 use std::sync::Arc;
 
@@ -60,6 +60,12 @@ impl SigilLocal {
 impl ServerHandler for SigilLocal {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
+            // Single-host identity: this server only ever exposes THIS machine's
+            // posture. Operators who want the fleet run `sigil-fleet` instead.
+            server_info: Implementation {
+                name: "sigil-check".to_string(),
+                ..Implementation::from_build_env()
+            },
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
                 "Read-only view of THIS machine's Sigil AI Guard posture (no fleet, no server). \

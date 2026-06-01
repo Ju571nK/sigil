@@ -1,7 +1,7 @@
 use crate::upstream::Upstream;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
+use rmcp::model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::schemars;
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 use serde::Deserialize;
@@ -132,12 +132,19 @@ impl SigilFleet {
 impl ServerHandler for SigilFleet {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
+            // Operator-facing fleet view — distinct identity from the single-host
+            // `sigil-check` (local) server so clients can tell the two apart.
+            server_info: Implementation {
+                name: "sigil-fleet".to_string(),
+                ..Implementation::from_build_env()
+            },
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
-                "Read-only access to a Sigil fleet's security posture. \
-                 Survey with fleet_risk/list_hosts, drill in with get_host, \
-                 investigate over time with query_events. There are no write \
-                 or remediation tools — this server cannot change anything."
+                "Read-only access to a Sigil fleet's security posture, for operators \
+                 (run alongside sigil-server / sigil-manager). Survey with \
+                 fleet_risk/list_hosts, drill in with get_host, investigate over time \
+                 with query_events. There are no write or remediation tools — this \
+                 server cannot change anything."
                     .to_string(),
             ),
             ..Default::default()
