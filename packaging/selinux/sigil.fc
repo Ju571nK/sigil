@@ -1,0 +1,18 @@
+# Sigil file contexts (#69). Order: -server / -sender before the bare /var/lib/sigil
+# regex isn't required (the regex needs a following '/' so '-server' won't match),
+# but list them explicitly for clarity.
+
+/usr/bin/sigil          --      gen_context(system_u:object_r:sigil_agent_exec_t,s0)
+/usr/bin/sigil-sender   --      gen_context(system_u:object_r:sigil_sender_exec_t,s0)
+/usr/bin/sigil-server   --      gen_context(system_u:object_r:sigil_server_exec_t,s0)
+
+/etc/sigil(/.*)?                gen_context(system_u:object_r:sigil_conf_t,s0)
+
+/var/lib/sigil(/.*)?            gen_context(system_u:object_r:sigil_var_lib_t,s0)
+/var/log/sigil(/.*)?            gen_context(system_u:object_r:sigil_var_log_t,s0)
+
+/var/lib/sigil-sender(/.*)?     gen_context(system_u:object_r:sigil_sender_var_lib_t,s0)
+/var/log/sigil-sender(/.*)?     gen_context(system_u:object_r:sigil_sender_var_log_t,s0)
+
+/var/lib/sigil-server(/.*)?     gen_context(system_u:object_r:sigil_server_var_lib_t,s0)
+/var/log/sigil-server(/.*)?     gen_context(system_u:object_r:sigil_server_var_log_t,s0)
