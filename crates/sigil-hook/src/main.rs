@@ -76,8 +76,21 @@ fn minimal_unparsed(
     }
 }
 
-/// Same directory the agent's control socket resolves to, but named hook.sock.
+/// Resolve the agent's hook socket. In the root-daemon deployment the agent
+/// (root) binds the SYSTEM socket `/var/run/sigil/hook.sock`, but a hook spawned
+/// by the agent runs as the *developer's* user — resolving by the hook's own uid
+/// would point at a per-user runtime path the daemon never binds (verified on
+/// Rocky 9). So: prefer the system socket when it exists (root-daemon), else fall
+/// back to the per-user path (non-root/local agent on the same uid).
+/// `SIGIL_HOOK_SOCKET` overrides both.
 fn hook_socket_path() -> PathBuf {
+    if let Ok(p) = std::env::var("SIGIL_HOOK_SOCKET") {
+        return PathBuf::from(p);
+    }
+    let system = PathBuf::from("/var/run/sigil/hook.sock");
+    if system.exists() {
+        return system;
+    }
     let uid = unsafe { libc::geteuid() };
     let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
     let tmp = std::env::var("TMPDIR").ok();
