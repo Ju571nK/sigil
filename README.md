@@ -29,8 +29,11 @@ separate project: [`sigil-manager`](https://github.com/Ju571nK/sigil-manager).)
 
 ![sigil-manager fleet dashboard — an Alerts console listing AI Guard risk events across multiple hosts: Sandbox Disabled on Codex and No Sandbox on Claude Code flagged CRITICAL, an MCP Server Local Command on Cursor at MEDIUM, plus lower-severity findings across Gemini, Continue.dev, and Claude Desktop, each with host, severity, and status](docs/sigil-manager01.png)
 
-Underneath that dashboard the same posture is **queryable** over plain MCP. Here
-a real Codex (`gpt-5.5`) session asks Sigil's read-only tools to find the
+Underneath that dashboard the same posture is **queryable** over plain MCP, in
+two read-only surfaces: **`sigil-check`** on a developer's own machine (this host
+only — the default an AI coding agent registers), and **`sigil-fleet`** for
+operators, exposing the whole fleet through `sigil-server`. The demo below is the
+operator `sigil-fleet` view: a real Codex (`gpt-5.5`) session asks it to find the
 riskiest host in the fleet and explain it — no config is touched, the model just
 *reads* posture and reasons over it:
 
@@ -295,8 +298,9 @@ flowchart LR
     %% Optional, exploratory — an internal or external LLM for deeper analysis
     llm["LLM analysis<br/>internal or external<br/>(optional · exploratory)"]:::optional
 
-    %% Optional — read-only fleet access for an MCP client (Claude Desktop/Code)
-    mcp["sigil-mcp<br/>read-only fleet MCP server<br/>(GET only · optional)"]
+    %% Optional — operator fleet view (sigil-fleet) for an MCP client; the
+    %% per-developer default (sigil-check) reads the local agent, not the server.
+    mcp["sigil-mcp<br/>sigil-fleet: read-only fleet view<br/>(operator · GET only · optional)"]
     mcpclient(["MCP client<br/>(Claude Desktop / Code)"]):::optional
 
     %% Data plane
