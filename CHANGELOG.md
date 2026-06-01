@@ -7,8 +7,25 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-01
+
 ### Added
 
+- **aarch64 prebuilt binaries, `.deb`/`.rpm`, and an ed25519-signed build
+  manifest** (#12, #13). Releases now ship `x86_64` **and** `aarch64` Linux
+  packages, plus a `build-manifest.json` whose per-arch blake3 hashes are signed
+  with the compiled-in `SIGIL_BUILD_PUBKEYS` trust anchor; `sigil doctor
+  --verify-self` checks the running binary against it. `packaging/build.sh
+  --target` cross-builds the OS packages.
+- **`sigil-mcp --print-config [codex|claude]`** (#72). Emits a ready-to-paste MCP
+  client registration block that pins the binary's **absolute** path, so
+  registration works even when the client doesn't inherit your shell `PATH`.
+- **SELinux policy module for the three daemons** (#69). Ships
+  `packaging/selinux/sigil.{te,fc}` and loads it from the `.rpm` post-install
+  (guarded — a no-op without the SELinux policy devel toolchain), confining the
+  agent, sender, and server into dedicated domains
+  (`sigil_agent_t`/`sigil_sender_t`/`sigil_server_t`) that coexist with the
+  units' `NoNewPrivileges=yes` hardening. Verified enforcing-clean on Rocky 9.
 - **`sigil-mcp` local mode — individual self-assessment, no server** (#55).
   When `SIGIL_SERVER_BASE_URL` is unset, `sigil-mcp` reads the local
   `sigil-agent` control socket instead of a fleet read API and exposes *this
@@ -53,6 +70,10 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ### Fixed
 
+- **`query_events` multi-host filter** (#73). The MCP `query_events` tool and the
+  server read API disagreed on the `host_id` filter encoding — repeated params
+  tripped the server's `serde_urlencoded` deserializer ("expected a sequence",
+  HTTP 400). Both sides now use one comma-separated `host_id` param.
 - **`sigil-mcp` local-mode socket trust** (#57). The local upstream now verifies
   the control-socket peer is root or the current user (via
   `UnixStream::peer_cred`) before trusting its `DoctorAiGuardReport`, closing a
@@ -72,6 +93,13 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ### Changed
 
+- **`sigil-mcp` defaults to single-host `sigil-check`; the fleet view is the
+  operator-only `sigil-fleet`** (#80). The two auto-detected modes now register
+  under distinct MCP server names: `sigil-check` (no server URL) exposes only
+  *this* host's posture and is what `--print-config` emits by default, while the
+  fleet-wide `sigil-fleet` (pointed at a `sigil-server` read API) is documented
+  as an operator surface to run beside `sigil-server` / `sigil-manager`. No tools
+  were removed — naming, default posture, and docs only.
 - `sigil doctor`'s events-directory permission check is refactored around a pure
   `classify_events_dir_perms` classifier (mirrors the existing socket
   classifier) and validates `root:sigil` ownership; behavior is unchanged, the
