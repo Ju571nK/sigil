@@ -40,6 +40,7 @@ proptest! {
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -67,6 +68,7 @@ proptest! {
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -80,6 +82,7 @@ proptest! {
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };

@@ -103,6 +103,41 @@ impl AiGuardParser for AntigravityParser {
     }
 }
 
+/// Per-repo parser: `<repo>/.antigravity/settings.json` (sandbox + approval).
+/// Project-scope MCP config is not modeled (MCP lives in the shared user-global
+/// `~/.gemini/config/mcp_config.json`).
+pub struct AntigravityProjectParser {
+    pub repo_root: PathBuf,
+}
+
+impl AntigravityProjectParser {
+    fn settings(&self) -> PathBuf {
+        self.repo_root.join(".antigravity").join("settings.json")
+    }
+}
+
+impl AiGuardParser for AntigravityProjectParser {
+    fn tool(&self) -> AiTool {
+        AiTool::Antigravity
+    }
+    fn scope(&self) -> AiGuardScope {
+        AiGuardScope::Project {
+            path: self.repo_root.clone(),
+        }
+    }
+    fn watched_paths(&self, _home: &Path) -> Vec<PathBuf> {
+        vec![self.settings()]
+    }
+    fn assess(&self, _home: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
+        let mut out = Vec::new();
+        if let Some(settings) = read_json(&self.settings())? {
+            emit_sandbox(&settings, &mut out);
+            emit_approval(&settings, &mut out);
+        }
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +251,27 @@ mod tests {
     fn tool_and_scope() {
         assert_eq!(AntigravityParser.tool(), AiTool::Antigravity);
         assert_eq!(AntigravityParser.scope(), AiGuardScope::UserGlobal);
+    }
+    #[test]
+    fn project_parser_scope_and_detect() {
+        let d = tempdir().unwrap();
+        let repo = d.path().join("repoX");
+        std::fs::create_dir_all(repo.join(".antigravity")).unwrap();
+        std::fs::write(
+            repo.join(".antigravity").join("settings.json"),
+            r#"{"enableTerminalSandbox":false,"approval_mode":"yolo"}"#,
+        )
+        .unwrap();
+        let p = AntigravityProjectParser {
+            repo_root: repo.clone(),
+        };
+        let reasons = p.assess(Path::new("/unused")).unwrap();
+        assert!(reasons
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::SandboxDisabled)));
+        assert!(reasons
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
+        assert_eq!(p.scope(), AiGuardScope::Project { path: repo });
     }
 }

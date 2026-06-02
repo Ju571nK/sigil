@@ -139,6 +139,10 @@ pub struct PolicyDocument {
     /// `<subdir>/.cursor/mcp.json` marker.
     #[serde(default)]
     pub cursor_workspaces: Vec<String>,
+    /// Antigravity workspace roots. 1-level scan for
+    /// `<subdir>/.antigravity/settings.json` marker.
+    #[serde(default)]
+    pub antigravity_workspaces: Vec<String>,
     /// Phase 3b.7 — operator-supplied rule packs (declarative scan rules).
     /// Wire-additive; merged by id with sigil-rules-basic defaults.
     #[serde(default)]
@@ -215,6 +219,7 @@ pub struct EffectivePolicy {
     pub codex_workspaces: Vec<String>,
     pub gemini_workspaces: Vec<String>,
     pub cursor_workspaces: Vec<String>,
+    pub antigravity_workspaces: Vec<String>,
     pub rule_packs: Vec<RulePack>,
     /// Phase 3b.5 — operator-tunable rubric weights (merged from user
     /// PolicyDocument; defaults map is empty).
@@ -289,6 +294,10 @@ pub fn merge(
         .as_ref()
         .map(|u| u.cursor_workspaces.clone())
         .unwrap_or_default();
+    let antigravity_workspaces = user
+        .as_ref()
+        .map(|u| u.antigravity_workspaces.clone())
+        .unwrap_or_default();
 
     // Phase 3b.7 — id-keyed reconciliation: start with defaults' packs;
     // user packs replace by id or append.
@@ -319,6 +328,7 @@ pub fn merge(
         codex_workspaces,
         gemini_workspaces,
         cursor_workspaces,
+        antigravity_workspaces,
         rule_packs,
         rubric_overrides,
     })
@@ -351,6 +361,7 @@ pub fn defaults() -> Result<PolicyDocument, PolicyError> {
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs,
             rubric_overrides: HashMap::new(),
         }),
@@ -485,6 +496,7 @@ targets:
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         }
@@ -513,6 +525,7 @@ targets:
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -537,6 +550,7 @@ targets:
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -560,6 +574,7 @@ targets:
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -579,6 +594,7 @@ targets:
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -602,6 +618,7 @@ targets:
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -898,6 +915,7 @@ host_id_strategy: hostname
             codex_workspaces: vec![],
             gemini_workspaces: vec![],
             cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
@@ -939,11 +957,13 @@ host_id_strategy: hostname
             codex_workspaces: vec![],
             gemini_workspaces: vec!["~/src/a".to_string()],
             cursor_workspaces: vec!["~/src/b".to_string()],
+            antigravity_workspaces: vec!["~/src/c".to_string()],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
         let eff = merge(defaults().unwrap(), Some(user), current_platform()).unwrap();
         assert_eq!(eff.gemini_workspaces, vec!["~/src/a".to_string()]);
         assert_eq!(eff.cursor_workspaces, vec!["~/src/b".to_string()]);
+        assert_eq!(eff.antigravity_workspaces, vec!["~/src/c".to_string()]);
     }
 }
