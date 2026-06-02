@@ -12,7 +12,7 @@ pub mod rule_pack;
 pub mod task;
 pub mod workspace_discovery;
 
-pub use parser::antigravity::AntigravityParser;
+pub use parser::antigravity::{AntigravityParser, AntigravityProjectParser};
 pub use parser::claude_code::{ClaudeCodeParser, ClaudeCodeProjectParser};
 pub use parser::claude_desktop::ClaudeDesktopParser;
 pub use parser::codex::{CodexParser, CodexProjectParser};
