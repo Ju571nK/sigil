@@ -399,7 +399,8 @@ mod tests {
     fn codex_uses_nested_and_notes_config_toml() {
         let s = render_block("/abs/sigil-hook", "codex", "redacted");
         assert!(s.contains("/abs/sigil-hook codex --capture redacted"));
-        assert!(s.contains(".codex/hooks.json"));
+        // Path-separator-agnostic: PathBuf renders `\` on Windows.
+        assert!(s.contains("codex") && s.contains("hooks.json"));
         assert!(s.contains("config.toml"));
         let mut v = json!({});
         assert!(merge_into(&mut v, "/abs/sigil-hook", "codex", "redacted"));
