@@ -57,6 +57,7 @@ pub fn apply_event(host: &mut HostSummary, event: &Event) {
             bucket,
             reasons,
             is_reattestation,
+            ..
         } => {
             host.current_risk.insert(
                 *tool,
@@ -167,6 +168,7 @@ mod tests {
                 bucket,
                 reasons: vec![],
                 is_reattestation: false,
+                rule_pack_id: None,
             }
         }
 
@@ -306,6 +308,7 @@ mod tests {
                 bucket: AiGuardBucket::Critical,
                 reasons: vec![],
                 is_reattestation: false,
+                rule_pack_id: None,
             },
             Severity::Warn,
             datetime!(2026-05-17 12:00 UTC),
@@ -435,6 +438,7 @@ mod tests {
                     bucket: AiGuardBucket::High,
                     reasons: vec![],
                     is_reattestation: false,
+                    rule_pack_id: None,
                 },
                 Severity::Warn,
                 t,
@@ -509,6 +513,7 @@ mod tests {
                     bucket: AiGuardBucket::Medium,
                     reasons: vec![],
                     is_reattestation: false,
+                    rule_pack_id: None,
                 },
                 Severity::Warn,
                 t,

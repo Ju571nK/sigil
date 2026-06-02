@@ -80,6 +80,7 @@ fn reconcile_rule_packs(
     state: &Arc<parking_lot::RwLock<crate::ai_guard::task::StateMap>>,
     new_packs: &[sigil_core::policy::RulePack],
 ) -> (Vec<String>, Vec<String>) {
+    use crate::ai_guard::parser::AiGuardParser;
     use std::collections::HashSet;
 
     let new_ids: HashSet<String> = new_packs
@@ -102,7 +103,7 @@ fn reconcile_rule_packs(
             if new_ids.contains(&id) {
                 true
             } else {
-                removed_scopes.push((rpp.pack.tool, rpp.pack.scope.clone()));
+                removed_scopes.push((rpp.pack.tool, rpp.scope()));
                 false
             }
         } else {

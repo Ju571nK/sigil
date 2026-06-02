@@ -58,6 +58,13 @@ pub trait AiGuardParser: Send + Sync {
     ) -> Vec<std::path::PathBuf> {
         Vec::new()
     }
+
+    /// Phase 3b.7.2 — identity discriminator. None for built-in (structural)
+    /// parsers; rule-pack parsers override to Some(pack id) so the assessment
+    /// StateMap key and emitted event distinguish overlapping (tool, scope).
+    fn rule_pack_id(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

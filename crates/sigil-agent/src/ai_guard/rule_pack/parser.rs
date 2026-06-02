@@ -4,13 +4,14 @@ use crate::ai_guard::parser::{AiGuardParser, AssessError};
 use crate::ai_guard::rule_pack::matcher::{compile_pack_regexes, matches_value, CompileError};
 use crate::ai_guard::rule_pack::selector::{eval_json, eval_toml, MatchedValue};
 use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
-use sigil_core::policy::{RuleFormat, RulePack};
+use sigil_core::policy::{RuleFormat, RulePack, RulePackScope};
 use std::path::{Path, PathBuf};
 
 pub struct RulePackParser {
     pub pack: RulePack,
     /// Compiled regexes parallel to pack.rules (None when matcher != Regex).
     compiled_regexes: Vec<Option<regex::Regex>>,
+    pub(crate) repo_root: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +30,7 @@ impl RulePackParser {
         Ok(Self {
             pack,
             compiled_regexes,
+            repo_root: None,
         })
     }
 }
@@ -39,7 +41,12 @@ impl AiGuardParser for RulePackParser {
     }
 
     fn scope(&self) -> AiGuardScope {
-        self.pack.scope.clone()
+        match self.pack.scope {
+            RulePackScope::UserGlobal => AiGuardScope::UserGlobal,
+            RulePackScope::Project => AiGuardScope::Project {
+                path: self.repo_root.clone().unwrap_or_default(),
+            },
+        }
     }
 
     fn watched_paths(&self, _home: &Path) -> Vec<PathBuf> {
@@ -122,7 +129,7 @@ fn interpolate_reason(reason: &AiGuardReason, matched: &MatchedValue) -> AiGuard
 mod tests {
     use super::*;
     use sigil_core::event::AiGuardReason;
-    use sigil_core::policy::{Matcher, RuleEntry, RuleFormat, RulePack};
+    use sigil_core::policy::{Matcher, RuleEntry, RuleFormat, RulePack, RulePackScope};
     use tempfile::tempdir;
 
     fn pack_with_one_rule(
@@ -135,7 +142,7 @@ mod tests {
             id: "test-pack".into(),
             pack_version: 1,
             tool: AiTool::Gemini,
-            scope: AiGuardScope::UserGlobal,
+            scope: RulePackScope::UserGlobal,
             watched_paths: vec![on_file_abs.into()],
             platforms: None,
             rules: vec![RuleEntry {
@@ -236,7 +243,7 @@ mod tests {
             id: "bad-regex".into(),
             pack_version: 1,
             tool: AiTool::Gemini,
-            scope: AiGuardScope::UserGlobal,
+            scope: RulePackScope::UserGlobal,
             watched_paths: vec![],
             platforms: None,
             rules: vec![RuleEntry {

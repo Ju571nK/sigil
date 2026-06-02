@@ -20,10 +20,10 @@ pub fn pack_is_loadable(pack: &sigil_core::policy::RulePack) -> bool {
         );
         return false;
     }
-    if !matches!(pack.scope, sigil_core::event::AiGuardScope::UserGlobal) {
+    if !matches!(pack.scope, sigil_core::policy::RulePackScope::UserGlobal) {
         tracing::warn!(
             id = %pack.id, scope = ?pack.scope,
-            "rule_pack: MVP supports UserGlobal scope only; skipping"
+            "rule_pack: Project scope not yet enabled; skipping"
         );
         return false;
     }

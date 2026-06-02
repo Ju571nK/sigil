@@ -201,6 +201,7 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
             bucket,
             reasons,
             is_reattestation,
+            rule_pack_id: None,
         },
         target_id: None,
     };
