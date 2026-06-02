@@ -7,10 +7,13 @@
 //       Claude Code: ~/.claude/settings.json
 //       Codex:       ~/.codex/hooks.json   (also needs hooks enabled in
 //                    ~/.codex/config.toml — surfaced as a note)
-//   - Antigravity: TOP-LEVEL `PreToolUse[]` (same entry shape, no `hooks`
-//     wrapper) in ~/.gemini/antigravity-cli/settings.json.
 //   - Cursor: ~/.cursor/hooks.json with `version:1` + per-event arrays
 //     (`beforeShellExecution`, `beforeMCPExecution`) of `{command}`.
+//
+// Antigravity is deliberately absent here: on-hardware verification (real `agy`
+// 1.0.4) proved its hooks are NOT read from any settings.json — they load only
+// from an imported plugin bundle. That install path lives in
+// `install_antigravity.rs` (a directory bundle handed to `agy plugin install`).
 
 use serde_json::{json, Value};
 use std::io;
@@ -21,8 +24,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 enum HookFormat {
     /// `root.hooks.PreToolUse[]` — Claude Code, Codex.
     NestedPreToolUse,
-    /// `root.PreToolUse[]` — Antigravity settings.json (top-level).
-    TopLevelPreToolUse,
     /// `root.version` + `root.hooks.{beforeShellExecution,beforeMCPExecution}[]`.
     Cursor,
 }
@@ -30,7 +31,6 @@ enum HookFormat {
 fn agent_format(agent: &str) -> Option<HookFormat> {
     match agent {
         "claude-code" | "codex" => Some(HookFormat::NestedPreToolUse),
-        "antigravity" => Some(HookFormat::TopLevelPreToolUse),
         "cursor" => Some(HookFormat::Cursor),
         _ => None,
     }
@@ -47,7 +47,7 @@ fn first_token(cmd: &str) -> &str {
     cmd.split_whitespace().next().unwrap_or("")
 }
 
-// --- Claude-style entry helpers (Nested + TopLevel share the entry shape) ---
+// --- Claude-style entry helpers ---
 
 fn claude_entry(cmd: &str) -> Value {
     json!({ "matcher": "*", "hooks": [{ "type": "command", "command": cmd }] })
@@ -78,26 +78,19 @@ fn claude_entry_is_ours(entry: &Value, exe: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Get-or-create the Claude-style PreToolUse array for the given location.
-fn pretooluse_array_mut(root: &mut Value, nested: bool) -> &mut Vec<Value> {
+/// Get-or-create the nested `hooks.PreToolUse` array.
+fn pretooluse_array_mut(root: &mut Value) -> &mut Vec<Value> {
     if !root.is_object() {
         *root = json!({});
     }
-    if nested {
-        if !root["hooks"].is_object() {
-            root["hooks"] = json!({});
-        }
-        let h = &mut root["hooks"];
-        if !h["PreToolUse"].is_array() {
-            h["PreToolUse"] = json!([]);
-        }
-        h["PreToolUse"].as_array_mut().unwrap()
-    } else {
-        if !root["PreToolUse"].is_array() {
-            root["PreToolUse"] = json!([]);
-        }
-        root["PreToolUse"].as_array_mut().unwrap()
+    if !root["hooks"].is_object() {
+        root["hooks"] = json!({});
     }
+    let h = &mut root["hooks"];
+    if !h["PreToolUse"].is_array() {
+        h["PreToolUse"] = json!([]);
+    }
+    h["PreToolUse"].as_array_mut().unwrap()
 }
 
 fn merge_claude(arr: &mut Vec<Value>, exe: &str, cmd: &str) -> bool {
@@ -178,7 +171,6 @@ pub fn render_block(exe: &str, agent: &str, capture: &str) -> String {
         .unwrap_or_else(|| "<settings>".into());
     let fragment = match fmt {
         HookFormat::NestedPreToolUse => json!({ "hooks": { "PreToolUse": [claude_entry(&cmd)] } }),
-        HookFormat::TopLevelPreToolUse => json!({ "PreToolUse": [claude_entry(&cmd)] }),
         HookFormat::Cursor => json!({
             "version": 1,
             "hooks": {
@@ -205,12 +197,7 @@ pub fn render_block(exe: &str, agent: &str, capture: &str) -> String {
 pub fn merge_into(root: &mut Value, exe: &str, agent: &str, capture: &str) -> bool {
     let cmd = command_string(exe, agent, capture);
     match agent_format(agent) {
-        Some(HookFormat::NestedPreToolUse) => {
-            merge_claude(pretooluse_array_mut(root, true), exe, &cmd)
-        }
-        Some(HookFormat::TopLevelPreToolUse) => {
-            merge_claude(pretooluse_array_mut(root, false), exe, &cmd)
-        }
+        Some(HookFormat::NestedPreToolUse) => merge_claude(pretooluse_array_mut(root), exe, &cmd),
         Some(HookFormat::Cursor) => merge_cursor(root, exe, &cmd),
         None => false,
     }
@@ -220,22 +207,14 @@ pub fn merge_into(root: &mut Value, exe: &str, agent: &str, capture: &str) -> bo
 /// removed. Leaves unrelated hooks untouched.
 pub fn remove_from(root: &mut Value, exe: &str, agent: &str) -> bool {
     match agent_format(agent) {
-        Some(HookFormat::NestedPreToolUse) | Some(HookFormat::TopLevelPreToolUse) => {
-            let nested = agent_format(agent) == Some(HookFormat::NestedPreToolUse);
-            let arr = if nested {
-                root["hooks"]["PreToolUse"].as_array_mut()
-            } else {
-                root["PreToolUse"].as_array_mut()
-            };
-            match arr {
-                Some(a) => {
-                    let before = a.len();
-                    a.retain(|e| !claude_entry_is_ours(e, exe));
-                    a.len() < before
-                }
-                None => false,
+        Some(HookFormat::NestedPreToolUse) => match root["hooks"]["PreToolUse"].as_array_mut() {
+            Some(a) => {
+                let before = a.len();
+                a.retain(|e| !claude_entry_is_ours(e, exe));
+                a.len() < before
             }
-        }
+            None => false,
+        },
         Some(HookFormat::Cursor) => {
             let mut removed = false;
             for ev in CURSOR_EVENTS {
@@ -258,10 +237,6 @@ pub fn count_sigil_entries(root: &Value, exe: &str, agent: &str) -> usize {
             .as_array()
             .map(|a| a.iter().filter(|e| claude_entry_is_ours(e, exe)).count())
             .unwrap_or(0),
-        Some(HookFormat::TopLevelPreToolUse) => root["PreToolUse"]
-            .as_array()
-            .map(|a| a.iter().filter(|e| claude_entry_is_ours(e, exe)).count())
-            .unwrap_or(0),
         Some(HookFormat::Cursor) => CURSOR_EVENTS
             .iter()
             .map(|ev| {
@@ -277,7 +252,7 @@ pub fn count_sigil_entries(root: &Value, exe: &str, agent: &str) -> usize {
 
 /// The user's home directory, cross-platform: `HOME` (Unix) or `USERPROFILE`
 /// (Windows, where `HOME` is usually unset).
-fn home_dir() -> Option<PathBuf> {
+pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|s| !s.is_empty())
         .or_else(|| std::env::var_os("USERPROFILE").filter(|s| !s.is_empty()))
@@ -302,7 +277,6 @@ pub fn settings_path(agent: &str) -> Option<PathBuf> {
         "claude-code" => home.join(".claude/settings.json"),
         "codex" => home.join(".codex/hooks.json"),
         "cursor" => home.join(".cursor/hooks.json"),
-        "antigravity" => home.join(".gemini/antigravity-cli/settings.json"),
         _ => return None,
     };
     Some(p)
@@ -418,28 +392,23 @@ mod tests {
         assert!(v["hooks"]["PreToolUse"].is_array());
     }
 
-    // --- Antigravity (top-level PreToolUse) ---
+    // Antigravity is NOT a settings-merge agent — it installs as an `agy`
+    // plugin bundle (see install_antigravity.rs). The JSON-merge path must
+    // treat it as unsupported so it can never write a settings.json hook that
+    // `agy` silently ignores.
     #[test]
-    fn antigravity_uses_top_level_pretooluse() {
-        let mut v = json!({});
-        assert!(merge_into(
-            &mut v,
-            "/abs/sigil-hook",
-            "antigravity",
-            "redacted"
-        ));
-        // top-level, NOT under hooks
-        assert!(v["PreToolUse"].is_array());
-        assert!(v["hooks"].is_null());
-        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "antigravity"), 1);
+    fn antigravity_not_in_settings_merge_path() {
+        assert!(settings_path("antigravity").is_none());
         assert!(!merge_into(
-            &mut v,
+            &mut json!({}),
             "/abs/sigil-hook",
             "antigravity",
             "redacted"
         ));
-        assert!(remove_from(&mut v, "/abs/sigil-hook", "antigravity"));
-        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "antigravity"), 0);
+        assert_eq!(
+            count_sigil_entries(&json!({}), "/abs/sigil-hook", "antigravity"),
+            0
+        );
     }
 
     // --- Cursor (version + two event arrays) ---

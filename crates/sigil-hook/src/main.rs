@@ -1,6 +1,7 @@
 mod adapters;
 mod emit;
 mod install;
+mod install_antigravity;
 mod redact;
 
 use sigil_core::hook_proto::*;
@@ -145,7 +146,10 @@ enum Cmd {
         capture: CaptureArg,
     },
 
-    /// Print (or write) the sigil-hook registration into an agent's settings.
+    /// Print (or write) the sigil-hook registration for an agent.
+    ///
+    /// claude-code | codex | cursor merge into a settings JSON file; antigravity
+    /// is registered as an `agy` plugin bundle (`agy plugin install`).
     Install {
         /// Agent to register with: claude-code | codex | cursor | antigravity.
         #[arg(long, default_value = INSTALL_AGENT_DEFAULT)]
@@ -218,6 +222,12 @@ fn cmd_install(agent: &str, write: bool, capture: CaptureArg) {
     };
     let exe = exe_path();
 
+    // Antigravity is not a settings-merge agent: it installs as an `agy` plugin
+    // bundle. Route it through the dedicated path.
+    if agent == "antigravity" {
+        return cmd_install_antigravity(&exe, write, capture_str);
+    }
+
     if !write {
         print!("{}", install::render_block(&exe, agent, capture_str));
         return;
@@ -284,6 +294,10 @@ fn cmd_install(agent: &str, write: bool, capture: CaptureArg) {
 fn cmd_uninstall(agent: &str, write: bool) {
     let exe = exe_path();
 
+    if agent == "antigravity" {
+        return cmd_uninstall_antigravity(write);
+    }
+
     let sp = match install::settings_path(agent) {
         Some(p) => p,
         None => {
@@ -345,4 +359,84 @@ fn cmd_uninstall(agent: &str, write: bool) {
         "sigil-hook: removed {count} entry/entries for {agent} from {}",
         sp.display()
     );
+}
+
+/// Antigravity install: materialize the plugin bundle, then register it with
+/// `agy plugin install`. Without `--write`, print the bundle + command preview.
+fn cmd_install_antigravity(exe: &str, write: bool, capture: &str) {
+    if !write {
+        print!("{}", install_antigravity::render_block(exe, capture));
+        return;
+    }
+
+    let dir = install_antigravity::staging_dir();
+    if let Err(e) = install_antigravity::write_bundle(&dir, exe, capture) {
+        eprintln!(
+            "error writing Antigravity plugin bundle to {}: {e}",
+            dir.display()
+        );
+        std::process::exit(1);
+    }
+
+    match install_antigravity::run_install(&dir) {
+        Ok(out) if out.status.success() => {
+            eprintln!(
+                "sigil-hook: installed Antigravity plugin via agy (bundle: {})",
+                dir.display()
+            );
+        }
+        Ok(out) => {
+            // `agy` ran but rejected the install — surface its diagnostics and
+            // the manual command so the user can finish registration.
+            eprintln!(
+                "sigil-hook: wrote bundle to {} but `agy plugin install` failed:\n{}",
+                dir.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            eprintln!("run manually: agy plugin install {}", dir.display());
+            std::process::exit(1);
+        }
+        Err(e) => {
+            // `agy` not found / not runnable: the bundle is written, so the user
+            // can register it once `agy` is installed. Not an error exit.
+            eprintln!(
+                "sigil-hook: wrote Antigravity plugin bundle to {} (could not run agy: {e})",
+                dir.display()
+            );
+            eprintln!("register it with: agy plugin install {}", dir.display());
+        }
+    }
+}
+
+/// Antigravity uninstall: deregister via `agy plugin uninstall` and remove the
+/// staged bundle. Without `--write`, print what would happen.
+fn cmd_uninstall_antigravity(write: bool) {
+    let dir = install_antigravity::staging_dir();
+    if !write {
+        eprintln!(
+            "sigil-hook: would run `agy plugin uninstall {}` and remove {} (pass --write to apply)",
+            install_antigravity::PLUGIN_NAME,
+            dir.display()
+        );
+        return;
+    }
+
+    match install_antigravity::run_uninstall() {
+        Ok(out) if out.status.success() => {
+            eprintln!("sigil-hook: removed Antigravity plugin via agy");
+        }
+        Ok(out) => {
+            eprintln!(
+                "sigil-hook: `agy plugin uninstall` returned non-zero:\n{}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "sigil-hook: could not run agy ({e}); remove manually: agy plugin uninstall {}",
+                install_antigravity::PLUGIN_NAME
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
