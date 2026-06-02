@@ -1,6 +1,7 @@
 //! Phase 3b.1 — per-tool parser trait. Each implementation reads a single
 //! tool's user-global config and returns the assessed reasons.
 
+pub mod antigravity;
 pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;

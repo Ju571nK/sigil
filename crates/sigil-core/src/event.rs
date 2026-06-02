@@ -106,6 +106,9 @@ pub enum AiTool {
     Gemini,
     /// Phase 3b.7 — Cursor IDE. Wire string: "cursor".
     Cursor,
+    /// Antigravity (Google) — successor to Gemini CLI (Gemini CLI sunset
+    /// 2026-06-18). Config reuses the `~/.gemini/` tree. Wire string: "antigravity".
+    Antigravity,
 }
 
 /// Phase 3b.1 — where the assessment applies on the host.

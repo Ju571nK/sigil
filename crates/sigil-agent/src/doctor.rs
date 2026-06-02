@@ -379,6 +379,7 @@ fn print_ai_guard_live(rep: &crate::control::DoctorAiGuardReport) {
                 sigil_core::event::AiTool::ContinueDev => "continue_dev",
                 sigil_core::event::AiTool::Gemini => "gemini",
                 sigil_core::event::AiTool::Cursor => "cursor",
+                sigil_core::event::AiTool::Antigravity => "antigravity",
             };
             let scope_str = match &r.scope {
                 sigil_core::event::AiGuardScope::UserGlobal => "user_global".to_string(),
@@ -422,6 +423,7 @@ fn format_parsers_summary(parsers: &[crate::control::ParserInfo]) -> String {
             sigil_core::event::AiTool::ContinueDev => "continue_dev",
             sigil_core::event::AiTool::Gemini => "gemini",
             sigil_core::event::AiTool::Cursor => "cursor",
+            sigil_core::event::AiTool::Antigravity => "antigravity",
         };
         *counts.entry(key.to_string()).or_insert(0) += 1;
     }
