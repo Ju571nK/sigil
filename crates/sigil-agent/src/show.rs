@@ -614,6 +614,7 @@ fn write_risk_pretty(w: &mut impl Write, p: &RiskPayload) -> io::Result<()> {
             sigil_core::event::AiTool::ContinueDev => "continue-dev",
             sigil_core::event::AiTool::Gemini => "gemini",
             sigil_core::event::AiTool::Cursor => "cursor",
+            sigil_core::event::AiTool::Antigravity => "antigravity",
         };
         // Use the serde wire string (snake_case) rather than Debug. Robust
         // against future multi-word AiGuardBucket variants (e.g., "very_high")

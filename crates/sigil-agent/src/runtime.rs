@@ -185,6 +185,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         Arc::new(crate::ai_guard::ContinueDevParser),
         Arc::new(crate::ai_guard::GeminiParser),
         Arc::new(crate::ai_guard::CursorParser),
+        Arc::new(crate::ai_guard::AntigravityParser),
     ];
     for repo_root in continue_repos {
         parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser {
@@ -1177,6 +1178,7 @@ pub(crate) fn tool_display_for_extscript(tool: sigil_core::event::AiTool) -> &'s
         AiTool::ClaudeDesktop => "claude_desktop",
         AiTool::Gemini => "gemini",
         AiTool::Cursor => "cursor",
+        AiTool::Antigravity => "antigravity",
     }
 }
 
