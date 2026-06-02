@@ -139,6 +139,12 @@ enum Cmd {
         capture: CaptureArg,
     },
 
+    /// Antigravity PreToolUse entrypoint: read stdin, emit, exit 0.
+    Antigravity {
+        #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
+        capture: CaptureArg,
+    },
+
     /// Print (or write) the sigil-hook registration into an agent's settings.
     Install {
         /// Agent to register with. Currently only "claude-code" is supported.
@@ -186,6 +192,7 @@ fn main() {
         Cmd::ClaudeCode { capture } => run_hook("claude-code", capture.into()),
         Cmd::Codex { capture } => run_hook("codex", capture.into()),
         Cmd::Cursor { capture } => run_hook("cursor", capture.into()),
+        Cmd::Antigravity { capture } => run_hook("antigravity", capture.into()),
         Cmd::Install {
             agent,
             write,
