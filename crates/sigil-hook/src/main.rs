@@ -147,7 +147,7 @@ enum Cmd {
 
     /// Print (or write) the sigil-hook registration into an agent's settings.
     Install {
-        /// Agent to register with. Currently only "claude-code" is supported.
+        /// Agent to register with: claude-code | codex | cursor | antigravity.
         #[arg(long, default_value = INSTALL_AGENT_DEFAULT)]
         agent: String,
         /// Apply the change to the settings file (default: print only).
@@ -309,7 +309,7 @@ fn cmd_uninstall(agent: &str, write: bool) {
     };
     let mut root: serde_json::Value = serde_json::from_slice(&raw).unwrap_or(serde_json::json!({}));
 
-    let count = install::count_sigil_entries(&root, &exe);
+    let count = install::count_sigil_entries(&root, &exe, agent);
     if count == 0 {
         eprintln!(
             "sigil-hook: no entries found for {} in {}",
@@ -327,7 +327,7 @@ fn cmd_uninstall(agent: &str, write: bool) {
         return;
     }
 
-    install::remove_from(&mut root, &exe);
+    install::remove_from(&mut root, &exe, agent);
 
     let pretty = serde_json::to_string_pretty(&root).unwrap_or_default();
     let tmp_path = sp.with_extension("json.sigil-tmp");

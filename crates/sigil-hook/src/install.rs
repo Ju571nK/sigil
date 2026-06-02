@@ -1,162 +1,281 @@
-// Consumed by install/uninstall subcommands. Writes and reads Claude Code's
-// ~/.claude/settings.json to register/deregister the sigil-hook PreToolUse
-// entry without clobbering unrelated hooks.
+// Consumed by install/uninstall subcommands. Registers/deregisters the
+// sigil-hook entry in each agent's config WITHOUT clobbering unrelated hooks.
+//
+// Agents differ in config path AND format (web-verified 2026-06):
+//   - Claude Code / Codex: nested `hooks.PreToolUse[]` with
+//     `{matcher, hooks:[{type:"command", command}]}`.
+//       Claude Code: ~/.claude/settings.json
+//       Codex:       ~/.codex/hooks.json   (also needs hooks enabled in
+//                    ~/.codex/config.toml — surfaced as a note)
+//   - Antigravity: TOP-LEVEL `PreToolUse[]` (same entry shape, no `hooks`
+//     wrapper) in ~/.gemini/antigravity-cli/settings.json.
+//   - Cursor: ~/.cursor/hooks.json with `version:1` + per-event arrays
+//     (`beforeShellExecution`, `beforeMCPExecution`) of `{command}`.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::io;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// ---------------------------------------------------------------------------
-// Helper: build the command string
-// ---------------------------------------------------------------------------
+#[derive(Clone, Copy, PartialEq)]
+enum HookFormat {
+    /// `root.hooks.PreToolUse[]` — Claude Code, Codex.
+    NestedPreToolUse,
+    /// `root.PreToolUse[]` — Antigravity settings.json (top-level).
+    TopLevelPreToolUse,
+    /// `root.version` + `root.hooks.{beforeShellExecution,beforeMCPExecution}[]`.
+    Cursor,
+}
+
+fn agent_format(agent: &str) -> Option<HookFormat> {
+    match agent {
+        "claude-code" | "codex" => Some(HookFormat::NestedPreToolUse),
+        "antigravity" => Some(HookFormat::TopLevelPreToolUse),
+        "cursor" => Some(HookFormat::Cursor),
+        _ => None,
+    }
+}
+
+const CURSOR_EVENTS: [&str; 2] = ["beforeShellExecution", "beforeMCPExecution"];
 
 fn command_string(exe: &str, agent: &str, capture: &str) -> String {
     format!("{exe} {agent} --capture {capture}")
 }
 
-// ---------------------------------------------------------------------------
-// Helper: first whitespace token of a command string (= the binary path)
-// ---------------------------------------------------------------------------
-
+/// First whitespace token of a command string (= the binary path).
 fn first_token(cmd: &str) -> &str {
     cmd.split_whitespace().next().unwrap_or("")
 }
 
+// --- Claude-style entry helpers (Nested + TopLevel share the entry shape) ---
+
+fn claude_entry(cmd: &str) -> Value {
+    json!({ "matcher": "*", "hooks": [{ "type": "command", "command": cmd }] })
+}
+
+/// The command of a Claude-style entry's first inner hook, if any.
+fn claude_entry_cmd(entry: &Value) -> Option<&str> {
+    entry
+        .get("hooks")
+        .and_then(|h| h.as_array())
+        .and_then(|hooks| hooks.first())
+        .and_then(|h| h.get("command"))
+        .and_then(|c| c.as_str())
+}
+
+fn claude_entry_is_ours(entry: &Value, exe: &str) -> bool {
+    entry
+        .get("hooks")
+        .and_then(|h| h.as_array())
+        .map(|hooks| {
+            hooks.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .map(|c| first_token(c) == exe)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Get-or-create the Claude-style PreToolUse array for the given location.
+fn pretooluse_array_mut(root: &mut Value, nested: bool) -> &mut Vec<Value> {
+    if !root.is_object() {
+        *root = json!({});
+    }
+    if nested {
+        if !root["hooks"].is_object() {
+            root["hooks"] = json!({});
+        }
+        let h = &mut root["hooks"];
+        if !h["PreToolUse"].is_array() {
+            h["PreToolUse"] = json!([]);
+        }
+        h["PreToolUse"].as_array_mut().unwrap()
+    } else {
+        if !root["PreToolUse"].is_array() {
+            root["PreToolUse"] = json!([]);
+        }
+        root["PreToolUse"].as_array_mut().unwrap()
+    }
+}
+
+fn merge_claude(arr: &mut Vec<Value>, exe: &str, cmd: &str) -> bool {
+    match arr.iter().position(|e| claude_entry_is_ours(e, exe)) {
+        Some(i) => {
+            if claude_entry_cmd(&arr[i]) == Some(cmd) {
+                false
+            } else {
+                arr[i] = claude_entry(cmd);
+                true
+            }
+        }
+        None => {
+            arr.push(claude_entry(cmd));
+            true
+        }
+    }
+}
+
+// --- Cursor helpers ---
+
+fn cursor_entry_is_ours(entry: &Value, exe: &str) -> bool {
+    entry
+        .get("command")
+        .and_then(|c| c.as_str())
+        .map(|c| first_token(c) == exe)
+        .unwrap_or(false)
+}
+
+fn merge_cursor(root: &mut Value, exe: &str, cmd: &str) -> bool {
+    if !root.is_object() {
+        *root = json!({});
+    }
+    let mut changed = false;
+    if root["version"].is_null() {
+        root["version"] = json!(1);
+        changed = true;
+    }
+    if !root["hooks"].is_object() {
+        root["hooks"] = json!({});
+    }
+    for ev in CURSOR_EVENTS {
+        let arr = {
+            let h = &mut root["hooks"];
+            if !h[ev].is_array() {
+                h[ev] = json!([]);
+            }
+            h[ev].as_array_mut().unwrap()
+        };
+        match arr.iter().position(|e| cursor_entry_is_ours(e, exe)) {
+            Some(i) => {
+                if arr[i].get("command").and_then(|c| c.as_str()) != Some(cmd) {
+                    arr[i] = json!({ "command": cmd });
+                    changed = true;
+                }
+            }
+            None => {
+                arr.push(json!({ "command": cmd }));
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 // ---------------------------------------------------------------------------
-// Public: render a human-pasteable block showing the settings fragment
+// Public API (dispatched by agent format)
 // ---------------------------------------------------------------------------
 
-/// Returns a comment + pretty-printed JSON fragment that the operator can
-/// paste into ~/.claude/settings.json, plus an undo hint.
+/// Human-pasteable block showing the settings fragment + undo hint.
 pub fn render_block(exe: &str, agent: &str, capture: &str) -> String {
     let cmd = command_string(exe, agent, capture);
-    let entry = serde_json::json!({
-        "matcher": "*",
-        "hooks": [{ "type": "command", "command": cmd }]
-    });
-    let fragment = serde_json::json!({
-        "hooks": {
-            "PreToolUse": [entry]
-        }
-    });
+    let Some(fmt) = agent_format(agent) else {
+        return format!("// unsupported agent '{agent}'\n");
+    };
+    let path = settings_path(agent)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<settings>".into());
+    let fragment = match fmt {
+        HookFormat::NestedPreToolUse => json!({ "hooks": { "PreToolUse": [claude_entry(&cmd)] } }),
+        HookFormat::TopLevelPreToolUse => json!({ "PreToolUse": [claude_entry(&cmd)] }),
+        HookFormat::Cursor => json!({
+            "version": 1,
+            "hooks": {
+                "beforeShellExecution": [{ "command": cmd }],
+                "beforeMCPExecution": [{ "command": cmd }],
+            }
+        }),
+    };
     let pretty = serde_json::to_string_pretty(&fragment).unwrap_or_default();
+    let note = if agent == "codex" {
+        "// note: Codex also requires hooks enabled in ~/.codex/config.toml.\n"
+    } else {
+        ""
+    };
     format!(
-        "// Merge this into ~/.claude/settings.json under \"hooks\":\n\
+        "// Merge this into {path}:\n\
          {pretty}\n\
-         // remove with: sigil-hook uninstall --agent {agent} --write\n"
+         {note}// remove with: sigil-hook uninstall --agent {agent} --write\n"
     )
 }
 
-// ---------------------------------------------------------------------------
-// Public: merge our entry into a settings Value (idempotent)
-// ---------------------------------------------------------------------------
-
-/// Ensure `root["hooks"]["PreToolUse"]` contains exactly one sigil-hook entry
-/// for `exe`. Returns `true` if the document was modified, `false` if it was
-/// already up-to-date (idempotent no-op).
+/// Idempotently ensure the sigil-hook entry is present. Returns `true` if the
+/// document was modified.
 pub fn merge_into(root: &mut Value, exe: &str, agent: &str, capture: &str) -> bool {
     let cmd = command_string(exe, agent, capture);
-
-    // Ensure root is an object.
-    if !root.is_object() {
-        *root = serde_json::json!({});
-    }
-
-    // Ensure root["hooks"] is an object.
-    if root["hooks"].is_null() || !root["hooks"].is_object() {
-        root["hooks"] = serde_json::json!({});
-    }
-
-    // Ensure root["hooks"]["PreToolUse"] is an array.
-    if root["hooks"]["PreToolUse"].is_null() || !root["hooks"]["PreToolUse"].is_array() {
-        root["hooks"]["PreToolUse"] = serde_json::json!([]);
-    }
-
-    let arr = root["hooks"]["PreToolUse"]
-        .as_array_mut()
-        .expect("just ensured it's an array");
-
-    // Search for an existing entry whose command first-token == exe.
-    let existing_idx = arr.iter().position(|entry| {
-        entry
-            .get("hooks")
-            .and_then(|h| h.as_array())
-            .map(|hooks| {
-                hooks.iter().any(|h| {
-                    h.get("command")
-                        .and_then(|c| c.as_str())
-                        .map(|c| first_token(c) == exe)
-                        .unwrap_or(false)
-                })
-            })
-            .unwrap_or(false)
-    });
-
-    let new_entry = serde_json::json!({
-        "matcher": "*",
-        "hooks": [{ "type": "command", "command": cmd }]
-    });
-
-    if let Some(idx) = existing_idx {
-        // Check if the existing entry's command already matches exactly.
-        let existing_cmd = arr[idx]
-            .get("hooks")
-            .and_then(|h| h.as_array())
-            .and_then(|hooks| hooks.first())
-            .and_then(|h| h.get("command"))
-            .and_then(|c| c.as_str())
-            .unwrap_or("");
-
-        if existing_cmd == cmd {
-            // Already up-to-date — idempotent no-op.
-            return false;
+    match agent_format(agent) {
+        Some(HookFormat::NestedPreToolUse) => {
+            merge_claude(pretooluse_array_mut(root, true), exe, &cmd)
         }
-        // Update in-place.
-        arr[idx] = new_entry;
-        true
-    } else {
-        // Not found — push.
-        arr.push(new_entry);
-        true
+        Some(HookFormat::TopLevelPreToolUse) => {
+            merge_claude(pretooluse_array_mut(root, false), exe, &cmd)
+        }
+        Some(HookFormat::Cursor) => merge_cursor(root, exe, &cmd),
+        None => false,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public: remove sigil-hook entries from PreToolUse
-// ---------------------------------------------------------------------------
-
-/// Remove every PreToolUse entry whose command first-token == `exe`. Returns
-/// `true` if anything was removed. Leaves unrelated hooks untouched.
-pub fn remove_from(root: &mut Value, exe: &str) -> bool {
-    let arr = match root["hooks"]["PreToolUse"].as_array_mut() {
-        Some(a) => a,
-        None => return false,
-    };
-
-    let before = arr.len();
-    arr.retain(|entry| {
-        !entry
-            .get("hooks")
-            .and_then(|h| h.as_array())
-            .map(|hooks| {
-                hooks.iter().any(|h| {
-                    h.get("command")
-                        .and_then(|c| c.as_str())
-                        .map(|c| first_token(c) == exe)
-                        .unwrap_or(false)
-                })
-            })
-            .unwrap_or(false)
-    });
-    arr.len() < before
+/// Remove every sigil-hook entry for `exe`. Returns `true` if anything was
+/// removed. Leaves unrelated hooks untouched.
+pub fn remove_from(root: &mut Value, exe: &str, agent: &str) -> bool {
+    match agent_format(agent) {
+        Some(HookFormat::NestedPreToolUse) | Some(HookFormat::TopLevelPreToolUse) => {
+            let nested = agent_format(agent) == Some(HookFormat::NestedPreToolUse);
+            let arr = if nested {
+                root["hooks"]["PreToolUse"].as_array_mut()
+            } else {
+                root["PreToolUse"].as_array_mut()
+            };
+            match arr {
+                Some(a) => {
+                    let before = a.len();
+                    a.retain(|e| !claude_entry_is_ours(e, exe));
+                    a.len() < before
+                }
+                None => false,
+            }
+        }
+        Some(HookFormat::Cursor) => {
+            let mut removed = false;
+            for ev in CURSOR_EVENTS {
+                if let Some(a) = root["hooks"][ev].as_array_mut() {
+                    let before = a.len();
+                    a.retain(|e| !cursor_entry_is_ours(e, exe));
+                    removed |= a.len() < before;
+                }
+            }
+            removed
+        }
+        None => false,
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Public: paths
-// ---------------------------------------------------------------------------
+/// Count sigil-hook entries for `exe` (across all relevant arrays).
+pub fn count_sigil_entries(root: &Value, exe: &str, agent: &str) -> usize {
+    match agent_format(agent) {
+        Some(HookFormat::NestedPreToolUse) => root["hooks"]["PreToolUse"]
+            .as_array()
+            .map(|a| a.iter().filter(|e| claude_entry_is_ours(e, exe)).count())
+            .unwrap_or(0),
+        Some(HookFormat::TopLevelPreToolUse) => root["PreToolUse"]
+            .as_array()
+            .map(|a| a.iter().filter(|e| claude_entry_is_ours(e, exe)).count())
+            .unwrap_or(0),
+        Some(HookFormat::Cursor) => CURSOR_EVENTS
+            .iter()
+            .map(|ev| {
+                root["hooks"][*ev]
+                    .as_array()
+                    .map(|a| a.iter().filter(|e| cursor_entry_is_ours(e, exe)).count())
+                    .unwrap_or(0)
+            })
+            .sum(),
+        None => 0,
+    }
+}
 
-/// Returns `$XDG_STATE_HOME/sigil` or `$HOME/.local/state/sigil`.
+/// `$XDG_STATE_HOME/sigil` or `$HOME/.local/state/sigil`.
 pub fn state_dir() -> PathBuf {
     if let Ok(base) = std::env::var("XDG_STATE_HOME") {
         PathBuf::from(base).join("sigil")
@@ -166,25 +285,20 @@ pub fn state_dir() -> PathBuf {
     }
 }
 
-/// Map agent name → absolute path to its settings file.
-/// Currently only `claude-code` is supported; returns None for unknown agents.
+/// Map agent name → absolute path to its hook config file.
 pub fn settings_path(agent: &str) -> Option<PathBuf> {
-    match agent {
-        "claude-code" => {
-            let home = std::env::var("HOME").ok()?;
-            Some(PathBuf::from(home).join(".claude/settings.json"))
-        }
-        _ => None,
-    }
+    let home = PathBuf::from(std::env::var("HOME").ok()?);
+    let p = match agent {
+        "claude-code" => home.join(".claude/settings.json"),
+        "codex" => home.join(".codex/hooks.json"),
+        "cursor" => home.join(".cursor/hooks.json"),
+        "antigravity" => home.join(".gemini/antigravity-cli/settings.json"),
+        _ => return None,
+    };
+    Some(p)
 }
 
-// ---------------------------------------------------------------------------
-// Public: write baseline + update discovery index
-// ---------------------------------------------------------------------------
-
-/// Write `state_dir()/hook-registration.json` with metadata about the
-/// installed hook, and append the absolute `settings_path` to the discovery
-/// index at `state_dir()/hook-index.json` (deduplicated).
+/// Write `state_dir()/hook-registration.json` + append to the discovery index.
 pub fn write_baseline(
     agent: &str,
     settings_path: &std::path::Path,
@@ -205,7 +319,7 @@ pub fn write_baseline(
 
     let settings_path_str = settings_path.to_string_lossy().to_string();
 
-    let baseline = serde_json::json!({
+    let baseline = json!({
         "agent": agent,
         "settings_path": settings_path_str,
         "command": cmd,
@@ -219,7 +333,6 @@ pub fn write_baseline(
     let pretty = serde_json::to_string_pretty(&baseline).map_err(io::Error::other)?;
     std::fs::write(&reg_path, pretty.as_bytes())?;
 
-    // Read-modify-write the index (deduped).
     let index_path = dir.join("hook-index.json");
     let mut entries: Vec<String> = if index_path.exists() {
         let raw = std::fs::read(&index_path)?;
@@ -227,54 +340,19 @@ pub fn write_baseline(
     } else {
         Vec::new()
     };
-
     if !entries.contains(&settings_path_str) {
         entries.push(settings_path_str);
         let json = serde_json::to_string_pretty(&entries).map_err(io::Error::other)?;
         std::fs::write(&index_path, json.as_bytes())?;
     }
-
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Count helper — used by tests AND by callers
-// ---------------------------------------------------------------------------
-
-/// Count entries in `root["hooks"]["PreToolUse"]` whose command first-token == `exe`.
-pub fn count_sigil_entries(root: &Value, exe: &str) -> usize {
-    root["hooks"]["PreToolUse"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter(|entry| {
-                    entry
-                        .get("hooks")
-                        .and_then(|h| h.as_array())
-                        .map(|hooks| {
-                            hooks.iter().any(|h| {
-                                h.get("command")
-                                    .and_then(|c| c.as_str())
-                                    .map(|c| first_token(c) == exe)
-                                    .unwrap_or(false)
-                            })
-                        })
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0)
-}
-
-// ---------------------------------------------------------------------------
-// Tests (Step 1 — written first, before implementation is wired in)
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
+    // --- Claude Code (nested) ---
     #[test]
     fn render_block_has_abs_path_and_capture() {
         let s = render_block("/abs/sigil-hook", "claude-code", "redacted");
@@ -282,18 +360,7 @@ mod tests {
         assert!(s.contains("PreToolUse"));
     }
     #[test]
-    fn merge_into_empty_adds_entry() {
-        let mut v = json!({});
-        assert!(merge_into(
-            &mut v,
-            "/abs/sigil-hook",
-            "claude-code",
-            "redacted"
-        ));
-        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook"), 1);
-    }
-    #[test]
-    fn merge_into_is_idempotent() {
+    fn nested_merge_empty_idempotent_update() {
         let mut v = json!({});
         assert!(merge_into(
             &mut v,
@@ -306,31 +373,94 @@ mod tests {
             "/abs/sigil-hook",
             "claude-code",
             "redacted"
-        )); // no change
-        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook"), 1);
-    }
-    #[test]
-    fn merge_into_updates_capture_in_place() {
-        let mut v = json!({});
-        merge_into(&mut v, "/abs/sigil-hook", "claude-code", "redacted");
-        assert!(merge_into(&mut v, "/abs/sigil-hook", "claude-code", "raw")); // changed
-        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook"), 1);
-        // the command now says --capture raw
+        ));
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "claude-code"), 1);
+        // capture change updates in place
+        assert!(merge_into(&mut v, "/abs/sigil-hook", "claude-code", "raw"));
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "claude-code"), 1);
         let s = serde_json::to_string(&v).unwrap();
-        assert!(s.contains("--capture raw"));
-        assert!(!s.contains("--capture redacted"));
+        assert!(s.contains("--capture raw") && !s.contains("--capture redacted"));
     }
     #[test]
-    fn remove_from_removes_only_sigil_and_preserves_foreign() {
+    fn nested_remove_preserves_foreign() {
         let mut v = json!({"hooks":{"PreToolUse":[
             {"matcher":"*","hooks":[{"type":"command","command":"/other/tool run"}]}
         ]}});
         merge_into(&mut v, "/abs/sigil-hook", "claude-code", "redacted");
-        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook"), 1);
-        assert!(remove_from(&mut v, "/abs/sigil-hook"));
-        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook"), 0);
-        // foreign hook still present:
-        let s = serde_json::to_string(&v).unwrap();
-        assert!(s.contains("/other/tool run"));
+        assert!(remove_from(&mut v, "/abs/sigil-hook", "claude-code"));
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "claude-code"), 0);
+        assert!(serde_json::to_string(&v)
+            .unwrap()
+            .contains("/other/tool run"));
+    }
+
+    // --- Codex (nested, ~/.codex/hooks.json) ---
+    #[test]
+    fn codex_uses_nested_and_notes_config_toml() {
+        let s = render_block("/abs/sigil-hook", "codex", "redacted");
+        assert!(s.contains("/abs/sigil-hook codex --capture redacted"));
+        assert!(s.contains(".codex/hooks.json"));
+        assert!(s.contains("config.toml"));
+        let mut v = json!({});
+        assert!(merge_into(&mut v, "/abs/sigil-hook", "codex", "redacted"));
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "codex"), 1);
+        assert!(v["hooks"]["PreToolUse"].is_array());
+    }
+
+    // --- Antigravity (top-level PreToolUse) ---
+    #[test]
+    fn antigravity_uses_top_level_pretooluse() {
+        let mut v = json!({});
+        assert!(merge_into(
+            &mut v,
+            "/abs/sigil-hook",
+            "antigravity",
+            "redacted"
+        ));
+        // top-level, NOT under hooks
+        assert!(v["PreToolUse"].is_array());
+        assert!(v["hooks"].is_null());
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "antigravity"), 1);
+        assert!(!merge_into(
+            &mut v,
+            "/abs/sigil-hook",
+            "antigravity",
+            "redacted"
+        ));
+        assert!(remove_from(&mut v, "/abs/sigil-hook", "antigravity"));
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "antigravity"), 0);
+    }
+
+    // --- Cursor (version + two event arrays) ---
+    #[test]
+    fn cursor_registers_both_events_with_version() {
+        let mut v = json!({});
+        assert!(merge_into(&mut v, "/abs/sigil-hook", "cursor", "redacted"));
+        assert_eq!(v["version"], json!(1));
+        assert!(v["hooks"]["beforeShellExecution"].is_array());
+        assert!(v["hooks"]["beforeMCPExecution"].is_array());
+        // one entry per event = 2 total
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "cursor"), 2);
+        assert!(!merge_into(&mut v, "/abs/sigil-hook", "cursor", "redacted"));
+        let s = render_block("/abs/sigil-hook", "cursor", "redacted");
+        assert!(s.contains("beforeShellExecution") && s.contains("beforeMCPExecution"));
+    }
+    #[test]
+    fn cursor_remove_preserves_foreign() {
+        let mut v = json!({"version":1,"hooks":{"beforeShellExecution":[
+            {"command":"/other/guard.sh"}
+        ]}});
+        merge_into(&mut v, "/abs/sigil-hook", "cursor", "redacted");
+        assert!(remove_from(&mut v, "/abs/sigil-hook", "cursor"));
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "cursor"), 0);
+        assert!(serde_json::to_string(&v)
+            .unwrap()
+            .contains("/other/guard.sh"));
+    }
+
+    #[test]
+    fn unsupported_agent_paths() {
+        assert!(settings_path("nope").is_none());
+        assert_eq!(count_sigil_entries(&json!({}), "/x", "nope"), 0);
     }
 }
