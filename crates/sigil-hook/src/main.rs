@@ -127,6 +127,18 @@ enum Cmd {
         capture: CaptureArg,
     },
 
+    /// Codex CLI PreToolUse entrypoint: read stdin, emit, exit 0.
+    Codex {
+        #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
+        capture: CaptureArg,
+    },
+
+    /// Cursor before{Shell,MCP}Execution entrypoint: read stdin, emit, exit 0.
+    Cursor {
+        #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
+        capture: CaptureArg,
+    },
+
     /// Print (or write) the sigil-hook registration into an agent's settings.
     Install {
         /// Agent to register with. Currently only "claude-code" is supported.
@@ -172,6 +184,8 @@ fn main() {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::ClaudeCode { capture } => run_hook("claude-code", capture.into()),
+        Cmd::Codex { capture } => run_hook("codex", capture.into()),
+        Cmd::Cursor { capture } => run_hook("cursor", capture.into()),
         Cmd::Install {
             agent,
             write,
