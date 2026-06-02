@@ -5,8 +5,9 @@
 //!   - MCP servers: `~/.gemini/config/mcp_config.json` (`mcpServers`, a separate
 //!     file — unlike Gemini, MCP is not inline in settings.json)
 //!   - terminal sandbox: `enableTerminalSandbox` (boolean, default false)
-//!   - approval mode: `approval_mode` (`default`/`auto_edit`/`yolo`/`plan`),
-//!     where `yolo` skips ALL confirmation and `auto_edit` auto-approves edits.
+//!   - tool permission: `toolPermission` (`request-review` default / `auto-approve`),
+//!     verified against the real `agy` 1.0.4 binary + runtime log. (NOT Gemini's
+//!     `approval_mode` — Antigravity dropped it.)
 //!
 //! UserGlobal scope only for now; the per-repo (`<repo>/.antigravity/settings.json`)
 //! parser needs an `antigravity_workspaces` policy field and is a follow-up.
@@ -71,18 +72,27 @@ pub(crate) fn emit_sandbox(v: &Value, out: &mut Vec<AiGuardReason>) {
     }
 }
 
-/// `approval_mode` (top-level) or `general.defaultApprovalMode` (nested, Gemini
-/// carry-over) in {`yolo`, `auto_edit`} -> AutoApprovalEnabled. `yolo` skips all
-/// tool/command confirmation; `auto_edit` auto-approves edits. `default`/`plan`
-/// are safe.
+/// `toolPermission == "auto-approve"` -> AutoApprovalEnabled (the agent runs
+/// tools without confirmation). `request-review` (the default) is safe.
+///
+/// Verified against the real `agy` 1.0.4 binary + runtime log
+/// (`CLI settings initialized: ... toolPermission=request-review`): the key is
+/// `toolPermission`, NOT Gemini's `approval_mode` (`yolo`/`auto_edit`), which
+/// Antigravity dropped. A truthy `permissions.allowAll` is also flagged.
 pub(crate) fn emit_approval(v: &Value, out: &mut Vec<AiGuardReason>) {
-    let mode = v.get("approval_mode").and_then(Value::as_str).or_else(|| {
-        v.get("general")
-            .and_then(|g| g.get("defaultApprovalMode"))
-            .and_then(Value::as_str)
-    });
-    if let Some(m @ ("yolo" | "auto_edit")) = mode {
-        out.push(AiGuardReason::AutoApprovalEnabled { mode: m.into() });
+    if v.get("toolPermission").and_then(Value::as_str) == Some("auto-approve") {
+        out.push(AiGuardReason::AutoApprovalEnabled {
+            mode: "auto-approve".into(),
+        });
+    } else if v
+        .get("permissions")
+        .and_then(|p| p.get("allowAll"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        out.push(AiGuardReason::AutoApprovalEnabled {
+            mode: "allow_all".into(),
+        });
     }
 }
 
@@ -196,33 +206,34 @@ mod tests {
             .any(|r| matches!(r, AiGuardReason::SandboxDisabled)));
     }
     #[test]
-    fn yolo_emits_auto_approval() {
+    fn auto_approve_emits_auto_approval() {
         let d = tempdir().unwrap();
-        write_settings(d.path(), r#"{"approval_mode":"yolo"}"#);
-        assert!(assess(d.path())
-            .iter()
-            .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { mode } if mode == "yolo")));
-    }
-    #[test]
-    fn auto_edit_emits_auto_approval() {
-        let d = tempdir().unwrap();
-        write_settings(d.path(), r#"{"approval_mode":"auto_edit"}"#);
+        write_settings(d.path(), r#"{"toolPermission":"auto-approve"}"#);
         assert!(assess(d.path()).iter().any(
-            |r| matches!(r, AiGuardReason::AutoApprovalEnabled { mode } if mode == "auto_edit")
+            |r| matches!(r, AiGuardReason::AutoApprovalEnabled { mode } if mode == "auto-approve")
         ));
     }
     #[test]
-    fn nested_gemini_carryover_approval_detected() {
+    fn permissions_allow_all_emits_auto_approval() {
         let d = tempdir().unwrap();
-        write_settings(d.path(), r#"{"general":{"defaultApprovalMode":"yolo"}}"#);
+        write_settings(d.path(), r#"{"permissions":{"allowAll":true}}"#);
         assert!(assess(d.path())
             .iter()
             .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
     }
     #[test]
-    fn plan_mode_is_safe() {
+    fn request_review_is_safe() {
         let d = tempdir().unwrap();
-        write_settings(d.path(), r#"{"approval_mode":"plan"}"#);
+        write_settings(d.path(), r#"{"toolPermission":"request-review"}"#);
+        assert!(!assess(d.path())
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
+    }
+    #[test]
+    fn gemini_approval_mode_no_longer_matches() {
+        // The old Gemini key was dropped by Antigravity; must NOT false-fire.
+        let d = tempdir().unwrap();
+        write_settings(d.path(), r#"{"approval_mode":"yolo"}"#);
         assert!(!assess(d.path())
             .iter()
             .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
@@ -259,7 +270,7 @@ mod tests {
         std::fs::create_dir_all(repo.join(".antigravity")).unwrap();
         std::fs::write(
             repo.join(".antigravity").join("settings.json"),
-            r#"{"enableTerminalSandbox":false,"approval_mode":"yolo"}"#,
+            r#"{"enableTerminalSandbox":false,"toolPermission":"auto-approve"}"#,
         )
         .unwrap();
         let p = AntigravityProjectParser {
