@@ -1,5 +1,6 @@
 use sigil_core::event::AiTool;
 use sigil_core::hook_proto::{CaptureLevel, CaptureStatus, HookInvocation};
+pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod cursor;
@@ -21,6 +22,7 @@ pub fn for_agent(name: &str) -> Option<Box<dyn HookAdapter>> {
         "claude-code" => Some(Box::new(claude_code::ClaudeCode)),
         "codex" => Some(Box::new(codex::Codex)),
         "cursor" => Some(Box::new(cursor::Cursor)),
+        "antigravity" => Some(Box::new(antigravity::Antigravity)),
         _ => None,
     }
 }
