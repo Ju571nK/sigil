@@ -275,19 +275,29 @@ pub fn count_sigil_entries(root: &Value, exe: &str, agent: &str) -> usize {
     }
 }
 
-/// `$XDG_STATE_HOME/sigil` or `$HOME/.local/state/sigil`.
+/// The user's home directory, cross-platform: `HOME` (Unix) or `USERPROFILE`
+/// (Windows, where `HOME` is usually unset).
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|s| !s.is_empty()))
+        .map(PathBuf::from)
+}
+
+/// `$XDG_STATE_HOME/sigil` or `<home>/.local/state/sigil`.
 pub fn state_dir() -> PathBuf {
     if let Ok(base) = std::env::var("XDG_STATE_HOME") {
         PathBuf::from(base).join("sigil")
     } else {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        PathBuf::from(home).join(".local/state/sigil")
+        home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".local/state/sigil")
     }
 }
 
 /// Map agent name → absolute path to its hook config file.
 pub fn settings_path(agent: &str) -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var("HOME").ok()?);
+    let home = home_dir()?;
     let p = match agent {
         "claude-code" => home.join(".claude/settings.json"),
         "codex" => home.join(".codex/hooks.json"),
