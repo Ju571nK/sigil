@@ -147,7 +147,7 @@ pub struct ControlLoopCtx {
 /// ETag is held in-process (not persisted here — caller persists on
 /// agent ACK).
 pub async fn run(ctx: ControlLoopCtx) {
-    // Separate ETag caches: policy and rule packs version independently.
+    // Separate ETag caches: policy and rule packs are versioned independently.
     let mut policy_etag: Option<String> = None;
     let mut packs_etag: Option<String> = None;
     let mut interval = tokio::time::interval(ctx.poll_interval);

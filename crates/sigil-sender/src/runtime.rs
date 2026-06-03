@@ -97,7 +97,9 @@ pub async fn run(ctx: RuntimeCtx) -> Result<()> {
                             }
                             Some(PollOutcome::NewRulePacks { etag, response }) => {
                                 match crate::agent_ipc::apply_rule_packs(&agent_socket, &response).await {
-                                    Ok(resp) if resp.ok => {
+                                    Ok(resp) if resp.ok
+                                        && matches!(resp.apply_policy, Some(ApplyPolicyResult::Accepted { .. })) =>
+                                    {
                                         if let Err(e) = state::store_etag(&packs_etag_path_c, &etag) {
                                             tracing::warn!(error = ?e, "store rule-packs etag failed");
                                         }
@@ -169,8 +171,8 @@ fn etag_path_for(offset_path: &std::path::Path) -> PathBuf {
 }
 
 /// Convention: `rule-packs-etag.txt` lives next to `sender-offset.json`,
-/// alongside `policy-etag.txt`. Kept separate so rule packs and policy
-/// version independently.
+/// alongside `policy-etag.txt`. Kept separate so rule packs and policy are
+/// versioned independently.
 fn packs_etag_path_for(offset_path: &std::path::Path) -> PathBuf {
     let parent = offset_path
         .parent()
