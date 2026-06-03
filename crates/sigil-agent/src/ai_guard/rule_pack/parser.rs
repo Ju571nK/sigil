@@ -287,6 +287,47 @@ mod tests {
     }
 
     #[test]
+    fn interpolation_draws_from_primary_not_a_gate() {
+        // A holding `when` gate must NOT affect interpolation — the emitted
+        // reason still interpolates from the PRIMARY selector's matched value.
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("mcp.json");
+        std::fs::write(
+            &file,
+            r#"{"mcpServers": {"alpha": {"url": "https://a"}}, "gate": "go"}"#,
+        )
+        .unwrap();
+        let mut pack = pack_with_one_rule(
+            file.to_str().unwrap(),
+            "$.mcpServers.*.url",
+            Matcher::Exists,
+            AiGuardReason::McpServerRemote {
+                server_name: "<selector-key>".into(),
+                url: "<selector-value>".into(),
+            },
+        );
+        pack.pack_version = 2;
+        pack.rules[0].when = vec![sigil_core::policy::Condition {
+            selector: "$.gate".into(),
+            matcher: Matcher::Equals { value: "go".into() },
+            negate: false,
+        }];
+        let out = RulePackParser::new(pack)
+            .unwrap()
+            .assess(Path::new("/unused"))
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            // alpha / https://a come from the PRIMARY, not the gate's `$.gate`.
+            AiGuardReason::McpServerRemote { server_name, url } => {
+                assert_eq!(server_name, "alpha");
+                assert_eq!(url, "https://a");
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
     fn corrupt_json_returns_parse_error() {
         let dir = tempdir().unwrap();
         let file = dir.path().join("bad.json");
