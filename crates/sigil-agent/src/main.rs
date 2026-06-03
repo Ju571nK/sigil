@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
             let code = if verify_self {
                 doctor::verify_self(manifest)
             } else {
-                doctor::run(cli.policy)
+                doctor::run(cli.policy, cli.state_db)
             };
             std::process::exit(code);
         }

@@ -25,9 +25,9 @@ fn write_jsonl(dir: &std::path::Path, name: &str, lines: &[(Uuid, &str)]) {
 fn cfg(events_dir: &std::path::Path, state_dir: &std::path::Path, addr: &str) -> SenderConfig {
     SenderConfig {
         server_base_url: format!("http://{addr}"),
-        client_cert_path: state_dir.join("client.crt"),
-        client_key_path: state_dir.join("client.key"),
-        server_ca_path: state_dir.join("server-ca.pem"),
+        client_cert_path: Some(state_dir.join("client.crt")),
+        client_key_path: Some(state_dir.join("client.key")),
+        server_ca_path: Some(state_dir.join("server-ca.pem")),
         events_dir: events_dir.to_path_buf(),
         offset_path: state_dir.join("sender-offset.json"),
         agent_control: state_dir.join("control.sock"),

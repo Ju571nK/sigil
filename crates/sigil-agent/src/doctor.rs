@@ -140,7 +140,7 @@ pub(crate) fn verify_self_impl(
     }
 }
 
-pub fn run(policy_override: Option<PathBuf>) -> i32 {
+pub fn run(policy_override: Option<PathBuf>, state_db_override: Option<PathBuf>) -> i32 {
     let plat = ActivePlatform::new();
     let mut warn_count = 0;
     let mut error_count = 0;
@@ -227,8 +227,9 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
     }
     println!("[OK]   total expanded paths: {total_paths}");
 
-    // Phase 2: show persisted host_id from state.db.
-    let state_db_path = default_state_db_path();
+    // Phase 2: show persisted host_id from state.db. Honor the `--state-db`
+    // override (matching `sigil show`); fall back to the default path.
+    let state_db_path = state_db_override.unwrap_or_else(default_state_db_path);
     match sigil_core::state::HashCache::open(&state_db_path) {
         Ok(cache) => match cache.host_meta_get() {
             Ok(meta) => {
