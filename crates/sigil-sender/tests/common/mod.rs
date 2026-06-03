@@ -23,6 +23,10 @@ pub struct MockState {
     pub next_rejected: Vec<EventRejection>,
     pub policy_etag: String,
     pub policy_response: Option<sigil_sender::wire::SignedPolicyResponse>,
+    pub rule_packs_etag: String,
+    /// Rule-packs bundle. `None` → endpoint responds 404 (benign: not
+    /// configured). `Some` → 200 with the bundle (or 304 on etag match).
+    pub rule_packs_response: Option<sigil_sender::wire::SignedPolicyResponse>,
 }
 
 impl Default for MockState {
@@ -34,6 +38,8 @@ impl Default for MockState {
             next_rejected: Vec::new(),
             policy_etag: String::new(),
             policy_response: None,
+            rule_packs_etag: String::new(),
+            rule_packs_response: None,
         }
     }
 }
@@ -49,6 +55,7 @@ pub async fn spawn_mock() -> (SocketAddr, SharedMock) {
     let app = Router::new()
         .route("/v1/events", post(handle_events))
         .route("/v1/policy", get(handle_policy))
+        .route("/v1/rule-packs", get(handle_rule_packs))
         .with_state(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -125,4 +132,42 @@ async fn handle_policy(
         .map(|r| serde_json::to_value(r).unwrap())
         .unwrap_or(serde_json::json!(null));
     (axum::http::StatusCode::OK, out_headers, Json(body))
+}
+
+async fn handle_rule_packs(
+    State(state): State<SharedMock>,
+    headers: axum::http::HeaderMap,
+) -> (
+    axum::http::StatusCode,
+    axum::http::HeaderMap,
+    Json<serde_json::Value>,
+) {
+    let s = state.lock().await;
+    let mut out_headers = axum::http::HeaderMap::new();
+    // No bundle configured → 404 (benign).
+    let Some(resp) = s.rule_packs_response.as_ref() else {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            out_headers,
+            Json(serde_json::json!({"error": "no rule-pack bundle configured"})),
+        );
+    };
+    if let Some(etag) = headers.get("if-none-match") {
+        if etag.to_str().unwrap_or("") == s.rule_packs_etag {
+            return (
+                axum::http::StatusCode::NOT_MODIFIED,
+                out_headers,
+                Json(serde_json::json!(null)),
+            );
+        }
+    }
+    out_headers.insert(
+        "etag",
+        axum::http::HeaderValue::from_str(&s.rule_packs_etag).unwrap(),
+    );
+    (
+        axum::http::StatusCode::OK,
+        out_headers,
+        Json(serde_json::to_value(resp).unwrap()),
+    )
 }

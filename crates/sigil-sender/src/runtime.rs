@@ -38,6 +38,7 @@ pub async fn run(ctx: RuntimeCtx) -> Result<()> {
     )?;
     let stats = heartbeat::shared();
     let etag_path = etag_path_for(&ctx.config.offset_path);
+    let packs_etag_path = packs_etag_path_for(&ctx.config.offset_path);
     let initial_etag = state::load_etag(&etag_path).ok().flatten();
 
     let (poll_tx, mut poll_rx) = mpsc::channel::<PollOutcome>(8);
@@ -65,6 +66,7 @@ pub async fn run(ctx: RuntimeCtx) -> Result<()> {
         let dead_letter_dir = ctx.config.dead_letter_dir.clone();
         let host_id = ctx.host_id.clone();
         let etag_path_c = etag_path.clone();
+        let packs_etag_path_c = packs_etag_path.clone();
         let cancel_r = ctx.shutdown.clone();
         // Seed the in-process etag with whatever boot recovery loaded so the
         // first successful apply_policy doesn't re-store an unchanged value.
@@ -90,6 +92,21 @@ pub async fn run(ctx: RuntimeCtx) -> Result<()> {
                                     }
                                     Err(e) => {
                                         tracing::warn!(error = ?e, "apply_policy IPC failed");
+                                    }
+                                }
+                            }
+                            Some(PollOutcome::NewRulePacks { etag, response }) => {
+                                match crate::agent_ipc::apply_rule_packs(&agent_socket, &response).await {
+                                    Ok(resp) if resp.ok => {
+                                        if let Err(e) = state::store_etag(&packs_etag_path_c, &etag) {
+                                            tracing::warn!(error = ?e, "store rule-packs etag failed");
+                                        }
+                                    }
+                                    Ok(resp) => {
+                                        tracing::warn!(?resp, "agent did not accept rule packs; not caching etag");
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = ?e, "apply_rule_packs IPC failed");
                                     }
                                 }
                             }
@@ -149,4 +166,14 @@ fn etag_path_for(offset_path: &std::path::Path) -> PathBuf {
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     parent.join("policy-etag.txt")
+}
+
+/// Convention: `rule-packs-etag.txt` lives next to `sender-offset.json`,
+/// alongside `policy-etag.txt`. Kept separate so rule packs and policy
+/// version independently.
+fn packs_etag_path_for(offset_path: &std::path::Path) -> PathBuf {
+    let parent = offset_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    parent.join("rule-packs-etag.txt")
 }

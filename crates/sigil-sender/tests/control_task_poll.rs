@@ -1,7 +1,7 @@
 mod common;
 
 use sigil_core::policy::signed_envelope::{SignedEnvelope, SignedPolicyResponse};
-use sigil_sender::control_task::{poll_policy, PollOutcome};
+use sigil_sender::control_task::{poll_policy, poll_rule_packs, PollOutcome};
 use time::macros::datetime;
 
 fn sample_response(etag: &str) -> SignedPolicyResponse {
@@ -45,6 +45,48 @@ async fn matching_etag_returns_unmodified() {
     match poll_policy(&client, &format!("http://{addr}"), "h", Some("abc")).await {
         PollOutcome::Unmodified => {}
         other => panic!("expected Unmodified, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn rule_packs_no_etag_returns_new_rule_packs() {
+    let (addr, state) = common::spawn_mock().await;
+    {
+        let mut s = state.lock().await;
+        s.rule_packs_etag = "packs-fresh".into();
+        s.rule_packs_response = Some(sample_response("packs-fresh"));
+    }
+    let client = reqwest::Client::new();
+    match poll_rule_packs(&client, &format!("http://{addr}"), "h", None).await {
+        PollOutcome::NewRulePacks { etag, .. } => assert_eq!(etag, "packs-fresh"),
+        other => panic!("expected NewRulePacks, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn rule_packs_matching_etag_returns_unmodified() {
+    let (addr, state) = common::spawn_mock().await;
+    {
+        let mut s = state.lock().await;
+        s.rule_packs_etag = "p-abc".into();
+        s.rule_packs_response = Some(sample_response("p-abc"));
+    }
+    let client = reqwest::Client::new();
+    match poll_rule_packs(&client, &format!("http://{addr}"), "h", Some("p-abc")).await {
+        PollOutcome::Unmodified => {}
+        other => panic!("expected Unmodified, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn rule_packs_404_is_benign_unmodified() {
+    // No bundle configured → server returns 404. This MUST be benign
+    // (Unmodified), not HostUnknown or a protocol violation.
+    let (addr, _state) = common::spawn_mock().await;
+    let client = reqwest::Client::new();
+    match poll_rule_packs(&client, &format!("http://{addr}"), "h", None).await {
+        PollOutcome::Unmodified => {}
+        other => panic!("expected Unmodified (benign 404), got {other:?}"),
     }
 }
 

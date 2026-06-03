@@ -10,6 +10,7 @@ use thiserror::Error;
 #[serde(tag = "cmd", rename_all = "snake_case")]
 enum AgentRequest<'a> {
     ApplyPolicy { response: &'a SignedPolicyResponse },
+    ApplyRulePacks { response: &'a SignedPolicyResponse },
 }
 
 #[derive(Deserialize, Debug)]
@@ -64,6 +65,33 @@ pub async fn apply_policy(
     Ok(parsed)
 }
 
+/// Sends a fresh rule-pack bundle to the agent. Mirrors [`apply_policy`]:
+/// same socket protocol, just the `ApplyRulePacks` request variant.
+#[cfg(unix)]
+pub async fn apply_rule_packs(
+    socket_path: &Path,
+    response: &SignedPolicyResponse,
+) -> Result<AgentResponse, IpcError> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixStream;
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .map_err(|source| IpcError::Connect {
+            path: socket_path.to_path_buf(),
+            source,
+        })?;
+    let (rd, mut wr) = stream.into_split();
+    let req = AgentRequest::ApplyRulePacks { response };
+    let mut req_bytes = serde_json::to_vec(&req)?;
+    req_bytes.push(b'\n');
+    wr.write_all(&req_bytes).await?;
+    wr.shutdown().await.ok();
+    let mut buf = String::new();
+    BufReader::new(rd).read_line(&mut buf).await?;
+    let parsed: AgentResponse = serde_json::from_str(buf.trim())?;
+    Ok(parsed)
+}
+
 #[cfg(windows)]
 pub async fn apply_policy(
     pipe_name: &Path,
@@ -79,6 +107,33 @@ pub async fn apply_policy(
             source,
         })?;
     let req = AgentRequest::ApplyPolicy { response };
+    let mut req_bytes = serde_json::to_vec(&req)?;
+    req_bytes.push(b'\n');
+    client.write_all(&req_bytes).await?;
+    client.flush().await?;
+    let mut buf = String::new();
+    BufReader::new(&mut client).read_line(&mut buf).await?;
+    let parsed: AgentResponse = serde_json::from_str(buf.trim())?;
+    Ok(parsed)
+}
+
+/// Sends a fresh rule-pack bundle to the agent. Mirrors [`apply_policy`]:
+/// same pipe protocol, just the `ApplyRulePacks` request variant.
+#[cfg(windows)]
+pub async fn apply_rule_packs(
+    pipe_name: &Path,
+    response: &SignedPolicyResponse,
+) -> Result<AgentResponse, IpcError> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::windows::named_pipe::ClientOptions;
+    let pipe_str = pipe_name.to_string_lossy().to_string();
+    let mut client = ClientOptions::new()
+        .open(pipe_str.as_str())
+        .map_err(|source| IpcError::Connect {
+            path: pipe_name.to_path_buf(),
+            source,
+        })?;
+    let req = AgentRequest::ApplyRulePacks { response };
     let mut req_bytes = serde_json::to_vec(&req)?;
     req_bytes.push(b'\n');
     client.write_all(&req_bytes).await?;
