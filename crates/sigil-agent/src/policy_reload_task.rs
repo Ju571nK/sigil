@@ -294,6 +294,7 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
             Cursor => new_cursor.iter().cloned().collect(),
             Antigravity => new_antigravity.iter().cloned().collect(),
             ClaudeDesktop => Vec::new(),
+            Other => Vec::new(),
         }
     };
 

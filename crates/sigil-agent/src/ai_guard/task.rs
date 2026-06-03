@@ -208,6 +208,7 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
             reasons,
             is_reattestation,
             rule_pack_id: key.2.clone(),
+            tool_label: parser.tool_label().map(|s| s.to_string()),
         },
         target_id: None,
     };
@@ -239,6 +240,7 @@ mod tests {
         tool: AiTool,
         scope: AiGuardScope,
         pack_id: Option<String>,
+        tool_label: Option<String>,
         scripts: StdMutex<Vec<Vec<AiGuardReason>>>,
         watched: Vec<PathBuf>,
     }
@@ -252,6 +254,9 @@ mod tests {
         }
         fn rule_pack_id(&self) -> Option<&str> {
             self.pack_id.as_deref()
+        }
+        fn tool_label(&self) -> Option<&str> {
+            self.tool_label.as_deref()
         }
         fn watched_paths(&self, _home: &std::path::Path) -> Vec<PathBuf> {
             self.watched.clone()
@@ -297,6 +302,7 @@ mod tests {
             tool: AiTool::ClaudeCode,
             scope: AiGuardScope::UserGlobal,
             pack_id: None,
+            tool_label: None,
             scripts: StdMutex::new(vec![vec![]]),
             watched: vec![PathBuf::from("/tmp/test-home/.claude/settings.json")],
         };
@@ -335,6 +341,7 @@ mod tests {
             tool: AiTool::ClaudeCode,
             scope: AiGuardScope::UserGlobal,
             pack_id: None,
+            tool_label: None,
             scripts: StdMutex::new(vec![
                 vec![AiGuardReason::PermissionsDenyEmpty], // boot
                 vec![AiGuardReason::PermissionsDenyEmpty], // identical → no emit
@@ -362,6 +369,7 @@ mod tests {
             tool: AiTool::ClaudeCode,
             scope: AiGuardScope::UserGlobal,
             pack_id: None,
+            tool_label: None,
             scripts: StdMutex::new(vec![
                 vec![AiGuardReason::PermissionsDenyEmpty],
                 vec![AiGuardReason::SandboxDisabled],
@@ -392,6 +400,7 @@ mod tests {
             tool: AiTool::ClaudeCode,
             scope: AiGuardScope::UserGlobal,
             pack_id: None,
+            tool_label: None,
             scripts: StdMutex::new(vec![
                 vec![AiGuardReason::PermissionsDenyEmpty],
                 vec![AiGuardReason::PermissionsDenyEmpty], // heartbeat — same
@@ -467,6 +476,7 @@ mod tests {
             tool: AiTool::ClaudeCode,
             scope: AiGuardScope::UserGlobal,
             pack_id: None,
+            tool_label: None,
             scripts: StdMutex::new(vec![
                 vec![AiGuardReason::PermissionsDenyEmpty], // boot
                 vec![AiGuardReason::SandboxDisabled],      // heartbeat — different
@@ -493,6 +503,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn emit_carries_tool_label_from_parser() {
+        let (_fc_tx, fc_rx) = broadcast::channel(8);
+        let (event_tx, mut events) = mpsc::channel(16);
+        let state: Arc<RwLock<StateMap>> = Arc::new(RwLock::new(HashMap::new()));
+        let ctx = TaskCtx {
+            parsers: Arc::new(RwLock::new(vec![])),
+            fc_rx,
+            event_tx,
+            state: state.clone(),
+            heartbeat_interval: Duration::from_secs(24 * 3600),
+            home_dir: PathBuf::from("/tmp/test-home"),
+            host_id: "test-host".into(),
+            ext_scripts: crate::ai_guard::empty_ext_script_registry(),
+            rubric: crate::ai_guard::default_rubric_handle(),
+        };
+        let parser = ScriptedParser {
+            tool: AiTool::Other,
+            scope: AiGuardScope::UserGlobal,
+            pack_id: Some("p".to_string()),
+            tool_label: Some("acme-ai".to_string()),
+            scripts: StdMutex::new(vec![vec![AiGuardReason::SandboxDisabled]]),
+            watched: vec![],
+        };
+        eval_and_maybe_emit(&parser, &ctx, true).await;
+        let ev = events.recv().await.expect("tool_label event");
+        let j = serde_json::to_value(&ev.event).unwrap();
+        assert_eq!(j["evidence"]["tool"], "other");
+        assert_eq!(j["evidence"]["tool_label"], "acme-ai");
+    }
+
+    #[tokio::test]
     async fn distinct_pack_ids_do_not_collide_in_state() {
         let (_fc_tx, fc_rx) = broadcast::channel(8);
         let (event_tx, _events) = mpsc::channel(16);
@@ -514,6 +555,7 @@ mod tests {
             tool: AiTool::Gemini,
             scope: AiGuardScope::Project { path: "/r".into() },
             pack_id: Some("pack-a".to_string()),
+            tool_label: None,
             scripts: StdMutex::new(vec![vec![AiGuardReason::SandboxDisabled]]),
             watched: vec![],
         };
@@ -523,6 +565,7 @@ mod tests {
             tool: AiTool::Gemini,
             scope: AiGuardScope::Project { path: "/r".into() },
             pack_id: Some("pack-b".to_string()),
+            tool_label: None,
             scripts: StdMutex::new(vec![vec![]]),
             watched: vec![],
         };

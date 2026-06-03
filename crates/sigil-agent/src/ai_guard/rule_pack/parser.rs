@@ -75,6 +75,10 @@ impl AiGuardParser for RulePackParser {
         Some(&self.pack.id)
     }
 
+    fn tool_label(&self) -> Option<&str> {
+        self.pack.tool_label.as_deref()
+    }
+
     fn watched_paths(&self, _home: &Path) -> Vec<PathBuf> {
         self.pack
             .watched_paths
@@ -167,6 +171,7 @@ mod tests {
             scope: RulePackScope::UserGlobal,
             watched_paths: vec![on_file_abs.into()],
             platforms: None,
+            tool_label: None,
             rules: vec![RuleEntry {
                 id: "r1".into(),
                 on_file: on_file_abs.into(),
@@ -268,6 +273,7 @@ mod tests {
             scope: RulePackScope::UserGlobal,
             watched_paths: vec![],
             platforms: None,
+            tool_label: None,
             rules: vec![RuleEntry {
                 id: "r1".into(),
                 on_file: "/tmp/x".into(),
@@ -280,6 +286,21 @@ mod tests {
             }],
         };
         assert!(RulePackParser::new(pack).is_err());
+    }
+
+    #[test]
+    fn rule_pack_parser_reports_tool_label() {
+        let mut pack = pack_with_one_rule(
+            "/abs/c.json",
+            "$.x",
+            Matcher::Exists,
+            AiGuardReason::SandboxDisabled,
+        );
+        pack.tool = AiTool::Other;
+        pack.tool_label = Some("acme-ai".into());
+        let p = RulePackParser::new(pack).unwrap();
+        assert_eq!(p.tool(), AiTool::Other);
+        assert_eq!(p.tool_label(), Some("acme-ai"));
     }
 
     #[test]

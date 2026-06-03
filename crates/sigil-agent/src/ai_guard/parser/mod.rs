@@ -65,6 +65,12 @@ pub trait AiGuardParser: Send + Sync {
     fn rule_pack_id(&self) -> Option<&str> {
         None
     }
+
+    /// Phase 3b.7.5 — human label for an `AiTool::Other` parser; None for built-ins
+    /// and for Other parsers without a label. Stamped onto the emitted event.
+    fn tool_label(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -44,6 +44,24 @@ pub fn pack_is_loadable(pack: &sigil_core::policy::RulePack) -> bool {
             }
         }
     }
+    if matches!(pack.tool, sigil_core::event::AiTool::Other) {
+        // Generic tools must name themselves, and are UserGlobal-only: there is no
+        // built-in per-repo discovery for an unknown tool, and per-repo generic
+        // packs need pack-declared discovery (out of scope — 3b.7.5 non-goal).
+        let labelled = pack
+            .tool_label
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        if !labelled {
+            tracing::warn!(id = %pack.id, "rule_pack: tool=other requires a non-empty tool_label; skipping");
+            return false;
+        }
+        if matches!(pack.scope, sigil_core::policy::RulePackScope::Project) {
+            tracing::warn!(id = %pack.id, "rule_pack: tool=other supports UserGlobal scope only; skipping");
+            return false;
+        }
+    }
     if let Some(plats) = &pack.platforms {
         if !plats.is_empty() && !plats.contains(&sigil_core::policy::current_platform()) {
             return false;
@@ -66,6 +84,7 @@ mod tests {
             scope,
             watched_paths: vec![],
             platforms: None,
+            tool_label: None,
             rules: vec![RuleEntry {
                 id: "r".into(),
                 on_file: on_file.into(),
@@ -75,6 +94,67 @@ mod tests {
                 emit: AiGuardReason::SandboxDisabled,
             }],
         }
+    }
+
+    fn pack_tool(tool: AiTool, label: Option<&str>, scope: RulePackScope) -> RulePack {
+        RulePack {
+            id: "p".into(),
+            pack_version: 1,
+            tool,
+            tool_label: label.map(|s| s.to_string()),
+            scope,
+            watched_paths: vec![],
+            platforms: None,
+            rules: vec![RuleEntry {
+                id: "r".into(),
+                on_file: ".x/c.json".into(),
+                format: RuleFormat::Json,
+                selector: "$.x".into(),
+                matcher: Matcher::Exists,
+                emit: AiGuardReason::SandboxDisabled,
+            }],
+        }
+    }
+
+    #[test]
+    fn other_tool_with_label_is_loadable() {
+        assert!(pack_is_loadable(&pack_tool(
+            AiTool::Other,
+            Some("acme-ai"),
+            RulePackScope::UserGlobal
+        )));
+    }
+
+    #[test]
+    fn other_tool_without_label_rejected() {
+        assert!(!pack_is_loadable(&pack_tool(
+            AiTool::Other,
+            None,
+            RulePackScope::UserGlobal
+        )));
+        assert!(!pack_is_loadable(&pack_tool(
+            AiTool::Other,
+            Some("   "),
+            RulePackScope::UserGlobal
+        )));
+    }
+
+    #[test]
+    fn other_tool_with_project_scope_rejected() {
+        assert!(!pack_is_loadable(&pack_tool(
+            AiTool::Other,
+            Some("acme-ai"),
+            RulePackScope::Project
+        )));
+    }
+
+    #[test]
+    fn builtin_tool_with_stray_label_still_loadable() {
+        assert!(pack_is_loadable(&pack_tool(
+            AiTool::Gemini,
+            Some("ignored"),
+            RulePackScope::UserGlobal
+        )));
     }
 
     #[test]
