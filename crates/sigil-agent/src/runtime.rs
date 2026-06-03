@@ -194,43 +194,72 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         Arc::new(crate::ai_guard::CursorParser),
         Arc::new(crate::ai_guard::AntigravityParser),
     ];
-    for repo_root in continue_repos {
+    for repo_root in &continue_repos {
         parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser {
-            repo_root,
+            repo_root: repo_root.clone(),
         }));
     }
-    for repo_root in claude_code_repos {
+    for repo_root in &claude_code_repos {
         parsers_vec.push(Arc::new(crate::ai_guard::ClaudeCodeProjectParser {
-            repo_root,
+            repo_root: repo_root.clone(),
         }));
     }
-    for repo_root in codex_repos {
-        parsers_vec.push(Arc::new(crate::ai_guard::CodexProjectParser { repo_root }));
+    for repo_root in &codex_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::CodexProjectParser {
+            repo_root: repo_root.clone(),
+        }));
     }
-    for repo_root in gemini_repos {
-        parsers_vec.push(Arc::new(crate::ai_guard::GeminiProjectParser { repo_root }));
+    for repo_root in &gemini_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::GeminiProjectParser {
+            repo_root: repo_root.clone(),
+        }));
     }
-    for repo_root in cursor_repos {
-        parsers_vec.push(Arc::new(crate::ai_guard::CursorProjectParser { repo_root }));
+    for repo_root in &cursor_repos {
+        parsers_vec.push(Arc::new(crate::ai_guard::CursorProjectParser {
+            repo_root: repo_root.clone(),
+        }));
     }
-    for repo_root in antigravity_repos {
+    for repo_root in &antigravity_repos {
         parsers_vec.push(Arc::new(crate::ai_guard::AntigravityProjectParser {
-            repo_root,
+            repo_root: repo_root.clone(),
         }));
     }
     // Phase 3b.7 — declarative rule packs (sigil-rules-basic defaults +
     // operator overlay from signed envelope, already merged into
     // effective.rule_packs by sigil_core::policy::merge).
-    for pack in &effective.rule_packs {
+    //
+    // Phase 3b.7.2 — Project-scoped packs expand to one parser per discovered
+    // repo (UserGlobal -> exactly one). `repos_for_tool` borrows the per-tool
+    // discovery vecs immutably; the loop separately borrows `&mut effective`
+    // to push synthetic targets (distinct variables, so the borrow checker is
+    // satisfied).
+    let repos_for_tool = |tool: sigil_core::event::AiTool| -> &[std::path::PathBuf] {
+        use sigil_core::event::AiTool::*;
+        match tool {
+            ContinueDev => &continue_repos,
+            ClaudeCode => &claude_code_repos,
+            Codex => &codex_repos,
+            Gemini => &gemini_repos,
+            Cursor => &cursor_repos,
+            Antigravity => &antigravity_repos,
+            ClaudeDesktop => &[],
+        }
+    };
+    // Clone the authored packs out so the loop can push synthetic targets into
+    // `effective.targets` without holding an immutable borrow of `effective`.
+    let authored_packs = effective.rule_packs.clone();
+    for pack in &authored_packs {
         if !crate::ai_guard::rule_pack::pack_is_loadable(pack) {
             continue;
         }
-        match crate::ai_guard::rule_pack::parser::RulePackParser::new(pack.clone()) {
-            Ok(p) => parsers_vec.push(Arc::new(p)),
-            Err(e) => tracing::warn!(
-                id = %pack.id, error = ?e,
-                "rule_pack: load failed; skipping"
-            ),
+        let repos = repos_for_tool(pack.tool);
+        for parser in crate::ai_guard::rule_pack::expand::expand_pack_parsers(pack, repos) {
+            if let sigil_core::event::AiGuardScope::Project { path } =
+                crate::ai_guard::parser::AiGuardParser::scope(&parser)
+            {
+                push_rule_pack_synthetic_targets(&mut effective, pack, &path);
+            }
+            parsers_vec.push(Arc::new(parser));
         }
     }
     let ai_guard_parsers: Arc<
@@ -1129,6 +1158,40 @@ pub(crate) fn push_gemini_synthetic_target(
         tier: sigil_core::policy::Tier::Critical,
         platform: sigil_core::policy::Platform::Any,
         paths: vec![config.to_string_lossy().to_string()],
+        recursive: false,
+        follow_symlinks: false,
+        disabled: false,
+    });
+}
+
+/// Phase 3b.7.2 — push ONE synthetic WatchTarget covering all of a Project-scoped
+/// rule pack's `watched_paths`, resolved under `repo_root`. Mirrors the built-in
+/// per-repo synthetic helpers so the OS watcher subscribes to the pack's files at
+/// boot. In-memory only — never written back to the signed envelope on disk.
+pub(crate) fn push_rule_pack_synthetic_targets(
+    effective: &mut sigil_core::policy::EffectivePolicy,
+    pack: &sigil_core::policy::RulePack,
+    repo_root: &std::path::Path,
+) {
+    let h = synthetic_target_id_suffix(repo_root);
+    let paths: Vec<String> = pack
+        .watched_paths
+        .iter()
+        .map(|w| repo_root.join(w).to_string_lossy().to_string())
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    effective.targets.push(sigil_core::policy::WatchTarget {
+        id: format!("rulepack-{}-project-{h}", pack.id),
+        description: format!(
+            "Phase 3b.7.2 synthetic: pack {} @ {}",
+            pack.id,
+            repo_root.display()
+        ),
+        tier: sigil_core::policy::Tier::Critical,
+        platform: sigil_core::policy::Platform::Any,
+        paths,
         recursive: false,
         follow_symlinks: false,
         disabled: false,

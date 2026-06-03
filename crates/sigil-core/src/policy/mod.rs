@@ -59,6 +59,16 @@ pub enum HostIdStrategy {
     Static(String),
 }
 
+/// Phase 3b.7.2 — authoring scope for a rule pack. Decoupled from the runtime
+/// `event::AiGuardScope`: the operator writes a tag with NO path; the engine
+/// stamps the concrete `AiGuardScope::Project { path: repo_root }` per repo.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RulePackScope {
+    UserGlobal,
+    Project,
+}
+
 /// Phase 3b.7 — declarative rule pack. See
 /// docs/superpowers/specs/2026-05-19-phase-3b7-declarative-rule-pack-architecture-design.html
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -66,7 +76,7 @@ pub struct RulePack {
     pub id: String,
     pub pack_version: u32,
     pub tool: crate::event::AiTool,
-    pub scope: crate::event::AiGuardScope,
+    pub scope: RulePackScope,
     pub watched_paths: Vec<String>,
     #[serde(default)]
     pub platforms: Option<Vec<Platform>>,
@@ -764,12 +774,27 @@ rules:
         assert_eq!(pack.id, "test-pack");
         assert_eq!(pack.pack_version, 1);
         assert_eq!(pack.tool, crate::event::AiTool::Gemini);
-        assert!(matches!(pack.scope, crate::event::AiGuardScope::UserGlobal));
+        assert!(matches!(pack.scope, RulePackScope::UserGlobal));
         assert_eq!(pack.rules.len(), 1);
         assert_eq!(pack.rules[0].format, RuleFormat::Json);
         let back = serde_yaml::to_string(&pack).unwrap();
         let again: RulePack = serde_yaml::from_str(&back).expect("re-parse");
         assert_eq!(again.id, pack.id);
+    }
+
+    #[test]
+    fn rule_pack_project_scope_yaml_deserializes() {
+        let yaml = r#"
+id: project-pack
+pack_version: 1
+tool: gemini
+scope:
+  kind: project
+watched_paths: []
+rules: []
+"#;
+        let pack: RulePack = serde_yaml::from_str(yaml).expect("parse");
+        assert_eq!(pack.scope, RulePackScope::Project);
     }
 
     #[test]
@@ -941,6 +966,19 @@ host_id_strategy: hostname
         let doc = parse("version: 1\n").unwrap();
         assert!(doc.gemini_workspaces.is_empty());
         assert!(doc.cursor_workspaces.is_empty());
+    }
+
+    #[test]
+    fn rule_pack_scope_serde_round_trips() {
+        use super::RulePackScope;
+        let ug: RulePackScope = serde_json::from_str(r#"{"kind":"user_global"}"#).unwrap();
+        assert_eq!(ug, RulePackScope::UserGlobal);
+        let pj: RulePackScope = serde_json::from_str(r#"{"kind":"project"}"#).unwrap();
+        assert_eq!(pj, RulePackScope::Project);
+        assert_eq!(
+            serde_json::to_string(&RulePackScope::Project).unwrap(),
+            r#"{"kind":"project"}"#
+        );
     }
 
     #[test]

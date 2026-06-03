@@ -427,6 +427,10 @@ pub enum Evidence {
         /// `true` iff this is the periodic re-attestation heartbeat (no
         /// reason set change since last emission). `false` = something changed.
         is_reattestation: bool,
+        /// Phase 3b.7.2 — Some(pack id) when emitted by an operator rule-pack
+        /// parser; None (omitted) for built-in structural parsers. Forward-compat.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule_pack_id: Option<String>,
     },
     /// Phase 3b.4-pre — periodic snapshot of host identity + network + OS
     /// metadata. Emitted by host_meta_snapshot_task on boot, every 24h, and
@@ -757,6 +761,7 @@ mod tests {
                 },
             ],
             is_reattestation: false,
+            rule_pack_id: None,
         };
         let s = serde_json::to_string(&ev).unwrap();
         assert!(
@@ -807,6 +812,7 @@ mod tests {
             bucket: AiGuardBucket::Low,
             reasons: vec![],
             is_reattestation: false,
+            rule_pack_id: None,
         };
         let s = serde_json::to_string(&ev).unwrap();
         assert!(s.contains("\"reasons\":[]"), "got: {s}");
@@ -1061,5 +1067,37 @@ mod tests {
             }
             other => panic!("expected DestructiveInHookScript, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ai_guard_risk_assessed_omits_rule_pack_id_when_none() {
+        let ev = Evidence::AiGuardRiskAssessed {
+            tool: AiTool::Gemini,
+            scope: AiGuardScope::UserGlobal,
+            score: 0.0,
+            bucket: AiGuardBucket::Low,
+            reasons: vec![],
+            is_reattestation: false,
+            rule_pack_id: None,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(!s.contains("rule_pack_id"));
+        let back: Evidence = serde_json::from_str(&s).unwrap();
+        assert_eq!(ev, back);
+    }
+    #[test]
+    fn ai_guard_risk_assessed_round_trips_rule_pack_id() {
+        let ev = Evidence::AiGuardRiskAssessed {
+            tool: AiTool::Gemini,
+            scope: AiGuardScope::Project { path: "/r".into() },
+            score: 1.0,
+            bucket: AiGuardBucket::Medium,
+            reasons: vec![],
+            is_reattestation: false,
+            rule_pack_id: Some("my-pack".into()),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains(r#""rule_pack_id":"my-pack""#));
+        assert_eq!(ev, serde_json::from_str::<Evidence>(&s).unwrap());
     }
 }

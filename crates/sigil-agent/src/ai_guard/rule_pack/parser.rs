@@ -4,13 +4,14 @@ use crate::ai_guard::parser::{AiGuardParser, AssessError};
 use crate::ai_guard::rule_pack::matcher::{compile_pack_regexes, matches_value, CompileError};
 use crate::ai_guard::rule_pack::selector::{eval_json, eval_toml, MatchedValue};
 use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
-use sigil_core::policy::{RuleFormat, RulePack};
+use sigil_core::policy::{RuleFormat, RulePack, RulePackScope};
 use std::path::{Path, PathBuf};
 
 pub struct RulePackParser {
     pub pack: RulePack,
     /// Compiled regexes parallel to pack.rules (None when matcher != Regex).
     compiled_regexes: Vec<Option<regex::Regex>>,
+    pub(crate) repo_root: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -29,7 +30,30 @@ impl RulePackParser {
         Ok(Self {
             pack,
             compiled_regexes,
+            repo_root: None,
         })
+    }
+
+    /// Phase 3b.7.2 — a Project-scoped instance bound to one discovered repo.
+    /// on_file / watched_paths are resolved relative to `repo_root`.
+    pub fn new_project(
+        pack: RulePack,
+        repo_root: std::path::PathBuf,
+    ) -> Result<Self, PackLoadError> {
+        let mut p = Self::new(pack)?;
+        p.repo_root = Some(repo_root);
+        Ok(p)
+    }
+
+    /// UserGlobal: env-expand the raw path (absolute). Project: join the raw
+    /// (relative) path under repo_root.
+    fn resolve(&self, raw: &str) -> Option<PathBuf> {
+        match &self.repo_root {
+            Some(root) => Some(root.join(raw)),
+            None => {
+                sigil_core::policy::expand::expand(raw, &sigil_core::policy::expand::EnvLookup).ok()
+            }
+        }
     }
 }
 
@@ -39,30 +63,35 @@ impl AiGuardParser for RulePackParser {
     }
 
     fn scope(&self) -> AiGuardScope {
-        self.pack.scope.clone()
+        match self.pack.scope {
+            RulePackScope::UserGlobal => AiGuardScope::UserGlobal,
+            RulePackScope::Project => AiGuardScope::Project {
+                path: self.repo_root.clone().unwrap_or_default(),
+            },
+        }
+    }
+
+    fn rule_pack_id(&self) -> Option<&str> {
+        Some(&self.pack.id)
     }
 
     fn watched_paths(&self, _home: &Path) -> Vec<PathBuf> {
         self.pack
             .watched_paths
             .iter()
-            .filter_map(|raw| {
-                sigil_core::policy::expand::expand(raw, &sigil_core::policy::expand::EnvLookup).ok()
-            })
+            .filter_map(|raw| self.resolve(raw))
             .collect()
     }
 
     fn assess(&self, _home: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
         let mut out = Vec::new();
         for (idx, rule) in self.pack.rules.iter().enumerate() {
-            let file_path = sigil_core::policy::expand::expand(
-                &rule.on_file,
-                &sigil_core::policy::expand::EnvLookup,
-            )
-            .map_err(|e| AssessError::Parse {
-                path: PathBuf::from(&rule.on_file),
-                message: format!("expand: {e:?}"),
-            })?;
+            let Some(file_path) = self.resolve(&rule.on_file) else {
+                return Err(AssessError::Parse {
+                    path: PathBuf::from(&rule.on_file),
+                    message: "resolve failed".into(),
+                });
+            };
 
             let text = match std::fs::read_to_string(&file_path) {
                 Ok(s) => s,
@@ -122,7 +151,7 @@ fn interpolate_reason(reason: &AiGuardReason, matched: &MatchedValue) -> AiGuard
 mod tests {
     use super::*;
     use sigil_core::event::AiGuardReason;
-    use sigil_core::policy::{Matcher, RuleEntry, RuleFormat, RulePack};
+    use sigil_core::policy::{Matcher, RuleEntry, RuleFormat, RulePack, RulePackScope};
     use tempfile::tempdir;
 
     fn pack_with_one_rule(
@@ -135,7 +164,7 @@ mod tests {
             id: "test-pack".into(),
             pack_version: 1,
             tool: AiTool::Gemini,
-            scope: AiGuardScope::UserGlobal,
+            scope: RulePackScope::UserGlobal,
             watched_paths: vec![on_file_abs.into()],
             platforms: None,
             rules: vec![RuleEntry {
@@ -236,7 +265,7 @@ mod tests {
             id: "bad-regex".into(),
             pack_version: 1,
             tool: AiTool::Gemini,
-            scope: AiGuardScope::UserGlobal,
+            scope: RulePackScope::UserGlobal,
             watched_paths: vec![],
             platforms: None,
             rules: vec![RuleEntry {
@@ -264,5 +293,35 @@ mod tests {
         let p = RulePackParser::new(pack).unwrap();
         assert_eq!(p.tool(), AiTool::Gemini);
         assert!(matches!(p.scope(), AiGuardScope::UserGlobal));
+    }
+
+    #[test]
+    fn new_project_resolves_on_file_under_repo_root() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repoA");
+        std::fs::create_dir_all(repo.join(".gemini")).unwrap();
+        std::fs::write(repo.join(".gemini/settings.json"), r#"{"sandbox": false}"#).unwrap();
+
+        let mut pack = pack_with_one_rule(
+            ".gemini/settings.json",
+            "$.sandbox",
+            Matcher::Equals {
+                value: "false".into(),
+            },
+            AiGuardReason::SandboxDisabled,
+        );
+        pack.scope = RulePackScope::Project;
+        pack.watched_paths = vec![".gemini/settings.json".into()];
+
+        let p = RulePackParser::new_project(pack, repo.clone()).unwrap();
+        assert_eq!(p.scope(), AiGuardScope::Project { path: repo.clone() });
+        assert_eq!(p.rule_pack_id(), Some("test-pack"));
+        assert_eq!(
+            p.watched_paths(Path::new("/unused")),
+            vec![repo.join(".gemini/settings.json")]
+        );
+        let out = p.assess(Path::new("/unused")).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], AiGuardReason::SandboxDisabled));
     }
 }

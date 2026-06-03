@@ -2,6 +2,7 @@
 //! sigil-rules-basic defaults + operator policy.yaml overlay and runs
 //! Tier 1 DSL (path glob + JSON/TOML selector + matcher → AiGuardReason emit).
 
+pub mod expand;
 pub mod matcher;
 pub mod parser;
 pub mod selector;
@@ -20,12 +21,28 @@ pub fn pack_is_loadable(pack: &sigil_core::policy::RulePack) -> bool {
         );
         return false;
     }
-    if !matches!(pack.scope, sigil_core::event::AiGuardScope::UserGlobal) {
-        tracing::warn!(
-            id = %pack.id, scope = ?pack.scope,
-            "rule_pack: MVP supports UserGlobal scope only; skipping"
-        );
-        return false;
+    match pack.scope {
+        sigil_core::policy::RulePackScope::UserGlobal => {}
+        sigil_core::policy::RulePackScope::Project => {
+            // Project on_file paths are resolved relative to each repo_root, so a
+            // rooted path is an authoring error — reject the whole pack loudly.
+            // Check the first component rather than `is_absolute()`: on Windows a
+            // leading-slash path (`/abs/x`) is NOT `is_absolute` (it lacks a drive
+            // prefix) yet is still rooted, not repo-relative. RootDir covers
+            // `/x` and `\x`; Prefix covers `C:\x` / UNC.
+            if let Some(bad) = pack.rules.iter().find(|r| {
+                matches!(
+                    std::path::Path::new(&r.on_file).components().next(),
+                    Some(std::path::Component::RootDir | std::path::Component::Prefix(_))
+                )
+            }) {
+                tracing::warn!(
+                    id = %pack.id, rule = %bad.id, on_file = %bad.on_file,
+                    "rule_pack: Project scope requires relative on_file; skipping pack"
+                );
+                return false;
+            }
+        }
     }
     if let Some(plats) = &pack.platforms {
         if !plats.is_empty() && !plats.contains(&sigil_core::policy::current_platform()) {
@@ -33,4 +50,54 @@ pub fn pack_is_loadable(pack: &sigil_core::policy::RulePack) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sigil_core::event::{AiGuardReason, AiTool};
+    use sigil_core::policy::{Matcher, RuleEntry, RuleFormat, RulePack, RulePackScope};
+
+    fn pack(scope: RulePackScope, on_file: &str) -> RulePack {
+        RulePack {
+            id: "p".into(),
+            pack_version: 1,
+            tool: AiTool::Gemini,
+            scope,
+            watched_paths: vec![],
+            platforms: None,
+            rules: vec![RuleEntry {
+                id: "r".into(),
+                on_file: on_file.into(),
+                format: RuleFormat::Json,
+                selector: "$.x".into(),
+                matcher: Matcher::Exists,
+                emit: AiGuardReason::SandboxDisabled,
+            }],
+        }
+    }
+
+    #[test]
+    fn project_scope_is_loadable() {
+        assert!(pack_is_loadable(&pack(
+            RulePackScope::Project,
+            ".gemini/x.json"
+        )));
+    }
+
+    #[test]
+    fn project_with_absolute_on_file_rejected() {
+        assert!(!pack_is_loadable(&pack(
+            RulePackScope::Project,
+            "/abs/x.json"
+        )));
+    }
+
+    #[test]
+    fn user_global_with_absolute_on_file_still_ok() {
+        assert!(pack_is_loadable(&pack(
+            RulePackScope::UserGlobal,
+            "/abs/x.json"
+        )));
+    }
 }
