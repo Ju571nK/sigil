@@ -2,6 +2,7 @@
 //! sigil-rules-basic defaults + operator policy.yaml overlay and runs
 //! Tier 1 DSL (path glob + JSON/TOML selector + matcher → AiGuardReason emit).
 
+pub mod expand;
 pub mod matcher;
 pub mod parser;
 pub mod selector;
