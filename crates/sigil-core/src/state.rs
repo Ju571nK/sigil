@@ -37,10 +37,18 @@ impl HashCache {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 host_id TEXT,
                 hw_fingerprint TEXT,
-                last_applied_policy_version INTEGER NOT NULL DEFAULT 0
+                last_applied_policy_version INTEGER NOT NULL DEFAULT 0,
+                last_applied_rule_packs_version INTEGER NOT NULL DEFAULT 0
             )",
             [],
         )?;
+        // Idempotent migration for pre-existing state.db files created before the
+        // rule-packs watermark column existed. SQLite has no ADD COLUMN IF NOT
+        // EXISTS, so ignore the duplicate-column error on a fresh/already-migrated DB.
+        let _ = conn.execute(
+            "ALTER TABLE host_meta ADD COLUMN last_applied_rule_packs_version INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         // Ensure singleton row 1 exists. Idempotent.
         conn.execute(
             "INSERT OR IGNORE INTO host_meta (id, host_id, hw_fingerprint, last_applied_policy_version)

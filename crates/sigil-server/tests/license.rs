@@ -39,6 +39,7 @@ async fn meta_reports_over_limit_for_free_tier_above_200_active_hosts() {
         license_state: LicenseState::Free,
         active_window_days: 7,
         audit_key: None,
+        rule_packs_bundle_path: None,
         audit_head: Mutex::new(None),
     });
 
@@ -102,6 +103,7 @@ async fn meta_reports_ok_for_valid_license_under_its_limit() {
         license_state: LicenseState::Valid(doc),
         active_window_days: 7,
         audit_key: None,
+        rule_packs_bundle_path: None,
         audit_head: Mutex::new(None),
     });
 
@@ -166,6 +168,7 @@ async fn meta_reports_expired_falls_back_to_free_tier() {
         license_state: LicenseState::Expired(doc),
         active_window_days: 7,
         audit_key: None,
+        rule_packs_bundle_path: None,
         audit_head: Mutex::new(None),
     });
 

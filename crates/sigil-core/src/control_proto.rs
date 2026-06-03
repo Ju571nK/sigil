@@ -46,6 +46,14 @@ pub enum Request {
         /// The full server response — agent re-verifies independently.
         response: SignedPolicyResponse,
     },
+    /// `sigil-sender` hands a verified rule-pack bundle here for application.
+    /// Mirrors `ApplyPolicy` but advances the SEPARATE rule-packs watermark and
+    /// writes `rule-packs.yaml` — it never touches policy.yaml or the policy
+    /// version.
+    ApplyRulePacks {
+        /// The full server bundle response — agent re-verifies independently.
+        response: SignedPolicyResponse,
+    },
     /// Operator + sender introspection: returns the agent's current
     /// `last_applied_policy_version`, the active `valid_until`, and whether
     /// the active policy is currently expired.

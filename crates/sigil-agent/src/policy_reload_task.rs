@@ -147,12 +147,37 @@ fn reconcile_rule_packs(
     (added, removed)
 }
 
+/// Task 5 — read + parse the optional distributed rule-pack bundle
+/// (`rule-packs.yaml`, written beside `policy.yaml` by `apply_rule_packs`) into
+/// an `Option<PolicyDocument>`. Only its `.rule_packs` are consumed by `merge`
+/// as the 3rd (bundle) layer. Fail-open: a missing file → `None`; a corrupt
+/// file → warn + `None` (never crashes the agent).
+fn read_bundle_doc(path: &std::path::Path) -> Option<sigil_core::policy::PolicyDocument> {
+    let s = std::fs::read_to_string(path).ok()?;
+    match sigil_core::policy::parse(&s) {
+        Ok(d) => Some(d),
+        Err(e) => {
+            tracing::warn!(error = ?e, path = %path.display(),
+                "rule-packs.yaml parse failed; ignoring bundle layer");
+            None
+        }
+    }
+}
+
 /// Inputs for the reload task. The `WatcherHandle` lives here for the task's
 /// lifetime (so the OS watcher stays alive); `watched_roots` is the diff base
 /// for the next reconcile (start it equal to the roots `run` registered).
 pub struct ReloadCtx {
     pub policy_yaml_path: PathBuf,
     pub policy_version_rx: watch::Receiver<i64>,
+    /// Task 5 — bumped by `apply_rule_packs` whenever it commits a new
+    /// `rule-packs.yaml`. A change here re-runs `reload()` so the bundle's
+    /// rule packs are re-merged into the live parser set.
+    pub rule_packs_version_rx: watch::Receiver<i64>,
+    /// Task 5 — on-disk path of the distributed rule-pack bundle, beside
+    /// `policy.yaml`. IDENTICAL to `ApplyContext.rule_packs_yaml_path` so the
+    /// apply path writes exactly where boot/reload read.
+    pub rule_packs_yaml_path: PathBuf,
     pub targets_tx: watch::Sender<Arc<Vec<CompiledTarget>>>,
     pub watcher: WatcherHandle,
     pub watched_roots: Vec<(PathBuf, bool)>,
@@ -183,6 +208,13 @@ pub async fn run(mut ctx: ReloadCtx) {
             biased;
             _ = ctx.shutdown.cancelled() => break,
             changed = ctx.policy_version_rx.changed() => {
+                if changed.is_err() {
+                    // Sender (apply_ctx) dropped — agent is shutting down.
+                    break;
+                }
+                reload(&mut ctx, &plat);
+            }
+            changed = ctx.rule_packs_version_rx.changed() => {
                 if changed.is_err() {
                     // Sender (apply_ctx) dropped — agent is shutting down.
                     break;
@@ -222,9 +254,13 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
             return;
         }
     };
+    // Task 5 — read the distributed rule-pack bundle (3rd merge layer:
+    // defaults < policy < bundle). Missing/corrupt → None (fail-open).
+    let bundle = read_bundle_doc(&ctx.rule_packs_yaml_path);
     let mut effective = match sigil_core::policy::merge(
         defaults,
         Some(doc),
+        bundle,
         sigil_core::policy::current_platform(),
     ) {
         Ok(e) => e,
@@ -524,6 +560,7 @@ mod tests {
         sigil_core::policy::merge(
             sigil_core::policy::defaults().unwrap(),
             Some(sigil_core::policy::parse(yaml).unwrap()),
+            None,
             sigil_core::policy::current_platform(),
         )
         .unwrap()
@@ -561,6 +598,8 @@ mod tests {
         // duration (we drive `reload` directly, never `run`).
         std::mem::forget(_vtx);
         std::mem::forget(_rx);
+        let (_rptx, rule_packs_version_rx) = watch::channel(0i64);
+        std::mem::forget(_rptx);
 
         let cache = Arc::new(Mutex::new(HashCache::open(&dir.join("state.db")).unwrap()));
 
@@ -568,6 +607,8 @@ mod tests {
             ReloadCtx {
                 policy_yaml_path,
                 policy_version_rx,
+                rule_packs_version_rx,
+                rule_packs_yaml_path: dir.join("rule-packs.yaml"),
                 targets_tx,
                 watcher,
                 watched_roots: roots,
@@ -613,6 +654,8 @@ mod tests {
         let (_vtx, policy_version_rx) = watch::channel(1i64);
         std::mem::forget(_vtx);
         std::mem::forget(_rx);
+        let (_rptx, rule_packs_version_rx) = watch::channel(0i64);
+        std::mem::forget(_rptx);
 
         let cache = Arc::new(Mutex::new(HashCache::open(&dir.join("state.db")).unwrap()));
 
@@ -626,6 +669,8 @@ mod tests {
             ReloadCtx {
                 policy_yaml_path,
                 policy_version_rx,
+                rule_packs_version_rx,
+                rule_packs_yaml_path: dir.join("rule-packs.yaml"),
                 targets_tx,
                 watcher,
                 watched_roots: roots,
@@ -1223,5 +1268,64 @@ mod tests {
                 "state entry for surviving repoA should remain"
             );
         }
+    }
+
+    // Task 5 — distributed rule-pack bundle is merged as the 3rd layer at
+    // reload: a pack present only in `rule-packs.yaml` (not policy.yaml) shows
+    // up as a live RulePackParser after reload().
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_loads_rule_pack_from_distributed_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        // policy.yaml has no rule packs.
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\n";
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
+
+        // Bundle (rule-packs.yaml) carries one UserGlobal pack.
+        let bundle = "version: 1\nrule_packs:\n  - id: bundle-pack\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n";
+        std::fs::write(&ctx.rule_packs_yaml_path, bundle).unwrap();
+
+        reload(&mut ctx, &plat);
+
+        let has_bundle = parsers.read().iter().any(|p| {
+            p.as_any()
+                .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                .map(|rpp| rpp.pack.id == "bundle-pack")
+                .unwrap_or(false)
+        });
+        assert!(
+            has_bundle,
+            "expected bundle-pack from rule-packs.yaml after reload"
+        );
+    }
+
+    // Task 5 — when policy.yaml and the distributed bundle both carry a pack
+    // with the SAME id, the bundle layer wins (merge order: defaults < policy
+    // < bundle). `pack_version` is a schema-compat field clamped to
+    // MAX_PACK_VERSION, so the observable discriminator here is `watched_paths`:
+    // the live pack must expose the BUNDLE's paths, not the policy's.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_bundle_pack_overrides_policy_pack_same_id() {
+        let dir = tempfile::tempdir().unwrap();
+        // policy.yaml authors pack `shared` with watched_paths ["from-policy"].
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\nrule_packs:\n  - id: shared\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: [\"from-policy\"]\n    rules: []\n";
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
+
+        // Bundle authors the SAME id `shared` with watched_paths ["from-bundle"].
+        let bundle = "version: 1\nrule_packs:\n  - id: shared\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: [\"from-bundle\"]\n    rules: []\n";
+        std::fs::write(&ctx.rule_packs_yaml_path, bundle).unwrap();
+
+        reload(&mut ctx, &plat);
+
+        let live_paths = parsers.read().iter().find_map(|p| {
+            p.as_any()
+                .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                .filter(|rpp| rpp.pack.id == "shared")
+                .map(|rpp| rpp.pack.watched_paths.clone())
+        });
+        assert_eq!(
+            live_paths.as_deref(),
+            Some(["from-bundle".to_string()].as_slice()),
+            "bundle pack should override the policy pack with the same id"
+        );
     }
 }

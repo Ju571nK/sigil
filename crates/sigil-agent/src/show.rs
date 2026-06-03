@@ -57,7 +57,7 @@ pub fn run(
         Some(p) => Some(sigil_core::policy::parse(&std::fs::read_to_string(p)?)?),
         None => None,
     };
-    let effective = merge(defaults()?, user_doc, current_platform())?;
+    let effective = merge(defaults()?, user_doc, None, current_platform())?;
 
     match what {
         ShowWhat::Config => {
@@ -496,6 +496,9 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
             "policy_reloaded",
             format!("policy_version={policy_version}"),
         ),
+        Evidence::RulePackBundleApplied { version } => {
+            ("rule_pack_bundle_applied", format!("version={version}"))
+        }
         Evidence::PolicyExpiredActive { policy_version, .. } => (
             "policy_expired_active",
             format!("policy_version={policy_version}"),

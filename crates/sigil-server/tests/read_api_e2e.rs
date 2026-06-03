@@ -21,6 +21,7 @@ fn state_with_token(dir: &std::path::Path, token: &str) -> Arc<AppState> {
         license_state: sigil_core::license::status::LicenseState::Free,
         active_window_days: 7,
         audit_key: None,
+        rule_packs_bundle_path: None,
         audit_head: Mutex::new(None),
     })
 }

@@ -10,7 +10,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::policy_apply::{apply, ApplyContext, ApplyOutcome};
+use crate::policy_apply::{apply, apply_rule_packs, ApplyContext, ApplyOutcome};
 
 // The control-socket wire protocol now lives in `sigil-core::control_proto`, so
 // `sigil-mcp` (local-mode client) can share the contract without depending on
@@ -113,6 +113,48 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
         },
         Request::ApplyPolicy { response } => {
             let outcome = apply(&ctx.apply_ctx, &response).await;
+            match outcome {
+                ApplyOutcome::Accepted {
+                    applied_policy_version,
+                } => Response {
+                    ok: true,
+                    stats: None,
+                    apply_policy: Some(ApplyPolicyResult::Accepted {
+                        applied_policy_version,
+                    }),
+                    policy_status: None,
+                    targets: None,
+                    risk: None,
+                    doctor_ai_guard: None,
+                    error: None,
+                },
+                ApplyOutcome::Rejected { reason } => Response {
+                    ok: false,
+                    stats: None,
+                    apply_policy: Some(ApplyPolicyResult::Rejected { reason }),
+                    policy_status: None,
+                    targets: None,
+                    risk: None,
+                    doctor_ai_guard: None,
+                    error: None,
+                },
+                ApplyOutcome::Internal { detail } => Response {
+                    ok: false,
+                    stats: None,
+                    apply_policy: None,
+                    policy_status: None,
+                    targets: None,
+                    risk: None,
+                    doctor_ai_guard: None,
+                    error: Some(format!("internal: {detail}")),
+                },
+            }
+        }
+        Request::ApplyRulePacks { response } => {
+            // Mirror the ApplyPolicy response shaping so the sender's `resp.ok`
+            // check works identically. The rule-packs apply advances the
+            // SEPARATE watermark; it never touches policy.yaml.
+            let outcome = apply_rule_packs(&ctx.apply_ctx, &response).await;
             match outcome {
                 ApplyOutcome::Accepted {
                     applied_policy_version,

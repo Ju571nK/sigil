@@ -68,6 +68,7 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
     Ok(Arc::new(AppState {
         events_out_dir: cfg.events_out_dir.clone(),
         policy_bundle_path: cfg.policy_bundle_path.clone(),
+        rule_packs_bundle_path: cfg.rule_packs_bundle_path.clone(),
         high_water_path: cfg.high_water_path(),
         allowlist,
         high_water: Mutex::new(high_water),

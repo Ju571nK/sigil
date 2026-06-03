@@ -37,6 +37,45 @@ pub fn atomic_write(
     cache: &HashCache,
     new_version: i64,
 ) -> Result<(), AtomicWriteError> {
+    // 1–3. Crash-safe file write (tmp + fsync + rename + dir fsync).
+    write_file_durably(target, policy_bytes)?;
+
+    // 4. Advance state.db. If THIS step fails, disk is ahead; boot
+    //    reconciliation handles it. We surface the error so the caller can
+    //    log it for operator triage.
+    cache
+        .host_meta_set_policy_version(new_version)
+        .map_err(AtomicWriteError::StateAfterDisk)?;
+
+    Ok(())
+}
+
+/// Sibling of [`atomic_write`] for a signed rule-packs bundle: the SAME
+/// crash-safe file write, but it advances the RULE-PACKS watermark
+/// (`last_applied_rule_packs_version`) instead of the policy version. Same
+/// `AtomicWriteError` semantics: a crash between the disk write and the state.db
+/// update leaves disk ahead, recovered by boot reconciliation.
+pub fn atomic_write_rule_packs(
+    target: &Path,
+    rule_packs_bytes: &[u8],
+    cache: &HashCache,
+    new_version: i64,
+) -> Result<(), AtomicWriteError> {
+    // 1–3. Crash-safe file write (tmp + fsync + rename + dir fsync).
+    write_file_durably(target, rule_packs_bytes)?;
+
+    // 4. Advance the rule-packs watermark in state.db.
+    cache
+        .set_last_applied_rule_packs_version(new_version)
+        .map_err(AtomicWriteError::StateAfterDisk)?;
+
+    Ok(())
+}
+
+/// Shared crash-safe file write (steps 1–3 of the atomic-write protocol):
+/// write `bytes` to a pid-scoped temp file, fsync it, rename it over `target`,
+/// then fsync the parent directory (POSIX only). Does NOT touch state.db.
+fn write_file_durably(target: &Path, bytes: &[u8]) -> Result<(), AtomicWriteError> {
     let parent = target
         .parent()
         .map(PathBuf::from)
@@ -60,7 +99,7 @@ pub fn atomic_write(
             .write(true)
             .truncate(true)
             .open(&tmp)?;
-        f.write_all(policy_bytes)?;
+        f.write_all(bytes)?;
         f.sync_all()?;
     }
 
@@ -74,13 +113,6 @@ pub fn atomic_write(
         let dir = std::fs::OpenOptions::new().read(true).open(&parent)?;
         dir.sync_all()?;
     }
-
-    // 4. Advance state.db. If THIS step fails, disk is ahead; boot
-    //    reconciliation handles it. We surface the error so the caller can
-    //    log it for operator triage.
-    cache
-        .host_meta_set_policy_version(new_version)
-        .map_err(AtomicWriteError::StateAfterDisk)?;
 
     Ok(())
 }
@@ -105,6 +137,31 @@ mod tests {
         assert_eq!(
             cache.host_meta_get().unwrap().last_applied_policy_version,
             5
+        );
+    }
+
+    #[test]
+    fn writes_rule_packs_and_advances_rule_packs_version() {
+        let dir = tempdir().unwrap();
+        let cache = fresh_cache(&dir);
+        let target = dir.path().join("rule_packs.yaml");
+        atomic_write_rule_packs(&target, b"version: 1\nrule_packs: []\n", &cache, 3).unwrap();
+
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"version: 1\nrule_packs: []\n"
+        );
+        assert_eq!(
+            cache
+                .host_meta_get()
+                .unwrap()
+                .last_applied_rule_packs_version,
+            3
+        );
+        // The policy watermark is untouched by the rule-packs writer.
+        assert_eq!(
+            cache.host_meta_get().unwrap().last_applied_policy_version,
+            0
         );
     }
 

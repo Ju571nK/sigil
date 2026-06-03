@@ -377,6 +377,14 @@ pub enum Evidence {
         /// The new `last_applied_policy_version`.
         policy_version: i64,
     },
+    /// Emitted exactly once when a freshly-verified rule-pack bundle is
+    /// committed to disk + state.db. Sibling of `PolicyReloaded` for the
+    /// SEPARATE rule-packs watermark, so operators can distinguish a rule-pack
+    /// rollout from a policy rollout in the SIEM.
+    RulePackBundleApplied {
+        /// The new `last_applied_rule_packs_version`.
+        version: i64,
+    },
     /// Spec §3.10: emitted exactly once per "transition into expired".
     /// The agent continues to enforce the expired policy until a replacement
     /// arrives — `valid_until` is informational, not blocking. (Spec §1.4

@@ -12,8 +12,8 @@ use sigil_core::event::{
     SCHEMA_VERSION,
 };
 use sigil_core::policy::{
-    atomic_write, pubkeys::Keystore, signed_envelope::SignedPolicyResponse, verify_envelope,
-    AtomicWriteError, VerifyError,
+    atomic_write, atomic_write_rule_packs, pubkeys::Keystore,
+    signed_envelope::SignedPolicyResponse, verify_envelope, AtomicWriteError, VerifyError,
 };
 use sigil_core::state::HashCache;
 use std::path::PathBuf;
@@ -51,6 +51,13 @@ pub struct ApplyContext {
     /// Shared cell — written by `apply` on every successful commit, read
     /// by `policy_expiry_task` and the IPC `PolicyStatus` handler.
     pub active_valid_until: Arc<RwLock<Option<OffsetDateTime>>>,
+    /// Destination for a verified rule-pack bundle. Sits beside `policy.yaml`
+    /// but is advanced by the SEPARATE rule-packs watermark.
+    pub rule_packs_yaml_path: PathBuf,
+    /// Broadcasts the new `last_applied_rule_packs_version` whenever a
+    /// rule-pack bundle commits. The reload task (Task 5) subscribes to
+    /// re-read `rule-packs.yaml` into the merge.
+    pub rule_packs_version_tx: watch::Sender<i64>,
 }
 
 /// Apply a freshly-received `SignedPolicyResponse`.
@@ -124,6 +131,70 @@ pub async fn apply(ctx: &ApplyContext, response: &SignedPolicyResponse) -> Apply
     }
 }
 
+/// Apply a freshly-received signed rule-pack bundle. Mirrors [`apply`] but uses
+/// the SEPARATE rule-packs watermark (`last_applied_rule_packs_version`) and
+/// `atomic_write_rule_packs`: it writes `rule-packs.yaml` and advances the
+/// rule-packs version. It NEVER touches policy.yaml or the policy version.
+pub async fn apply_rule_packs(ctx: &ApplyContext, response: &SignedPolicyResponse) -> ApplyOutcome {
+    let now = OffsetDateTime::now_utc();
+    let last_applied = {
+        let cache = ctx.cache.lock();
+        match cache.host_meta_get() {
+            Ok(m) => m.last_applied_rule_packs_version,
+            Err(e) => {
+                return ApplyOutcome::Internal {
+                    detail: format!("host_meta_get: {e}"),
+                };
+            }
+        }
+    };
+
+    let verified = match verify_envelope(&ctx.keystore, response, now, last_applied) {
+        Ok(v) => v,
+        Err(VerifyError::Internal(detail)) => {
+            // Internal — do NOT emit PolicySignatureInvalid; sender retries.
+            return ApplyOutcome::Internal { detail };
+        }
+        Err(other) => {
+            let reason = other
+                .reason()
+                .expect("non-Internal verify error has a reason");
+            emit_invalid(ctx, &reason, response, last_applied).await;
+            return ApplyOutcome::Rejected { reason };
+        }
+    };
+
+    // `verified.policy_bytes` is the bundle YAML (a PolicyDocument with only
+    // `rule_packs` meaningfully set). Write it verbatim to rule-packs.yaml; the
+    // reload (Task 5) reads only its `.rule_packs` (merge ignores the rest).
+    let write_result = {
+        let cache = ctx.cache.lock();
+        atomic_write_rule_packs(
+            &ctx.rule_packs_yaml_path,
+            &verified.policy_bytes,
+            &cache,
+            verified.policy_version,
+        )
+    };
+    match write_result {
+        Ok(()) => {
+            // Notify the reload task (Task 5) that the rule-packs version
+            // advanced. Best-effort; no live receiver is not an error.
+            let _ = ctx.rule_packs_version_tx.send(verified.policy_version);
+            emit_rule_packs_applied(ctx, verified.policy_version).await;
+            ApplyOutcome::Accepted {
+                applied_policy_version: verified.policy_version,
+            }
+        }
+        Err(AtomicWriteError::Io(e)) => ApplyOutcome::Internal {
+            detail: format!("rule-packs disk write: {e}"),
+        },
+        Err(AtomicWriteError::StateAfterDisk(e)) => ApplyOutcome::Internal {
+            detail: format!("state-after-disk: {e}"),
+        },
+    }
+}
+
 async fn emit_invalid(
     ctx: &ApplyContext,
     reason: &PolicySignatureInvalidReason,
@@ -184,6 +255,30 @@ async fn emit_reloaded(ctx: &ApplyContext, version: i64) {
         .await;
 }
 
+async fn emit_rule_packs_applied(ctx: &ApplyContext, version: i64) {
+    let ev = Event {
+        schema_version: SCHEMA_VERSION,
+        event_id: Uuid::now_v7(),
+        ts: OffsetDateTime::now_utc(),
+        host_id: ctx.host_id.clone(),
+        agent_version: AGENT_VERSION.to_string(),
+        severity: Severity::Info,
+        source: SourceKind::Agent,
+        subject: Subject::Self_,
+        evidence: Evidence::RulePackBundleApplied { version },
+        target_id: None,
+    };
+    let _ = ctx
+        .event_tx
+        .send(CommittableEvent {
+            event: ev,
+            new_hash: None,
+            path_for_db: PathBuf::new(),
+            target_id: String::new(),
+        })
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +294,7 @@ mod tests {
         sk: SigningKey,
         rx_event: mpsc::Receiver<CommittableEvent>,
         rx_version: watch::Receiver<i64>,
+        rx_rule_packs_version: watch::Receiver<i64>,
         active_valid_until: Arc<RwLock<Option<OffsetDateTime>>>,
         _dir: tempfile::TempDir,
     }
@@ -224,6 +320,7 @@ mod tests {
 
         let (event_tx, rx_event) = mpsc::channel(16);
         let (policy_version_tx, rx_version) = watch::channel(last_applied);
+        let (rule_packs_version_tx, rx_rule_packs_version) = watch::channel(0i64);
         let active_valid_until = Arc::new(RwLock::new(None));
 
         Harness {
@@ -235,12 +332,43 @@ mod tests {
                 event_tx,
                 policy_version_tx,
                 active_valid_until: active_valid_until.clone(),
+                rule_packs_yaml_path: dir.path().join("rule-packs.yaml"),
+                rule_packs_version_tx,
             },
             sk,
             rx_event,
             rx_version,
+            rx_rule_packs_version,
             active_valid_until,
             _dir: dir,
+        }
+    }
+
+    /// Like [`build_harness`] but also seeds the SEPARATE rule-packs watermark
+    /// so the `apply_rule_packs` version-regression path can be exercised.
+    fn build_harness_with_rule_packs(
+        now: OffsetDateTime,
+        last_applied_policy: i64,
+        last_applied_rule_packs: i64,
+    ) -> Harness {
+        let h = build_harness(now, last_applied_policy);
+        h.ctx
+            .cache
+            .lock()
+            .set_last_applied_rule_packs_version(last_applied_rule_packs)
+            .unwrap();
+        h
+    }
+
+    /// A packs-only bundle: a PolicyDocument with `rule_packs` set and the rest
+    /// minimal. Written verbatim to rule-packs.yaml; the reload reads only
+    /// `.rule_packs`.
+    fn rule_packs_envelope(version: i64, now: OffsetDateTime) -> SignedEnvelope {
+        SignedEnvelope {
+            policy_version: version,
+            policy_bytes_b64: data_encoding::BASE64.encode(b"version: 1\nrule_packs: []\n"),
+            valid_until: now + time::Duration::hours(24),
+            issued_at: now,
         }
     }
 
@@ -380,5 +508,106 @@ mod tests {
             }
             other => panic!("expected PubkeyUnknown PolicySignatureInvalid, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn apply_rule_packs_accepts_writes_advances_separate_watermark() {
+        let now = OffsetDateTime::now_utc();
+        // policy watermark at 7, rule-packs watermark at 0 — a v1 bundle is
+        // ahead of the rule-packs watermark even though it's behind policy's.
+        let mut h = build_harness_with_rule_packs(now, 7, 0);
+        let resp = sign(&h.sk, rule_packs_envelope(1, now), now);
+
+        let outcome = apply_rule_packs(&h.ctx, &resp).await;
+        assert_eq!(
+            outcome,
+            ApplyOutcome::Accepted {
+                applied_policy_version: 1
+            }
+        );
+
+        // rule-packs.yaml written verbatim; policy.yaml untouched.
+        let written = std::fs::read(&h.ctx.rule_packs_yaml_path).unwrap();
+        assert_eq!(written, b"version: 1\nrule_packs: []\n");
+        assert!(!h.ctx.policy_yaml_path.exists());
+
+        // The SEPARATE rule-packs watermark advanced; the policy watermark
+        // (and active_valid_until) are untouched.
+        let meta = h.ctx.cache.lock().host_meta_get().unwrap();
+        assert_eq!(meta.last_applied_rule_packs_version, 1);
+        assert_eq!(meta.last_applied_policy_version, 7);
+        assert_eq!(*h.active_valid_until.read(), None);
+
+        // RulePackBundleApplied event emitted (NOT PolicyReloaded).
+        let ev = h.rx_event.recv().await.unwrap();
+        assert!(matches!(
+            ev.event.evidence,
+            Evidence::RulePackBundleApplied { version: 1 }
+        ));
+
+        // The rule-packs watch channel fired; the policy channel did not.
+        h.rx_rule_packs_version.changed().await.unwrap();
+        assert_eq!(*h.rx_rule_packs_version.borrow(), 1);
+        assert!(!h.rx_version.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn apply_rule_packs_rejects_bad_signature_touches_nothing() {
+        let now = OffsetDateTime::now_utc();
+        let mut h = build_harness_with_rule_packs(now, 0, 0);
+        // Sign correctly, then corrupt the signature.
+        let mut resp = sign(&h.sk, rule_packs_envelope(1, now), now);
+        resp.signature = data_encoding::BASE64.encode(&[0u8; 64]);
+
+        let outcome = apply_rule_packs(&h.ctx, &resp).await;
+        assert_eq!(
+            outcome,
+            ApplyOutcome::Rejected {
+                reason: PolicySignatureInvalidReason::SignatureInvalid
+            }
+        );
+
+        // Nothing written; neither watermark moved.
+        assert!(!h.ctx.rule_packs_yaml_path.exists());
+        assert!(!h.ctx.policy_yaml_path.exists());
+        let meta = h.ctx.cache.lock().host_meta_get().unwrap();
+        assert_eq!(meta.last_applied_rule_packs_version, 0);
+        assert_eq!(meta.last_applied_policy_version, 0);
+
+        // The invalid event is emitted (reused PolicySignatureInvalid).
+        let ev = h.rx_event.recv().await.unwrap();
+        match ev.event.evidence {
+            Evidence::PolicySignatureInvalid { reason, .. } => {
+                assert_eq!(reason, PolicySignatureInvalidReason::SignatureInvalid);
+            }
+            other => panic!("expected PolicySignatureInvalid, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_rule_packs_version_regression_rejects_against_rule_packs_watermark() {
+        let now = OffsetDateTime::now_utc();
+        // rule-packs watermark already at 5; a v5 bundle is a regression even
+        // though the policy watermark is 0.
+        let mut h = build_harness_with_rule_packs(now, 0, 5);
+        let resp = sign(&h.sk, rule_packs_envelope(5, now), now);
+
+        let outcome = apply_rule_packs(&h.ctx, &resp).await;
+        assert_eq!(
+            outcome,
+            ApplyOutcome::Rejected {
+                reason: PolicySignatureInvalidReason::VersionRegression
+            }
+        );
+        assert!(!h.ctx.rule_packs_yaml_path.exists());
+
+        let ev = h.rx_event.recv().await.unwrap();
+        assert!(matches!(
+            ev.event.evidence,
+            Evidence::PolicySignatureInvalid {
+                reason: PolicySignatureInvalidReason::VersionRegression,
+                ..
+            }
+        ));
     }
 }

@@ -120,7 +120,23 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         Some(p) if p.exists() => Some(sigil_core::policy::parse(&std::fs::read_to_string(p)?)?),
         _ => None,
     };
-    let mut effective = merge(defaults()?, user_doc, current_platform())?;
+    // Task 5 — distributed rule-pack bundle destination, beside policy.yaml.
+    // Defined here (not at the later ApplyContext) so the BOOT merge can read
+    // it as the 3rd layer (defaults < policy < bundle). MUST stay identical to
+    // `ApplyContext.rule_packs_yaml_path` so apply writes where boot/reload read.
+    let rule_packs_yaml_path = policy_path_for_apply.with_file_name("rule-packs.yaml");
+    // Fail-open: missing/corrupt rule-packs.yaml → None (no bundle packs).
+    let bundle_doc = std::fs::read_to_string(&rule_packs_yaml_path)
+        .ok()
+        .and_then(|s| match sigil_core::policy::parse(&s) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                tracing::warn!(error = ?e, path = %rule_packs_yaml_path.display(),
+                    "rule-packs.yaml parse failed at boot; ignoring bundle layer");
+                None
+            }
+        });
+    let mut effective = merge(defaults()?, user_doc, bundle_doc, current_platform())?;
     // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
 
     // Phase 3b.6.2 — per-repo discovery for Continue / Claude Code / Codex.
@@ -398,6 +414,11 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Phase 2: build ApplyContext (used by control IPC's apply_policy handler)
     // and ControlContext (used by control IPC dispatch).
+    // Rule-pack bundle destination sits beside policy.yaml (`rule_packs_yaml_path`
+    // defined above, shared with the boot merge). Task 5 wires the receiver of
+    // `rule_packs_version_tx` into the reload task below so an `apply_rule_packs`
+    // bump re-runs the 3-layer merge live.
+    let (rule_packs_version_tx, rule_packs_version_rx) = watch::channel(0i64);
     let apply_ctx = Arc::new(crate::policy_apply::ApplyContext {
         keystore: keystore.clone(),
         cache: cache.clone(),
@@ -406,6 +427,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         event_tx: tx_sink.clone(),
         policy_version_tx: policy_version_tx.clone(),
         active_valid_until: active_valid_until.clone(),
+        rule_packs_yaml_path: rule_packs_yaml_path.clone(),
+        rule_packs_version_tx,
     });
     // The pipeline reads its matcher set from this watch channel; the
     // policy-reload task (spawned below) publishes new sets on `targets_tx`.
@@ -518,6 +541,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             crate::policy_reload_task::ReloadCtx {
                 policy_yaml_path: policy_path_for_apply.clone(),
                 policy_version_rx: policy_version_tx.subscribe(),
+                rule_packs_version_rx,
+                rule_packs_yaml_path,
                 targets_tx,
                 watcher: watcher_handle,
                 watched_roots: watch_roots,

@@ -10,11 +10,20 @@ use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 fn state_in(dir: &std::path::Path, allowlist: Option<HashSet<String>>) -> Arc<AppState> {
+    state_in_with_rule_packs(dir, allowlist, None)
+}
+
+fn state_in_with_rule_packs(
+    dir: &std::path::Path,
+    allowlist: Option<HashSet<String>>,
+    rule_packs_bundle_path: Option<std::path::PathBuf>,
+) -> Arc<AppState> {
     use sigil_server::auth::ReadToken;
     use sigil_server::fleet_index::FleetIndex;
     Arc::new(AppState {
         events_out_dir: dir.to_path_buf(),
         policy_bundle_path: dir.join("signed-policy.json"),
+        rule_packs_bundle_path,
         high_water_path: dir.join(".high-water.json"),
         allowlist,
         high_water: Mutex::new(HighWater::default()),
@@ -262,4 +271,93 @@ async fn allowlist_blocks_unknown_host_on_policy() {
     let app = build_router(state_in(dir.path(), Some(set)));
     let (status, _, _) = get_policy(&app, "stranger", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+async fn get_rule_packs(
+    app: &axum::Router,
+    host_id: &str,
+    if_none_match: Option<&str>,
+) -> (StatusCode, Option<String>, serde_json::Value) {
+    let mut b = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/rule-packs?host_id={host_id}"));
+    if let Some(inm) = if_none_match {
+        b = b.header("if-none-match", inm);
+    }
+    let resp = app
+        .clone()
+        .oneshot(b.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, etag, json)
+}
+
+#[tokio::test]
+async fn rule_packs_404_when_not_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = build_router(state_in(dir.path(), None));
+    let (status, _, body) = get_rule_packs(&app, "h-1", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "rule_packs_not_configured");
+}
+
+#[tokio::test]
+async fn rule_packs_200_then_304_with_matching_etag() {
+    let dir = tempfile::tempdir().unwrap();
+    // Write a minimal SignedPolicyResponse-shaped pack-set bundle.
+    let bundle = serde_json::json!({
+        "etag": "cafef00d",
+        "signed_envelope": {
+            "policy_version": 1,
+            "policy_bytes_b64": "cGFja3M6IFtdCg==",
+            "valid_until": "2027-01-01T00:00:00Z",
+            "issued_at": "2026-05-11T00:00:00Z"
+        },
+        "signature": "AAAA",
+        "signing_pubkey_id": "k1",
+        "applied_at": "2026-05-11T00:00:01Z"
+    });
+    let bundle_path = dir.path().join("signed-rule-packs.json");
+    std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+    let app = build_router(state_in_with_rule_packs(
+        dir.path(),
+        None,
+        Some(bundle_path),
+    ));
+
+    let (status, etag, body) = get_rule_packs(&app, "h-1", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(etag.as_deref(), Some("cafef00d"));
+    assert_eq!(body["signing_pubkey_id"], "k1");
+
+    let (status, _, _) = get_rule_packs(&app, "h-1", Some("cafef00d")).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    let (status, _, _) = get_rule_packs(&app, "h-1", Some("stale-etag")).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn allowlist_blocks_unknown_host_on_rule_packs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut set = HashSet::new();
+    set.insert("known-host".to_string());
+    let app = build_router(state_in_with_rule_packs(
+        dir.path(),
+        Some(set),
+        Some(dir.path().join("signed-rule-packs.json")),
+    ));
+    let (status, _, body) = get_rule_packs(&app, "stranger", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "host_unknown");
 }

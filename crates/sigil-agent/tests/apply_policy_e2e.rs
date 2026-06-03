@@ -41,6 +41,7 @@ async fn apply_policy_writes_yaml_advances_version_emits_reloaded_and_no_expiry_
 
     let (event_tx, mut event_rx) = mpsc::channel(8);
     let (vtx, vrx) = watch::channel(0i64);
+    let (rp_vtx, _rp_vrx) = watch::channel(0i64);
     let active_vu = Arc::new(RwLock::new(None::<OffsetDateTime>));
     let policy_path = dir.path().join("policy.yaml");
     let apply_ctx = ApplyContext {
@@ -51,6 +52,8 @@ async fn apply_policy_writes_yaml_advances_version_emits_reloaded_and_no_expiry_
         event_tx: event_tx.clone(),
         policy_version_tx: vtx.clone(),
         active_valid_until: active_vu.clone(),
+        rule_packs_yaml_path: dir.path().join("rule-packs.yaml"),
+        rule_packs_version_tx: rp_vtx,
     };
 
     // Sign + send a v1 envelope.

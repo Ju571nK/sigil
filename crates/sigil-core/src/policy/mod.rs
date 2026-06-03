@@ -13,7 +13,7 @@ pub mod pubkeys;
 pub mod signed_envelope;
 pub mod verify;
 
-pub use atomic_writer::{atomic_write, AtomicWriteError};
+pub use atomic_writer::{atomic_write, atomic_write_rule_packs, AtomicWriteError};
 pub use canonical::{to_canonical_bytes, CanonicalError};
 pub use pubkeys::{Keystore, KeystoreEntry, KeystoreError};
 pub use signed_envelope::{SignedEnvelope, SignedPolicyResponse};
@@ -245,6 +245,7 @@ pub struct EffectivePolicy {
 pub fn merge(
     defaults: PolicyDocument,
     user: Option<PolicyDocument>,
+    bundle: Option<PolicyDocument>,
     current: Platform,
 ) -> Result<EffectivePolicy, PolicyError> {
     let strategy = user
@@ -313,18 +314,27 @@ pub fn merge(
         .map(|u| u.antigravity_workspaces.clone())
         .unwrap_or_default();
 
-    // Phase 3b.7 — id-keyed reconciliation: start with defaults' packs;
-    // user packs replace by id or append.
+    // Phase 3b.7 — id-keyed reconciliation across three layers: start with
+    // defaults' packs; user packs replace by id or append; then bundle packs
+    // replace/append LAST (so a signed pack-set bundle wins on id collision).
+    // Only `bundle.rule_packs` is consulted — the bundle's other fields are
+    // ignored.
     let rule_packs: Vec<RulePack> = {
         let mut packs = defaults.rule_packs.clone();
-        if let Some(ref u) = user {
-            for upack in &u.rule_packs {
-                if let Some(idx) = packs.iter().position(|p| p.id == upack.id) {
-                    packs[idx] = upack.clone();
+        fn fold_packs(packs: &mut Vec<RulePack>, layer: &[RulePack]) {
+            for up in layer {
+                if let Some(i) = packs.iter().position(|p| p.id == up.id) {
+                    packs[i] = up.clone();
                 } else {
-                    packs.push(upack.clone());
+                    packs.push(up.clone());
                 }
             }
+        }
+        if let Some(ref u) = user {
+            fold_packs(&mut packs, &u.rule_packs);
+        }
+        if let Some(ref b) = bundle {
+            fold_packs(&mut packs, &b.rule_packs);
         }
         packs
     };
@@ -518,9 +528,47 @@ targets:
 
     #[test]
     fn merge_defaults_alone_filters_by_platform() {
-        let eff = merge(defaults_doc(), None, Platform::Macos).unwrap();
+        let eff = merge(defaults_doc(), None, None, Platform::Macos).unwrap();
         assert_eq!(eff.targets.len(), 1);
         assert_eq!(eff.targets[0].id, "d1");
+    }
+
+    #[test]
+    fn merge_bundle_packs_win_over_policy_and_defaults() {
+        fn pack(id: &str, ver: u32) -> RulePack {
+            RulePack {
+                id: id.into(),
+                pack_version: ver,
+                tool: crate::event::AiTool::Other,
+                tool_label: Some("x".into()),
+                scope: RulePackScope::UserGlobal,
+                watched_paths: vec![],
+                platforms: None,
+                rules: vec![],
+            }
+        }
+        let mut defaults = defaults_doc();
+        defaults.rule_packs = vec![pack("a", 1)];
+        // The user-policy and bundle layers carry only rule_packs here; clear
+        // their targets so the id-collision check on the target merge doesn't
+        // fire against the defaults' targets (we are exercising rule_packs).
+        let mut policy = defaults_doc();
+        policy.targets = vec![];
+        policy.rule_packs = vec![pack("a", 2), pack("b", 1)];
+        let mut bundle = defaults_doc();
+        bundle.targets = vec![];
+        bundle.rule_packs = vec![pack("b", 9)];
+        let eff = merge(defaults, Some(policy), Some(bundle), Platform::Macos).unwrap();
+        let by_id = |id: &str| {
+            eff.rule_packs
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .pack_version
+        };
+        assert_eq!(by_id("a"), 2); // policy beat defaults
+        assert_eq!(by_id("b"), 9); // bundle beat policy
+        assert_eq!(eff.rule_packs.len(), 2);
     }
 
     #[test]
@@ -543,7 +591,7 @@ targets:
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
-        let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
+        let eff = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap();
         let ids: Vec<&str> = eff.targets.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, vec!["u1"]);
     }
@@ -568,7 +616,7 @@ targets:
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
-        let eff = merge(defaults_doc(), Some(user), Platform::Macos).unwrap();
+        let eff = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap();
         assert_eq!(eff.targets[0].tier, Tier::Standard);
     }
 
@@ -592,7 +640,7 @@ targets:
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
-        let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
+        let err = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::UnknownOverrideId(_)));
     }
 
@@ -612,7 +660,7 @@ targets:
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
-        let err = merge(defaults_doc(), Some(user), Platform::Macos).unwrap_err();
+        let err = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::DuplicateId(_)));
     }
 
@@ -636,7 +684,7 @@ targets:
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
-        let err = merge(defaults, None, Platform::Macos).unwrap_err();
+        let err = merge(defaults, None, None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::EmptyTargets));
     }
 
@@ -667,7 +715,7 @@ targets:
             target_os = "windows",
             target_os = "linux"
         )) {
-            let eff = merge(defaults().unwrap(), None, current_platform()).unwrap();
+            let eff = merge(defaults().unwrap(), None, None, current_platform()).unwrap();
             assert!(!eff.targets.is_empty());
         }
     }
@@ -748,7 +796,7 @@ targets: []
             "version: 1\nhost_id_strategy: machine_id\nclaude_code_workspaces:\n  - '~/forks'\ncodex_workspaces:\n  - '~/work'\ntargets: []\n",
         )
         .unwrap();
-        let eff = merge(defaults().unwrap(), Some(user), current_platform()).unwrap();
+        let eff = merge(defaults().unwrap(), Some(user), None, current_platform()).unwrap();
         assert_eq!(eff.claude_code_workspaces, vec!["~/forks"]);
         assert_eq!(eff.codex_workspaces, vec!["~/work"]);
     }
@@ -848,7 +896,7 @@ rule_packs:
             "version: 1\nhost_id_strategy: machine_id\ntargets: []\nrule_packs:\n  - id: gemini-default\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: [\"~/override/path\"]\n    rules: []\n",
         )
         .unwrap();
-        let eff = merge(defaults_doc, Some(user), current_platform()).unwrap();
+        let eff = merge(defaults_doc, Some(user), None, current_platform()).unwrap();
         assert_eq!(eff.rule_packs.len(), 1);
         assert_eq!(eff.rule_packs[0].watched_paths, vec!["~/override/path"]);
     }
@@ -873,7 +921,7 @@ rule_packs:
             "version: 1\nhost_id_strategy: machine_id\ntargets: []\nrule_packs:\n  - id: mycorp-tool\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n",
         )
         .unwrap();
-        let eff = merge(defaults_doc, Some(user), current_platform()).unwrap();
+        let eff = merge(defaults_doc, Some(user), None, current_platform()).unwrap();
         assert_eq!(eff.rule_packs.len(), 2);
         assert!(eff.rule_packs.iter().any(|p| p.id == "mycorp-tool"));
         assert!(eff.rule_packs.iter().any(|p| p.id == "gemini-default"));
@@ -950,7 +998,7 @@ host_id_strategy: hostname
         };
         user.rubric_overrides
             .insert("destructive_in_hook_script".into(), 5.5);
-        let eff = merge(defaults, Some(user), current_platform()).unwrap();
+        let eff = merge(defaults, Some(user), None, current_platform()).unwrap();
         assert_eq!(
             eff.rubric_overrides.get("destructive_in_hook_script"),
             Some(&5.5_f32)
@@ -1003,7 +1051,7 @@ host_id_strategy: hostname
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
-        let eff = merge(defaults().unwrap(), Some(user), current_platform()).unwrap();
+        let eff = merge(defaults().unwrap(), Some(user), None, current_platform()).unwrap();
         assert_eq!(eff.gemini_workspaces, vec!["~/src/a".to_string()]);
         assert_eq!(eff.cursor_workspaces, vec!["~/src/b".to_string()]);
         assert_eq!(eff.antigravity_workspaces, vec!["~/src/c".to_string()]);

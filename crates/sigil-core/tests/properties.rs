@@ -44,8 +44,8 @@ proptest! {
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
-        let r1 = merge(defaults.clone(), None, Platform::Any).unwrap();
-        let r2 = merge(defaults, None, Platform::Any).unwrap();
+        let r1 = merge(defaults.clone(), None, None, Platform::Any).unwrap();
+        let r2 = merge(defaults, None, None, Platform::Any).unwrap();
         prop_assert_eq!(r1, r2);
     }
 
@@ -86,7 +86,7 @@ proptest! {
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
         };
-        let res = merge(defaults, Some(user), Platform::Any);
+        let res = merge(defaults, Some(user), None, Platform::Any);
         prop_assert!(res.is_err());
     }
 
