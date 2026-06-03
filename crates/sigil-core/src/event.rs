@@ -109,6 +109,10 @@ pub enum AiTool {
     /// Antigravity (Google) — successor to Gemini CLI (Gemini CLI sunset
     /// 2026-06-18). Config reuses the `~/.gemini/` tree. Wire string: "antigravity".
     Antigravity,
+    /// Phase 3b.7.5 — an operator-defined tool with no built-in parser. Wire
+    /// string: "other". The human name rides `tool_label` (rule pack + event),
+    /// never inside the enum, so AiTool stays Copy + a bare-string wire value.
+    Other,
 }
 
 /// Phase 3b.1 — where the assessment applies on the host.
@@ -431,6 +435,10 @@ pub enum Evidence {
         /// parser; None (omitted) for built-in structural parsers. Forward-compat.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rule_pack_id: Option<String>,
+        /// Phase 3b.7.5 — human-readable name of an `AiTool::Other` tool, from the
+        /// rule pack's `tool_label`. None (omitted) for built-in tools. Forward-compat.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_label: Option<String>,
     },
     /// Phase 3b.4-pre — periodic snapshot of host identity + network + OS
     /// metadata. Emitted by host_meta_snapshot_task on boot, every 24h, and
@@ -762,6 +770,7 @@ mod tests {
             ],
             is_reattestation: false,
             rule_pack_id: None,
+            tool_label: None,
         };
         let s = serde_json::to_string(&ev).unwrap();
         assert!(
@@ -776,6 +785,49 @@ mod tests {
         assert!(s.contains("\"executor\":\"host_shell\""));
         let back: Evidence = serde_json::from_str(&s).unwrap();
         assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn ai_tool_other_serde_round_trips_to_other_string() {
+        assert_eq!(serde_json::to_string(&AiTool::Other).unwrap(), r#""other""#);
+        assert_eq!(
+            serde_json::from_str::<AiTool>(r#""other""#).unwrap(),
+            AiTool::Other
+        );
+    }
+
+    #[test]
+    fn ai_guard_risk_assessed_omits_tool_label_when_none() {
+        let ev = Evidence::AiGuardRiskAssessed {
+            tool: AiTool::ClaudeCode,
+            scope: AiGuardScope::UserGlobal,
+            score: 0.0,
+            bucket: AiGuardBucket::Low,
+            reasons: vec![],
+            is_reattestation: false,
+            rule_pack_id: None,
+            tool_label: None,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(!s.contains("tool_label"));
+        assert_eq!(ev, serde_json::from_str::<Evidence>(&s).unwrap());
+    }
+
+    #[test]
+    fn ai_guard_risk_assessed_round_trips_tool_label() {
+        let ev = Evidence::AiGuardRiskAssessed {
+            tool: AiTool::Other,
+            scope: AiGuardScope::UserGlobal,
+            score: 1.0,
+            bucket: AiGuardBucket::Medium,
+            reasons: vec![],
+            is_reattestation: false,
+            rule_pack_id: Some("p".into()),
+            tool_label: Some("acme-ai".into()),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains(r#""tool":"other""#) && s.contains(r#""tool_label":"acme-ai""#));
+        assert_eq!(ev, serde_json::from_str::<Evidence>(&s).unwrap());
     }
 
     #[test]
@@ -813,6 +865,7 @@ mod tests {
             reasons: vec![],
             is_reattestation: false,
             rule_pack_id: None,
+            tool_label: None,
         };
         let s = serde_json::to_string(&ev).unwrap();
         assert!(s.contains("\"reasons\":[]"), "got: {s}");
@@ -1079,6 +1132,7 @@ mod tests {
             reasons: vec![],
             is_reattestation: false,
             rule_pack_id: None,
+            tool_label: None,
         };
         let s = serde_json::to_string(&ev).unwrap();
         assert!(!s.contains("rule_pack_id"));
@@ -1095,6 +1149,7 @@ mod tests {
             reasons: vec![],
             is_reattestation: false,
             rule_pack_id: Some("my-pack".into()),
+            tool_label: None,
         };
         let s = serde_json::to_string(&ev).unwrap();
         assert!(s.contains(r#""rule_pack_id":"my-pack""#));

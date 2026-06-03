@@ -243,6 +243,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             Cursor => &cursor_repos,
             Antigravity => &antigravity_repos,
             ClaudeDesktop => &[],
+            Other => &[],
         }
     };
     // Clone the authored packs out so the loop can push synthetic targets into
@@ -1273,6 +1274,7 @@ pub(crate) fn tool_display_for_extscript(tool: sigil_core::event::AiTool) -> &'s
         AiTool::Gemini => "gemini",
         AiTool::Cursor => "cursor",
         AiTool::Antigravity => "antigravity",
+        AiTool::Other => "other",
     }
 }
 

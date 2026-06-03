@@ -41,6 +41,7 @@ mod tests {
             scope,
             watched_paths: vec![".gemini/s.json".into()],
             platforms: None,
+            tool_label: None,
             rules: vec![RuleEntry {
                 id: "r".into(),
                 on_file: ".gemini/s.json".into(),

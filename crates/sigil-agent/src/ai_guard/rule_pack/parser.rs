@@ -167,6 +167,7 @@ mod tests {
             scope: RulePackScope::UserGlobal,
             watched_paths: vec![on_file_abs.into()],
             platforms: None,
+            tool_label: None,
             rules: vec![RuleEntry {
                 id: "r1".into(),
                 on_file: on_file_abs.into(),
@@ -268,6 +269,7 @@ mod tests {
             scope: RulePackScope::UserGlobal,
             watched_paths: vec![],
             platforms: None,
+            tool_label: None,
             rules: vec![RuleEntry {
                 id: "r1".into(),
                 on_file: "/tmp/x".into(),

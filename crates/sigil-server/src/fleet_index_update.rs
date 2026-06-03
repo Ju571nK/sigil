@@ -169,6 +169,7 @@ mod tests {
                 reasons: vec![],
                 is_reattestation: false,
                 rule_pack_id: None,
+                tool_label: None,
             }
         }
 
@@ -309,6 +310,7 @@ mod tests {
                 reasons: vec![],
                 is_reattestation: false,
                 rule_pack_id: None,
+                tool_label: None,
             },
             Severity::Warn,
             datetime!(2026-05-17 12:00 UTC),
@@ -439,6 +441,7 @@ mod tests {
                     reasons: vec![],
                     is_reattestation: false,
                     rule_pack_id: None,
+                    tool_label: None,
                 },
                 Severity::Warn,
                 t,
@@ -514,6 +517,7 @@ mod tests {
                     reasons: vec![],
                     is_reattestation: false,
                     rule_pack_id: None,
+                    tool_label: None,
                 },
                 Severity::Warn,
                 t,

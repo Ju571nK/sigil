@@ -208,6 +208,7 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
             reasons,
             is_reattestation,
             rule_pack_id: key.2.clone(),
+            tool_label: None,
         },
         target_id: None,
     };

@@ -66,6 +66,7 @@ mod tests {
             scope,
             watched_paths: vec![],
             platforms: None,
+            tool_label: None,
             rules: vec![RuleEntry {
                 id: "r".into(),
                 on_file: on_file.into(),

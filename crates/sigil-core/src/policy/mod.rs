@@ -80,6 +80,10 @@ pub struct RulePack {
     pub watched_paths: Vec<String>,
     #[serde(default)]
     pub platforms: Option<Vec<Platform>>,
+    /// Phase 3b.7.5 — human name for a generic `tool: other` pack. Required when
+    /// `tool == AiTool::Other`; ignored otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_label: Option<String>,
     pub rules: Vec<RuleEntry>,
 }
 
