@@ -120,7 +120,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         Some(p) if p.exists() => Some(sigil_core::policy::parse(&std::fs::read_to_string(p)?)?),
         _ => None,
     };
-    let mut effective = merge(defaults()?, user_doc, current_platform())?;
+    let mut effective = merge(defaults()?, user_doc, None, current_platform())?;
     // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
 
     // Phase 3b.6.2 — per-repo discovery for Continue / Claude Code / Codex.

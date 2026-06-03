@@ -57,7 +57,7 @@ pub fn run(
         Some(p) => Some(sigil_core::policy::parse(&std::fs::read_to_string(p)?)?),
         None => None,
     };
-    let effective = merge(defaults()?, user_doc, current_platform())?;
+    let effective = merge(defaults()?, user_doc, None, current_platform())?;
 
     match what {
         ShowWhat::Config => {

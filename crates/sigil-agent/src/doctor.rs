@@ -175,7 +175,7 @@ pub fn run(policy_override: Option<PathBuf>) -> i32 {
         }
     };
 
-    let effective = match merge(defaults, user_doc, current_platform()) {
+    let effective = match merge(defaults, user_doc, None, current_platform()) {
         Ok(e) => e,
         Err(e) => {
             println!("[ERROR] policy merge failed: {e}");

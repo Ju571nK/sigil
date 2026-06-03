@@ -13,13 +13,17 @@ pub struct HostMeta {
     pub hw_fingerprint: Option<String>,
     /// Per-customer monotonic counter. Defaults to 0 on a fresh state.db.
     pub last_applied_policy_version: i64,
+    /// Per-customer monotonic counter for the applied rule-packs bundle.
+    /// Defaults to 0 on a fresh state.db.
+    pub last_applied_rule_packs_version: i64,
 }
 
 impl HashCache {
     /// Read the current host_meta row.
     pub fn host_meta_get(&self) -> Result<HostMeta, StateError> {
         let row = self.conn.query_row(
-            "SELECT host_id, hw_fingerprint, last_applied_policy_version
+            "SELECT host_id, hw_fingerprint, last_applied_policy_version,
+                    last_applied_rule_packs_version
              FROM host_meta WHERE id = 1",
             [],
             |r| {
@@ -27,6 +31,7 @@ impl HashCache {
                     host_id: r.get(0)?,
                     hw_fingerprint: r.get(1)?,
                     last_applied_policy_version: r.get(2)?,
+                    last_applied_rule_packs_version: r.get(3)?,
                 })
             },
         )?;
@@ -59,6 +64,18 @@ impl HashCache {
     pub fn host_meta_set_policy_version(&self, version: i64) -> Result<(), StateError> {
         self.conn.execute(
             "UPDATE host_meta SET last_applied_policy_version = ?1 WHERE id = 1",
+            rusqlite::params![version],
+        )?;
+        Ok(())
+    }
+
+    /// Set `last_applied_rule_packs_version` (advanced after a verified
+    /// rule-packs bundle is durably written). Mirrors
+    /// `host_meta_set_policy_version`; the monotonic check is enforced by the
+    /// caller's verify-chain, not here.
+    pub fn set_last_applied_rule_packs_version(&self, version: i64) -> Result<(), StateError> {
+        self.conn.execute(
+            "UPDATE host_meta SET last_applied_rule_packs_version = ?1 WHERE id = 1",
             rusqlite::params![version],
         )?;
         Ok(())
@@ -113,6 +130,20 @@ mod tests {
         cache.host_meta_set_policy_version(42).unwrap();
         let m = cache.host_meta_get().unwrap();
         assert_eq!(m.last_applied_policy_version, 42);
+    }
+
+    #[test]
+    fn rule_packs_version_round_trips_and_column_exists() {
+        let (_dir, c) = fresh_cache();
+        assert_eq!(
+            c.host_meta_get().unwrap().last_applied_rule_packs_version,
+            0
+        );
+        c.set_last_applied_rule_packs_version(7).unwrap();
+        assert_eq!(
+            c.host_meta_get().unwrap().last_applied_rule_packs_version,
+            7
+        );
     }
 
     #[test]

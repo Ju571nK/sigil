@@ -225,6 +225,7 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     let mut effective = match sigil_core::policy::merge(
         defaults,
         Some(doc),
+        None,
         sigil_core::policy::current_platform(),
     ) {
         Ok(e) => e,
@@ -524,6 +525,7 @@ mod tests {
         sigil_core::policy::merge(
             sigil_core::policy::defaults().unwrap(),
             Some(sigil_core::policy::parse(yaml).unwrap()),
+            None,
             sigil_core::policy::current_platform(),
         )
         .unwrap()
