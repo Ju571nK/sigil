@@ -7,6 +7,55 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-04
+
+### Added
+
+- **`sigil-hook` — runtime observe at the agent tool boundary** (#64). A new
+  in-tree crate that AI coding agents invoke as a `PreToolUse` hook to *observe*
+  each command at the moment it is about to run, complementing the static config
+  scanning of the AI Guard. Stage 1 is measurement-only (no blocking) and runs
+  as a separate process over IPC, keeping the hook surface decoupled from the
+  agent binary. Ships adapters and install/uninstall for **Claude Code, Codex,
+  Cursor, and Antigravity** (#83, #85, #88, #89) — Antigravity installs through
+  its native `agy plugin` bundle (#91). Architecture is documented in the README
+  (#84).
+- **Antigravity AI Guard support** (#86, #87). A static parser for Antigravity's
+  global config plus a per-repo parser wired into `workspace_discovery`, with a
+  new `antigravity_workspaces` policy field — so Antigravity is scored like the
+  other built-in tools, per-repo included.
+- **Rule-pack `scope = Project { path }` + per-repo discovery** (#92, 3b.7.2).
+  Operator-defined rule packs can now target per-repo scopes and hook into the
+  existing `workspace_discovery`, getting per-repo instances like the built-ins.
+  Events carry a `rule_pack_id` (forward-compatible) and the agent keys parser
+  state by `(tool, scope, pack_id)`.
+- **Generic `AiTool::Other` for operator rule packs** (#95, 3b.7.5). In-house and
+  third-party AI tools can be scored without a code change, via the `Other` tool
+  variant plus a `tool_label` carried on the pack and emitted on events
+  (UserGlobal scope).
+- **Server-side signed rule-pack distribution** (#96, 3b.7.4). `sigil-server`
+  serves a signed rule-pack-set bundle over `GET /v1/rule-packs`, versioned
+  independently from policy; the agent fetches, verifies the signed envelope,
+  and merges in three layers (defaults < policy < bundle). Operators push packs
+  centrally instead of editing each host.
+- **DSL Tier 2 — conditional rule blocks** (#101, 3b.7.1). A rule-pack rule may
+  carry `when` gate conditions (`selector` + `matcher` + optional `negate`,
+  ANDed) that must all hold for it to emit — giving operator packs compound
+  detection the flat Tier-1 grammar could not express. Gated behind
+  `pack_version: 2`; an empty `when` is byte-identical to prior behavior.
+
+### Fixed
+
+- **Antigravity approval key is `toolPermission`** (#90), corrected against
+  on-hardware behavior so the static parser reads the right setting.
+- **`AntigravityProjectParser` now reconciles on hot-reload** (#94, fixes #93) —
+  a per-repo Antigravity parser added by a policy reload is assessed without
+  waiting for the next file change.
+- **`sigil doctor --state-db` override and optional sender mTLS** (#99, fixes
+  #97/#98). `doctor` accepts a state-db path override, and the sender's mTLS
+  client identity is now optional (the three cert paths may be omitted to run
+  against a plain-HTTP dev server) — both surfaced by two-machine E2E testing.
+
 ## [0.2.1] - 2026-06-01
 
 ### Added
