@@ -1,7 +1,9 @@
 //! Phase 3b.7 — RulePackParser: generic AiGuardParser driven by a RulePack.
 
 use crate::ai_guard::parser::{AiGuardParser, AssessError};
-use crate::ai_guard::rule_pack::matcher::{compile_pack_regexes, matches_value, CompileError};
+use crate::ai_guard::rule_pack::matcher::{
+    compile_condition_regexes, compile_pack_regexes, matches_value, CompileError,
+};
 use crate::ai_guard::rule_pack::selector::{eval_json, eval_toml, MatchedValue};
 use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
 use sigil_core::policy::{RuleFormat, RulePack, RulePackScope};
@@ -11,6 +13,9 @@ pub struct RulePackParser {
     pub pack: RulePack,
     /// Compiled regexes parallel to pack.rules (None when matcher != Regex).
     compiled_regexes: Vec<Option<regex::Regex>>,
+    /// Compiled regexes for each rule's `when` conditions, parallel to
+    /// pack.rules then to that rule's `when` (None when matcher != Regex).
+    compiled_condition_regexes: Vec<Vec<Option<regex::Regex>>>,
     pub(crate) repo_root: Option<std::path::PathBuf>,
 }
 
@@ -27,9 +32,15 @@ impl RulePackParser {
                 id: pack.id.clone(),
                 source: e,
             })?;
+        let compiled_condition_regexes =
+            compile_condition_regexes(&pack.rules).map_err(|e| PackLoadError::Regex {
+                id: pack.id.clone(),
+                source: e,
+            })?;
         Ok(Self {
             pack,
             compiled_regexes,
+            compiled_condition_regexes,
             repo_root: None,
         })
     }
@@ -108,6 +119,32 @@ impl AiGuardParser for RulePackParser {
                 }
             };
 
+            // Tier-2 gates: every `when` condition must hold (its selector finds
+            // >=1 value matching its matcher, XOR negate). Any failing gate skips
+            // this rule's emits. Empty `when` => zero gates => Tier-1 behavior.
+            let mut gates_pass = true;
+            for (cidx, cond) in rule.when.iter().enumerate() {
+                let cond_matches = match rule.format {
+                    RuleFormat::Json => eval_json(&text, &cond.selector, &file_path)?,
+                    RuleFormat::Toml => eval_toml(&text, &cond.selector, &file_path)?,
+                };
+                let holds = cond_matches.iter().any(|mv| {
+                    matches_value(
+                        &cond.matcher,
+                        mv,
+                        self.compiled_condition_regexes[idx][cidx].as_ref(),
+                    )
+                });
+                // passes iff (holds XOR negate); fails iff holds == negate
+                if holds == cond.negate {
+                    gates_pass = false;
+                    break;
+                }
+            }
+            if !gates_pass {
+                continue;
+            }
+
             let matches = match rule.format {
                 RuleFormat::Json => eval_json(&text, &rule.selector, &file_path)?,
                 RuleFormat::Toml => eval_toml(&text, &rule.selector, &file_path)?,
@@ -155,7 +192,7 @@ fn interpolate_reason(reason: &AiGuardReason, matched: &MatchedValue) -> AiGuard
 mod tests {
     use super::*;
     use sigil_core::event::AiGuardReason;
-    use sigil_core::policy::{Matcher, RuleEntry, RuleFormat, RulePack, RulePackScope};
+    use sigil_core::policy::{Condition, Matcher, RuleEntry, RuleFormat, RulePack, RulePackScope};
     use tempfile::tempdir;
 
     fn pack_with_one_rule(
@@ -179,6 +216,7 @@ mod tests {
                 selector: selector.into(),
                 matcher,
                 emit,
+                when: vec![],
             }],
         }
     }
@@ -249,6 +287,47 @@ mod tests {
     }
 
     #[test]
+    fn interpolation_draws_from_primary_not_a_gate() {
+        // A holding `when` gate must NOT affect interpolation — the emitted
+        // reason still interpolates from the PRIMARY selector's matched value.
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("mcp.json");
+        std::fs::write(
+            &file,
+            r#"{"mcpServers": {"alpha": {"url": "https://a"}}, "gate": "go"}"#,
+        )
+        .unwrap();
+        let mut pack = pack_with_one_rule(
+            file.to_str().unwrap(),
+            "$.mcpServers.*.url",
+            Matcher::Exists,
+            AiGuardReason::McpServerRemote {
+                server_name: "<selector-key>".into(),
+                url: "<selector-value>".into(),
+            },
+        );
+        pack.pack_version = 2;
+        pack.rules[0].when = vec![sigil_core::policy::Condition {
+            selector: "$.gate".into(),
+            matcher: Matcher::Equals { value: "go".into() },
+            negate: false,
+        }];
+        let out = RulePackParser::new(pack)
+            .unwrap()
+            .assess(Path::new("/unused"))
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            // alpha / https://a come from the PRIMARY, not the gate's `$.gate`.
+            AiGuardReason::McpServerRemote { server_name, url } => {
+                assert_eq!(server_name, "alpha");
+                assert_eq!(url, "https://a");
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
     fn corrupt_json_returns_parse_error() {
         let dir = tempdir().unwrap();
         let file = dir.path().join("bad.json");
@@ -283,6 +362,7 @@ mod tests {
                     pattern: "[unclosed".into(),
                 },
                 emit: AiGuardReason::SandboxDisabled,
+                when: vec![],
             }],
         };
         assert!(RulePackParser::new(pack).is_err());
@@ -314,6 +394,117 @@ mod tests {
         let p = RulePackParser::new(pack).unwrap();
         assert_eq!(p.tool(), AiTool::Gemini);
         assert!(matches!(p.scope(), AiGuardScope::UserGlobal));
+    }
+
+    fn rule_with_when(on_file: &str, when: Vec<Condition>) -> RulePack {
+        let mut p = pack_with_one_rule(
+            on_file,
+            "$.sandbox",
+            Matcher::Equals {
+                value: "false".into(),
+            },
+            AiGuardReason::SandboxDisabled,
+        );
+        p.pack_version = 2;
+        p.rules[0].when = when;
+        p
+    }
+
+    #[test]
+    fn when_gate_holds_emits() {
+        let dir = tempdir().unwrap();
+        let f = dir.path().join("c.json");
+        std::fs::write(&f, r#"{"sandbox": false, "autoApprove": true}"#).unwrap();
+        let p = rule_with_when(
+            f.to_str().unwrap(),
+            vec![Condition {
+                selector: "$.autoApprove".into(),
+                matcher: Matcher::Equals {
+                    value: "true".into(),
+                },
+                negate: false,
+            }],
+        );
+        let out = RulePackParser::new(p)
+            .unwrap()
+            .assess(Path::new("/unused"))
+            .unwrap();
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn when_gate_fails_suppresses() {
+        let dir = tempdir().unwrap();
+        let f = dir.path().join("c.json");
+        std::fs::write(&f, r#"{"sandbox": false, "autoApprove": false}"#).unwrap();
+        let p = rule_with_when(
+            f.to_str().unwrap(),
+            vec![Condition {
+                selector: "$.autoApprove".into(),
+                matcher: Matcher::Equals {
+                    value: "true".into(),
+                },
+                negate: false,
+            }],
+        );
+        let out = RulePackParser::new(p)
+            .unwrap()
+            .assess(Path::new("/unused"))
+            .unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn when_negate_inverts() {
+        let dir = tempdir().unwrap();
+        let f = dir.path().join("c.json");
+        std::fs::write(&f, r#"{"sandbox": false}"#).unwrap();
+        let p = rule_with_when(
+            f.to_str().unwrap(),
+            vec![Condition {
+                selector: "$.allowlist".into(),
+                matcher: Matcher::Exists,
+                negate: true,
+            }],
+        );
+        let out = RulePackParser::new(p)
+            .unwrap()
+            .assess(Path::new("/unused"))
+            .unwrap();
+        assert_eq!(out.len(), 1); // NOT exists(allowlist) holds → emit
+    }
+
+    #[test]
+    fn multiple_gates_all_anded() {
+        let dir = tempdir().unwrap();
+        let f = dir.path().join("c.json");
+        std::fs::write(
+            &f,
+            r#"{"sandbox": false, "autoApprove": true, "allowlist": ["x"]}"#,
+        )
+        .unwrap();
+        let p = rule_with_when(
+            f.to_str().unwrap(),
+            vec![
+                Condition {
+                    selector: "$.autoApprove".into(),
+                    matcher: Matcher::Equals {
+                        value: "true".into(),
+                    },
+                    negate: false,
+                },
+                Condition {
+                    selector: "$.allowlist".into(),
+                    matcher: Matcher::Exists,
+                    negate: true,
+                },
+            ],
+        );
+        let out = RulePackParser::new(p)
+            .unwrap()
+            .assess(Path::new("/unused"))
+            .unwrap();
+        assert!(out.is_empty()); // second gate (NOT allowlist) fails → suppressed
     }
 
     #[test]

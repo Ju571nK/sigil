@@ -47,6 +47,33 @@ pub fn compile_pack_regexes(
         .collect()
 }
 
+/// Compile the Regex matchers of every rule's `when` conditions. Returns a Vec
+/// parallel to `rules`; each element is a Vec parallel to that rule's `when`
+/// (Some iff the condition matcher is Regex). Errors at the first malformed
+/// pattern, carrying the offending rule id.
+pub fn compile_condition_regexes(
+    rules: &[sigil_core::policy::RuleEntry],
+) -> Result<Vec<Vec<Option<regex::Regex>>>, CompileError> {
+    rules
+        .iter()
+        .map(|r| {
+            r.when
+                .iter()
+                .map(|c| match &c.matcher {
+                    sigil_core::policy::Matcher::Regex { pattern } => regex::Regex::new(pattern)
+                        .map(Some)
+                        .map_err(|source| CompileError {
+                            rule_id: r.id.clone(),
+                            pattern: pattern.clone(),
+                            source,
+                        }),
+                    _ => Ok(None),
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect()
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("rule '{rule_id}': regex pattern '{pattern}' failed to compile: {source}")]
 pub struct CompileError {
@@ -138,6 +165,7 @@ mod tests {
                 selector: "$.x".into(),
                 matcher: Matcher::Exists,
                 emit: sigil_core::event::AiGuardReason::SandboxDisabled,
+                when: vec![],
             },
             sigil_core::policy::RuleEntry {
                 id: "r2".into(),
@@ -148,6 +176,7 @@ mod tests {
                     pattern: "^http".into(),
                 },
                 emit: sigil_core::event::AiGuardReason::SandboxDisabled,
+                when: vec![],
             },
         ];
         let out = compile_pack_regexes(&rules).unwrap();
@@ -167,8 +196,61 @@ mod tests {
                 pattern: "[unclosed".into(),
             },
             emit: sigil_core::event::AiGuardReason::SandboxDisabled,
+            when: vec![],
         }];
         let err = compile_pack_regexes(&rules).unwrap_err();
+        assert_eq!(err.rule_id, "bad");
+    }
+
+    #[test]
+    fn compile_condition_regexes_collects_only_regex_conditions() {
+        let rules = vec![sigil_core::policy::RuleEntry {
+            id: "r1".into(),
+            on_file: "x".into(),
+            format: sigil_core::policy::RuleFormat::Json,
+            selector: "$.x".into(),
+            matcher: Matcher::Exists,
+            emit: sigil_core::event::AiGuardReason::SandboxDisabled,
+            when: vec![
+                sigil_core::policy::Condition {
+                    selector: "$.a".into(),
+                    matcher: Matcher::Regex {
+                        pattern: "^http".into(),
+                    },
+                    negate: false,
+                },
+                sigil_core::policy::Condition {
+                    selector: "$.b".into(),
+                    matcher: Matcher::Exists,
+                    negate: false,
+                },
+            ],
+        }];
+        let out = compile_condition_regexes(&rules).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].len(), 2);
+        assert!(out[0][0].is_some());
+        assert!(out[0][1].is_none());
+    }
+
+    #[test]
+    fn compile_condition_regexes_fails_on_malformed_pattern() {
+        let rules = vec![sigil_core::policy::RuleEntry {
+            id: "bad".into(),
+            on_file: "x".into(),
+            format: sigil_core::policy::RuleFormat::Json,
+            selector: "$.x".into(),
+            matcher: Matcher::Exists,
+            emit: sigil_core::event::AiGuardReason::SandboxDisabled,
+            when: vec![sigil_core::policy::Condition {
+                selector: "$.a".into(),
+                matcher: Matcher::Regex {
+                    pattern: "[unclosed".into(),
+                },
+                negate: false,
+            }],
+        }];
+        let err = compile_condition_regexes(&rules).unwrap_err();
         assert_eq!(err.rule_id, "bad");
     }
 }

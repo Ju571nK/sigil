@@ -9,7 +9,7 @@ pub mod selector;
 
 /// Pack format version range this interpreter supports.
 pub const MIN_PACK_VERSION: u32 = 1;
-pub const MAX_PACK_VERSION: u32 = 1;
+pub const MAX_PACK_VERSION: u32 = 2;
 
 /// Cheap pre-flight check applied at boot + reload time. Heavier checks
 /// (regex compile, selector syntax) happen inside RulePackParser::new.
@@ -20,6 +20,18 @@ pub fn pack_is_loadable(pack: &sigil_core::policy::RulePack) -> bool {
             "rule_pack: incompatible pack_version; skipping"
         );
         return false;
+    }
+    // `when` conditions are a Tier-2 (pack_version 2) capability. A v1 pack that
+    // carries them is an authoring error — older engines would silently ignore the
+    // gate and over-emit. Reject so the version is an honest capability gate.
+    if pack.pack_version < 2 {
+        if let Some(bad) = pack.rules.iter().find(|r| !r.when.is_empty()) {
+            tracing::warn!(
+                id = %pack.id, rule = %bad.id,
+                "rule_pack: 'when' conditions require pack_version 2; skipping pack"
+            );
+            return false;
+        }
     }
     match pack.scope {
         sigil_core::policy::RulePackScope::UserGlobal => {}
@@ -92,6 +104,7 @@ mod tests {
                 selector: "$.x".into(),
                 matcher: Matcher::Exists,
                 emit: AiGuardReason::SandboxDisabled,
+                when: vec![],
             }],
         }
     }
@@ -112,6 +125,7 @@ mod tests {
                 selector: "$.x".into(),
                 matcher: Matcher::Exists,
                 emit: AiGuardReason::SandboxDisabled,
+                when: vec![],
             }],
         }
     }
@@ -179,5 +193,48 @@ mod tests {
             RulePackScope::UserGlobal,
             "/abs/x.json"
         )));
+    }
+
+    fn pack_with_when(pack_version: u32) -> RulePack {
+        use sigil_core::policy::Condition;
+        RulePack {
+            id: "p".into(),
+            pack_version,
+            tool: AiTool::Gemini,
+            tool_label: None,
+            scope: RulePackScope::UserGlobal,
+            watched_paths: vec![],
+            platforms: None,
+            rules: vec![RuleEntry {
+                id: "r".into(),
+                on_file: ".x/c.json".into(),
+                format: RuleFormat::Json,
+                selector: "$.a".into(),
+                matcher: Matcher::Exists,
+                emit: AiGuardReason::SandboxDisabled,
+                when: vec![Condition {
+                    selector: "$.b".into(),
+                    matcher: Matcher::Exists,
+                    negate: false,
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn pack_version_2_with_when_is_loadable() {
+        assert!(pack_is_loadable(&pack_with_when(2)));
+    }
+
+    #[test]
+    fn pack_version_1_with_when_is_rejected() {
+        assert!(!pack_is_loadable(&pack_with_when(1)));
+    }
+
+    #[test]
+    fn pack_version_1_without_when_still_loadable() {
+        let mut p = pack_with_when(1);
+        p.rules[0].when.clear();
+        assert!(pack_is_loadable(&p));
     }
 }
