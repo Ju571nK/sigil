@@ -42,6 +42,15 @@ where
 {
     let mut old_repos: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
     guard.retain(|p| {
+        // Task 6 — rule-pack parsers (also Project-scoped) are owned by
+        // `reconcile_rule_packs`; never reconcile them here or this built-in
+        // reconcile would drop them and miss their `Some(pack_id)` state keys.
+        if p.as_any()
+            .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+            .is_some()
+        {
+            return true;
+        }
         if p.tool() == tool {
             if let sigil_core::event::AiGuardScope::Project { path } = p.scope() {
                 old_repos.insert(path.clone());
@@ -70,78 +79,71 @@ where
     (added, removed)
 }
 
-/// Phase 3b.7 — reconcile rule pack parsers during hot-reload. Downcasts
-/// existing parsers via `as_any()` to identify rule pack parsers by id, diffs
-/// the old id set against the new (loadable) one, drops removed packs (and
-/// cleans up their (tool, scope) entries from the ai_guard state map), and
-/// pushes freshly-compiled parsers for newly-added packs. Returns
-/// (added_ids, removed_ids) for tracing + observability.
+/// Phase 3b.7 + Task 6 — reconcile rule pack parsers during hot-reload via a
+/// full rebuild. Every rule-pack parser (UserGlobal and per-repo Project) is
+/// dropped and re-expanded from the new loadable pack set through
+/// `expand_pack_parsers`, so Project packs correctly add/drop one parser per
+/// discovered repo. State-map entries whose `(tool, scope, Some(id))` identity
+/// no longer exists are evicted. Returns `(added_ids, removed_ids)` — diffed at
+/// PACK-ID granularity for tracing + observability.
 fn reconcile_rule_packs(
     guard: &mut parking_lot::RwLockWriteGuard<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
     state: &Arc<parking_lot::RwLock<crate::ai_guard::task::StateMap>>,
     new_packs: &[sigil_core::policy::RulePack],
+    repos_for_tool: &dyn Fn(sigil_core::event::AiTool) -> Vec<PathBuf>,
 ) -> (Vec<String>, Vec<String>) {
     use crate::ai_guard::parser::AiGuardParser;
     use std::collections::HashSet;
-
-    let new_ids: HashSet<String> = new_packs
-        .iter()
-        .filter(|p| crate::ai_guard::rule_pack::pack_is_loadable(p))
-        .map(|p| p.id.clone())
-        .collect();
-
-    let mut old_ids: HashSet<String> = HashSet::new();
-    let mut removed_scopes: Vec<(
+    type Ident = (
         sigil_core::event::AiTool,
         sigil_core::event::AiGuardScope,
-        Option<String>,
-    )> = Vec::new();
+        String,
+    );
 
+    // 1. Record old identities + old pack-id set; drop all rule-pack parsers
+    //    (keep built-ins).
+    let mut old_keys: HashSet<Ident> = HashSet::new();
+    let mut old_pack_ids: HashSet<String> = HashSet::new();
     guard.retain(|p| {
         if let Some(rpp) = p
             .as_any()
             .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
         {
-            let id = rpp.pack.id.clone();
-            old_ids.insert(id.clone());
-            if new_ids.contains(&id) {
-                true
-            } else {
-                removed_scopes.push((
-                    rpp.pack.tool,
-                    rpp.scope(),
-                    rpp.rule_pack_id().map(|s| s.to_string()),
-                ));
-                false
-            }
+            old_pack_ids.insert(rpp.pack.id.clone());
+            old_keys.insert((p.tool(), p.scope(), rpp.pack.id.clone()));
+            false
         } else {
             true
         }
     });
 
-    let added: Vec<String> = new_ids.difference(&old_ids).cloned().collect();
-    let removed: Vec<String> = old_ids.difference(&new_ids).cloned().collect();
-
-    for pack in new_packs.iter().filter(|p| added.contains(&p.id)) {
+    // 2. Re-expand loadable packs; record new identities + pack-id set.
+    let mut new_keys: HashSet<Ident> = HashSet::new();
+    let mut new_pack_ids: HashSet<String> = HashSet::new();
+    for pack in new_packs {
         if !crate::ai_guard::rule_pack::pack_is_loadable(pack) {
             continue;
         }
-        match crate::ai_guard::rule_pack::parser::RulePackParser::new(pack.clone()) {
-            Ok(p) => guard.push(Arc::new(p)),
-            Err(e) => tracing::warn!(
-                id = %pack.id, error = ?e,
-                "rule_pack: reload load failed; skipping"
-            ),
+        new_pack_ids.insert(pack.id.clone());
+        let repos = repos_for_tool(pack.tool);
+        for parser in crate::ai_guard::rule_pack::expand::expand_pack_parsers(pack, &repos) {
+            new_keys.insert((parser.tool(), parser.scope(), pack.id.clone()));
+            guard.push(Arc::new(parser));
         }
     }
 
-    if !removed_scopes.is_empty() {
+    // 3. Prune vanished state identities (old − new).
+    let gone: Vec<Ident> = old_keys.difference(&new_keys).cloned().collect();
+    if !gone.is_empty() {
         let mut s = state.write();
-        for (tool, scope, pack_id) in &removed_scopes {
-            s.remove(&(*tool, scope.clone(), pack_id.clone()));
+        for (tool, scope, id) in gone {
+            s.remove(&(tool, scope, Some(id)));
         }
     }
 
+    // 4. Tracing diffs at pack-id granularity.
+    let added: Vec<String> = new_pack_ids.difference(&old_pack_ids).cloned().collect();
+    let removed: Vec<String> = old_pack_ids.difference(&new_pack_ids).cloned().collect();
     (added, removed)
 }
 
@@ -270,6 +272,30 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         )
         .into_iter()
         .collect();
+    // Task 6 — discovered ONLY for rule-pack expansion below (no built-in
+    // AntigravityProjectParser reconcile here; that gap is pre-existing).
+    let new_antigravity: std::collections::BTreeSet<PathBuf> =
+        crate::ai_guard::workspace_discovery::discover_per_repo(
+            &effective.antigravity_workspaces,
+            ".antigravity/settings.json",
+        )
+        .into_iter()
+        .collect();
+
+    // Task 6 — exhaustive AiTool -> repos lookup for Project rule-pack
+    // expansion (used by reconcile_rule_packs and the synthetic-target loop).
+    let repos_for_tool = |tool: sigil_core::event::AiTool| -> Vec<PathBuf> {
+        use sigil_core::event::AiTool::*;
+        match tool {
+            ContinueDev => new_continue.iter().cloned().collect(),
+            ClaudeCode => new_claude.iter().cloned().collect(),
+            Codex => new_codex.iter().cloned().collect(),
+            Gemini => new_gemini.iter().cloned().collect(),
+            Cursor => new_cursor.iter().cloned().collect(),
+            Antigravity => new_antigravity.iter().cloned().collect(),
+            ClaudeDesktop => Vec::new(),
+        }
+    };
 
     let (
         continue_added,
@@ -321,8 +347,12 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
             &new_cursor,
             |p| crate::ai_guard::CursorProjectParser { repo_root: p },
         );
-        let (rp_added, rp_removed) =
-            reconcile_rule_packs(&mut guard, &ctx.ai_guard_state, &effective.rule_packs);
+        let (rp_added, rp_removed) = reconcile_rule_packs(
+            &mut guard,
+            &ctx.ai_guard_state,
+            &effective.rule_packs,
+            &repos_for_tool,
+        );
         (a1, r1, a2, r2, a3, r3, a4, r4, a5, r5, rp_added, rp_removed)
     };
 
@@ -341,6 +371,24 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     }
     for repo_root in &new_cursor {
         crate::runtime::push_cursor_synthetic_target(&mut effective, repo_root);
+    }
+    // Task 6 — synthetic WatchTargets for Project-scoped rule packs, one per
+    // discovered repo for the pack's tool (mirrors boot-time instantiation).
+    // Clone the relevant packs first so the loop doesn't hold an immutable
+    // borrow of `effective` while `push_rule_pack_synthetic_targets` mutates it.
+    let project_packs: Vec<sigil_core::policy::RulePack> = effective
+        .rule_packs
+        .iter()
+        .filter(|p| {
+            crate::ai_guard::rule_pack::pack_is_loadable(p)
+                && matches!(p.scope, sigil_core::policy::RulePackScope::Project)
+        })
+        .cloned()
+        .collect();
+    for pack in &project_packs {
+        for repo in repos_for_tool(pack.tool) {
+            crate::runtime::push_rule_pack_synthetic_targets(&mut effective, pack, &repo);
+        }
     }
 
     tracing::info!(
@@ -990,5 +1038,134 @@ mod tests {
             })
             .count();
         assert_eq!(default_count, 0);
+    }
+
+    // Task 6 — Project-scoped rule pack hot-reload reconciliation: when a repo
+    // is removed from disk, the per-repo RulePackParser AND its state entry are
+    // pruned.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_project_pack_prunes_removed_repo() {
+        use crate::ai_guard::parser::AiGuardParser;
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        let repo_a = workspace.join("repoA");
+        let repo_b = workspace.join("repoB");
+        std::fs::create_dir_all(repo_a.join(".gemini")).unwrap();
+        std::fs::create_dir_all(repo_b.join(".gemini")).unwrap();
+        std::fs::write(
+            repo_a.join(".gemini").join("settings.json"),
+            r#"{"sandbox": false}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            repo_b.join(".gemini").join("settings.json"),
+            r#"{"sandbox": false}"#,
+        )
+        .unwrap();
+        let canonical_a = dunce::canonicalize(&repo_a).unwrap();
+        let canonical_b = dunce::canonicalize(&repo_b).unwrap();
+
+        let pack_id = "proj-pack";
+        let policy = format!(
+            "version: 1\nhost_id_strategy: machine_id\ngemini_workspaces:\n  - '{}'\ntargets: []\nrule_packs:\n  - id: {pack_id}\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: project\n    watched_paths:\n      - '.gemini/settings.json'\n    rules:\n      - id: r1\n        on_file: '.gemini/settings.json'\n        format: json\n        selector: '$.sandbox'\n        matcher:\n          kind: exists\n        emit:\n          kind: sandbox_disabled\n",
+            workspace.display()
+        );
+        let (mut ctx, plat, _trx, parsers, state) = build_ctx_with_parsers(dir.path(), &policy);
+
+        // Initial reconcile: drive reload so both repoA and repoB get a
+        // Project-scoped RulePackParser.
+        reload(&mut ctx, &plat);
+        {
+            let guard = parsers.read();
+            let proj_packs: Vec<_> = guard
+                .iter()
+                .filter_map(|p| {
+                    p.as_any()
+                        .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                })
+                .filter(|rpp| rpp.pack.id == pack_id)
+                .map(|rpp| rpp.scope())
+                .collect();
+            assert_eq!(
+                proj_packs.len(),
+                2,
+                "expected 2 per-repo rule pack parsers (repoA, repoB), got {proj_packs:?}"
+            );
+        }
+
+        // Plant state entries for both repos to verify pruning of repoB.
+        {
+            let mut s = state.write();
+            for path in [&canonical_a, &canonical_b] {
+                s.insert(
+                    (
+                        sigil_core::event::AiTool::Gemini,
+                        sigil_core::event::AiGuardScope::Project { path: path.clone() },
+                        Some(pack_id.to_string()),
+                    ),
+                    crate::ai_guard::task::CachedAssessment {
+                        score: 5.0,
+                        bucket: sigil_core::event::AiGuardBucket::High,
+                        reasons_blake3: [0u8; 32],
+                        reasons_count: 1,
+                        last_assessed_ts: time::OffsetDateTime::now_utc(),
+                    },
+                );
+            }
+        }
+
+        // Remove repoB from disk and reload (policy unchanged).
+        std::fs::remove_dir_all(&repo_b).unwrap();
+        reload(&mut ctx, &plat);
+
+        {
+            let guard = parsers.read();
+            let proj_scopes: Vec<_> = guard
+                .iter()
+                .filter_map(|p| {
+                    p.as_any()
+                        .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                })
+                .filter(|rpp| rpp.pack.id == pack_id)
+                .map(|rpp| rpp.scope())
+                .collect();
+            assert_eq!(
+                proj_scopes.len(),
+                1,
+                "expected exactly 1 remaining rule pack parser after repoB removed, got {proj_scopes:?}"
+            );
+            assert_eq!(
+                proj_scopes[0],
+                sigil_core::event::AiGuardScope::Project {
+                    path: canonical_a.clone()
+                },
+                "remaining parser should be repoA"
+            );
+        }
+        {
+            let s = state.read();
+            let key_b = (
+                sigil_core::event::AiTool::Gemini,
+                sigil_core::event::AiGuardScope::Project {
+                    path: canonical_b.clone(),
+                },
+                Some(pack_id.to_string()),
+            );
+            assert!(
+                !s.contains_key(&key_b),
+                "state entry for removed repoB should be pruned"
+            );
+            let key_a = (
+                sigil_core::event::AiTool::Gemini,
+                sigil_core::event::AiGuardScope::Project {
+                    path: canonical_a.clone(),
+                },
+                Some(pack_id.to_string()),
+            );
+            assert!(
+                s.contains_key(&key_a),
+                "state entry for surviving repoA should remain"
+            );
+        }
     }
 }
