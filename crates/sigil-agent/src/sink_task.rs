@@ -55,6 +55,7 @@ fn evidence_kind_str(e: &sigil_core::event::Evidence) -> &'static str {
         HostIdFingerprintDrift { .. } => "host_id_fingerprint_drift",
         PolicySignatureInvalid { .. } => "policy_signature_invalid",
         PolicyReloaded { .. } => "policy_reloaded",
+        RulePackBundleApplied { .. } => "rule_pack_bundle_applied",
         PolicyExpiredActive { .. } => "policy_expired_active",
         AgentJsonlForceGc { .. } => "agent_jsonl_force_gc",
         SenderSkippedSegment { .. } => "sender_skipped_segment",

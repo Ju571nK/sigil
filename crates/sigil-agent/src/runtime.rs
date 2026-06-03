@@ -398,6 +398,12 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Phase 2: build ApplyContext (used by control IPC's apply_policy handler)
     // and ControlContext (used by control IPC dispatch).
+    // Rule-pack bundle destination sits beside policy.yaml. Task 5 wires the
+    // receiver of `rule_packs_version_tx` into the reload/merge; here we just
+    // create the channel so the apply path can broadcast. The receiver is
+    // dropped for now (Task 5 takes it).
+    let rule_packs_yaml_path = policy_path_for_apply.with_file_name("rule-packs.yaml");
+    let (rule_packs_version_tx, _rule_packs_version_rx) = watch::channel(0i64);
     let apply_ctx = Arc::new(crate::policy_apply::ApplyContext {
         keystore: keystore.clone(),
         cache: cache.clone(),
@@ -406,6 +412,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         event_tx: tx_sink.clone(),
         policy_version_tx: policy_version_tx.clone(),
         active_valid_until: active_valid_until.clone(),
+        rule_packs_yaml_path,
+        rule_packs_version_tx,
     });
     // The pipeline reads its matcher set from this watch channel; the
     // policy-reload task (spawned below) publishes new sets on `targets_tx`.
