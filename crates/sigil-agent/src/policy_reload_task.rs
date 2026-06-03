@@ -272,8 +272,8 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         )
         .into_iter()
         .collect();
-    // Task 6 — discovered ONLY for rule-pack expansion below (no built-in
-    // AntigravityProjectParser reconcile here; that gap is pre-existing).
+    // #93 — reconciled like the other five tools (built-in
+    // AntigravityProjectParser) AND used for Project rule-pack expansion.
     let new_antigravity: std::collections::BTreeSet<PathBuf> =
         crate::ai_guard::workspace_discovery::discover_per_repo(
             &effective.antigravity_workspaces,
@@ -308,6 +308,8 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         gemini_removed,
         cursor_added,
         cursor_removed,
+        antigravity_added,
+        antigravity_removed,
         rule_packs_added,
         rule_packs_removed,
     ) = {
@@ -347,13 +349,22 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
             &new_cursor,
             |p| crate::ai_guard::CursorProjectParser { repo_root: p },
         );
+        let (a6, r6) = reconcile_per_repo(
+            &mut guard,
+            &ctx.ai_guard_state,
+            sigil_core::event::AiTool::Antigravity,
+            &new_antigravity,
+            |p| crate::ai_guard::AntigravityProjectParser { repo_root: p },
+        );
         let (rp_added, rp_removed) = reconcile_rule_packs(
             &mut guard,
             &ctx.ai_guard_state,
             &effective.rule_packs,
             &repos_for_tool,
         );
-        (a1, r1, a2, r2, a3, r3, a4, r4, a5, r5, rp_added, rp_removed)
+        (
+            a1, r1, a2, r2, a3, r3, a4, r4, a5, r5, a6, r6, rp_added, rp_removed,
+        )
     };
 
     // Synthetic WatchTargets — in-memory only; never persisted.
@@ -371,6 +382,9 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     }
     for repo_root in &new_cursor {
         crate::runtime::push_cursor_synthetic_target(&mut effective, repo_root);
+    }
+    for repo_root in &new_antigravity {
+        crate::runtime::push_antigravity_synthetic_target(&mut effective, repo_root);
     }
     // Task 6 — synthetic WatchTargets for Project-scoped rule packs, one per
     // discovered repo for the pack's tool (mirrors boot-time instantiation).
@@ -402,6 +416,8 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         gemini_removed = gemini_removed.len(),
         cursor_added = cursor_added.len(),
         cursor_removed = cursor_removed.len(),
+        antigravity_added = antigravity_added.len(),
+        antigravity_removed = antigravity_removed.len(),
         rule_packs_added = rule_packs_added.len(),
         rule_packs_removed = rule_packs_removed.len(),
         "policy reload: per-repo parsers + rule packs reconciled"
@@ -962,6 +978,45 @@ mod tests {
                 )
         });
         assert!(has, "expected CursorProjectParser for repoA after reload");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_adds_antigravity_project_parser_when_workspace_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        let repo_a = workspace.join("repoA");
+        std::fs::create_dir_all(repo_a.join(".antigravity")).unwrap();
+        std::fs::write(repo_a.join(".antigravity").join("settings.json"), "{}").unwrap();
+        let canonical_a = dunce::canonicalize(&repo_a).unwrap();
+
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets: []\n";
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
+        reload(&mut ctx, &plat);
+        assert!(parsers.read().iter().all(|p| !matches!(
+            (p.tool(), p.scope()),
+            (
+                sigil_core::event::AiTool::Antigravity,
+                sigil_core::event::AiGuardScope::Project { .. }
+            )
+        )));
+
+        let updated = format!(
+            "version: 1\nhost_id_strategy: machine_id\nantigravity_workspaces:\n  - '{}'\ntargets: []\n",
+            workspace.display()
+        );
+        std::fs::write(&ctx.policy_yaml_path, &updated).unwrap();
+        reload(&mut ctx, &plat);
+        let has = parsers.read().iter().any(|p| {
+            p.tool() == sigil_core::event::AiTool::Antigravity
+                && matches!(
+                    p.scope(),
+                    sigil_core::event::AiGuardScope::Project { ref path } if path == &canonical_a
+                )
+        });
+        assert!(
+            has,
+            "expected AntigravityProjectParser for repoA after reload"
+        );
     }
 
     // Phase 3b.7 — rule pack parser hot-reload reconciliation.
