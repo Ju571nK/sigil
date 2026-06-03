@@ -227,8 +227,8 @@ async fn reload_adds_then_prunes_repo() {
         .await
         .expect("expected initial proj-sbx finding for repoA");
 
-    // Add repoB on disk, then rewrite policy.yaml (unchanged content is fine —
-    // reload re-discovers workspace repos) and nudge the reload task.
+    // repoB must exist on disk BEFORE reload so workspace discovery finds it
+    // (discover_per_repo requires the `.gemini/settings.json` marker to exist).
     write_gemini_settings(&repo_b, r#"{"sandbox": false}"#);
     std::fs::write(&agent.policy_file, &policy).unwrap();
     let reload_resp = agent.control(&json!({"cmd": "reload_policy"})).await;
@@ -238,21 +238,39 @@ async fn reload_adds_then_prunes_repo() {
     );
 
     let canonical_b = dunce::canonicalize(&repo_b).unwrap().display().to_string();
+    let repo_b_match = |v: &serde_json::Value| {
+        v["evidence"]["kind"] == "ai_guard_risk_assessed"
+            && v["evidence"]["tool"] == "gemini"
+            && v["evidence"]["scope"]["kind"] == "project"
+            && v["evidence"]["scope"]["path"] == canonical_b.as_str()
+            && v["evidence"]["rule_pack_id"] == "proj-sbx"
+    };
 
-    // A proj-sbx finding for the newly-added repoB must appear.
-    let ev_b = agent
-        .wait_for_event(
-            |v| {
-                v["evidence"]["kind"] == "ai_guard_risk_assessed"
-                    && v["evidence"]["tool"] == "gemini"
-                    && v["evidence"]["scope"]["kind"] == "project"
-                    && v["evidence"]["scope"]["path"] == canonical_b.as_str()
-                    && v["evidence"]["rule_pack_id"] == "proj-sbx"
-            },
-            fs_event_timeout(),
-        )
-        .await
-        .expect("expected proj-sbx finding for repoB after reload added it");
+    // The `reload_policy` IPC reply returns before reload finishes arming the
+    // watch, and repoB's settings were written before that watch existed — so the
+    // pre-reload write produced no inotify event for it. A reload-added parser is
+    // otherwise assessed only on the next file change to its watched path or the
+    // periodic heartbeat (the same behavior as built-in per-repo parsers). So
+    // re-touch repoB's settings (distinct bytes each iteration → a real change)
+    // until the now-watched proj-sbx parser assesses it.
+    let deadline = std::time::Instant::now() + fs_event_timeout();
+    let mut ev_b = None;
+    let mut nonce = 0;
+    while std::time::Instant::now() < deadline {
+        nonce += 1;
+        write_gemini_settings(
+            &repo_b,
+            &format!(r#"{{"sandbox": false, "nonce": {nonce}}}"#),
+        );
+        if let Some(ev) = agent
+            .wait_for_event(&repo_b_match, Duration::from_millis(500))
+            .await
+        {
+            ev_b = Some(ev);
+            break;
+        }
+    }
+    let ev_b = ev_b.expect("expected proj-sbx finding for repoB after reload added it");
     let reasons_b = ev_b["evidence"]["reasons"].as_array().expect("reasons");
     assert!(
         reasons_b.iter().any(|r| r["kind"] == "sandbox_disabled"),
