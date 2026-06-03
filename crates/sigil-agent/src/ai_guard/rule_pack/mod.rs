@@ -24,13 +24,18 @@ pub fn pack_is_loadable(pack: &sigil_core::policy::RulePack) -> bool {
     match pack.scope {
         sigil_core::policy::RulePackScope::UserGlobal => {}
         sigil_core::policy::RulePackScope::Project => {
-            // Project on_file paths are resolved relative to each repo_root, so an
-            // absolute path is an authoring error — reject the whole pack loudly.
-            if let Some(bad) = pack
-                .rules
-                .iter()
-                .find(|r| std::path::Path::new(&r.on_file).is_absolute())
-            {
+            // Project on_file paths are resolved relative to each repo_root, so a
+            // rooted path is an authoring error — reject the whole pack loudly.
+            // Check the first component rather than `is_absolute()`: on Windows a
+            // leading-slash path (`/abs/x`) is NOT `is_absolute` (it lacks a drive
+            // prefix) yet is still rooted, not repo-relative. RootDir covers
+            // `/x` and `\x`; Prefix covers `C:\x` / UNC.
+            if let Some(bad) = pack.rules.iter().find(|r| {
+                matches!(
+                    std::path::Path::new(&r.on_file).components().next(),
+                    Some(std::path::Component::RootDir | std::path::Component::Prefix(_))
+                )
+            }) {
                 tracing::warn!(
                     id = %pack.id, rule = %bad.id, on_file = %bad.on_file,
                     "rule_pack: Project scope requires relative on_file; skipping pack"
