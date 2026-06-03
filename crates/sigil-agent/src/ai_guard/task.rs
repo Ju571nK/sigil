@@ -27,10 +27,12 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc};
 
-/// Shared state map keyed by `(tool, scope)`. Persists between calls so
-/// `eval_and_maybe_emit` can deduplicate identical reason sets across
-/// triggers. Read by the operator IPC handler (Task 7) for `sigil show risk`.
-pub type StateMap = HashMap<(AiTool, AiGuardScope), CachedAssessment>;
+/// Shared state map keyed by `(tool, scope, pack_id)`. Persists between calls
+/// so `eval_and_maybe_emit` can deduplicate identical reason sets across
+/// triggers. The `pack_id` dimension ensures two parsers sharing the same
+/// (tool, scope) but belonging to different rule packs never collide.
+/// Read by the operator IPC handler (Task 7) for `sigil show risk`.
+pub type StateMap = HashMap<(AiTool, AiGuardScope, Option<String>), CachedAssessment>;
 
 /// One parser's last emitted state, kept in `StateMap` for change-detection
 /// and IPC introspection. The `reasons_blake3` field is what
@@ -161,7 +163,11 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
     let score = rubric_snapshot.score(&reasons);
     let bucket = rubric::bucket(score);
     let reasons_hash = rubric::canonical_hash(&reasons);
-    let key = (parser.tool(), parser.scope());
+    let key = (
+        parser.tool(),
+        parser.scope(),
+        parser.rule_pack_id().map(|s| s.to_string()),
+    );
     let prev = ctx.state.read().get(&key).cloned();
     let changed = prev
         .as_ref()
@@ -196,12 +202,12 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
         subject: Subject::Self_,
         evidence: Evidence::AiGuardRiskAssessed {
             tool: key.0,
-            scope: key.1,
+            scope: key.1.clone(),
             score,
             bucket,
             reasons,
             is_reattestation,
-            rule_pack_id: None,
+            rule_pack_id: key.2.clone(),
         },
         target_id: None,
     };
@@ -231,6 +237,8 @@ mod tests {
     /// Test parser whose `assess()` returns scripted reason sets in order.
     struct ScriptedParser {
         tool: AiTool,
+        scope: AiGuardScope,
+        pack_id: Option<String>,
         scripts: StdMutex<Vec<Vec<AiGuardReason>>>,
         watched: Vec<PathBuf>,
     }
@@ -240,7 +248,10 @@ mod tests {
             self.tool
         }
         fn scope(&self) -> AiGuardScope {
-            AiGuardScope::UserGlobal
+            self.scope.clone()
+        }
+        fn rule_pack_id(&self) -> Option<&str> {
+            self.pack_id.as_deref()
         }
         fn watched_paths(&self, _home: &std::path::Path) -> Vec<PathBuf> {
             self.watched.clone()
@@ -284,6 +295,8 @@ mod tests {
         let (_tx, fc_rx) = broadcast::channel(8);
         let parser = ScriptedParser {
             tool: AiTool::ClaudeCode,
+            scope: AiGuardScope::UserGlobal,
+            pack_id: None,
             scripts: StdMutex::new(vec![vec![]]),
             watched: vec![PathBuf::from("/tmp/test-home/.claude/settings.json")],
         };
@@ -320,6 +333,8 @@ mod tests {
         let watched = PathBuf::from("/tmp/test-home/.claude/settings.json");
         let parser = ScriptedParser {
             tool: AiTool::ClaudeCode,
+            scope: AiGuardScope::UserGlobal,
+            pack_id: None,
             scripts: StdMutex::new(vec![
                 vec![AiGuardReason::PermissionsDenyEmpty], // boot
                 vec![AiGuardReason::PermissionsDenyEmpty], // identical → no emit
@@ -345,6 +360,8 @@ mod tests {
         let watched = PathBuf::from("/tmp/test-home/.claude/settings.json");
         let parser = ScriptedParser {
             tool: AiTool::ClaudeCode,
+            scope: AiGuardScope::UserGlobal,
+            pack_id: None,
             scripts: StdMutex::new(vec![
                 vec![AiGuardReason::PermissionsDenyEmpty],
                 vec![AiGuardReason::SandboxDisabled],
@@ -373,6 +390,8 @@ mod tests {
         let (_tx, fc_rx) = broadcast::channel(8);
         let parser = ScriptedParser {
             tool: AiTool::ClaudeCode,
+            scope: AiGuardScope::UserGlobal,
+            pack_id: None,
             scripts: StdMutex::new(vec![
                 vec![AiGuardReason::PermissionsDenyEmpty],
                 vec![AiGuardReason::PermissionsDenyEmpty], // heartbeat — same
@@ -446,6 +465,8 @@ mod tests {
         let (_tx, fc_rx) = broadcast::channel(8);
         let parser = ScriptedParser {
             tool: AiTool::ClaudeCode,
+            scope: AiGuardScope::UserGlobal,
+            pack_id: None,
             scripts: StdMutex::new(vec![
                 vec![AiGuardReason::PermissionsDenyEmpty], // boot
                 vec![AiGuardReason::SandboxDisabled],      // heartbeat — different
@@ -469,5 +490,48 @@ mod tests {
             other => panic!("got {other:?}"),
         }
         h.abort();
+    }
+
+    #[tokio::test]
+    async fn distinct_pack_ids_do_not_collide_in_state() {
+        let (_fc_tx, fc_rx) = broadcast::channel(8);
+        let (event_tx, _events) = mpsc::channel(16);
+        let state: Arc<RwLock<StateMap>> = Arc::new(RwLock::new(HashMap::new()));
+        let ctx = TaskCtx {
+            parsers: Arc::new(RwLock::new(vec![])),
+            fc_rx,
+            event_tx,
+            state: state.clone(),
+            heartbeat_interval: Duration::from_secs(24 * 3600),
+            home_dir: PathBuf::from("/tmp/test-home"),
+            host_id: "test-host".into(),
+            ext_scripts: crate::ai_guard::empty_ext_script_registry(),
+            rubric: crate::ai_guard::default_rubric_handle(),
+        };
+        // Parser A: tool=Gemini, scope=Project{path:"/r"}, pack_id=Some("pack-a"),
+        //   scripts=[vec![AiGuardReason::SandboxDisabled]]
+        let a = ScriptedParser {
+            tool: AiTool::Gemini,
+            scope: AiGuardScope::Project { path: "/r".into() },
+            pack_id: Some("pack-a".to_string()),
+            scripts: StdMutex::new(vec![vec![AiGuardReason::SandboxDisabled]]),
+            watched: vec![],
+        };
+        // Parser B: tool=Gemini, scope=Project{path:"/r"}, pack_id=Some("pack-b"),
+        //   scripts=[vec![]]  (clean)
+        let b = ScriptedParser {
+            tool: AiTool::Gemini,
+            scope: AiGuardScope::Project { path: "/r".into() },
+            pack_id: Some("pack-b".to_string()),
+            scripts: StdMutex::new(vec![vec![]]),
+            watched: vec![],
+        };
+        eval_and_maybe_emit(&a, &ctx, true).await;
+        eval_and_maybe_emit(&b, &ctx, true).await;
+        let scope = AiGuardScope::Project { path: "/r".into() };
+        let s = ctx.state.read();
+        assert!(s.contains_key(&(AiTool::Gemini, scope.clone(), Some("pack-a".to_string()))));
+        assert!(s.contains_key(&(AiTool::Gemini, scope.clone(), Some("pack-b".to_string()))));
+        assert_eq!(s.len(), 2);
     }
 }

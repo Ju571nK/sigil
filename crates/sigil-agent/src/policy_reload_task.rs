@@ -63,6 +63,7 @@ where
                 sigil_core::event::AiGuardScope::Project {
                     path: repo_root.clone(),
                 },
+                None::<String>,
             ));
         }
     }
@@ -90,8 +91,11 @@ fn reconcile_rule_packs(
         .collect();
 
     let mut old_ids: HashSet<String> = HashSet::new();
-    let mut removed_scopes: Vec<(sigil_core::event::AiTool, sigil_core::event::AiGuardScope)> =
-        Vec::new();
+    let mut removed_scopes: Vec<(
+        sigil_core::event::AiTool,
+        sigil_core::event::AiGuardScope,
+        Option<String>,
+    )> = Vec::new();
 
     guard.retain(|p| {
         if let Some(rpp) = p
@@ -103,7 +107,11 @@ fn reconcile_rule_packs(
             if new_ids.contains(&id) {
                 true
             } else {
-                removed_scopes.push((rpp.pack.tool, rpp.scope()));
+                removed_scopes.push((
+                    rpp.pack.tool,
+                    rpp.scope(),
+                    rpp.rule_pack_id().map(|s| s.to_string()),
+                ));
                 false
             }
         } else {
@@ -129,8 +137,8 @@ fn reconcile_rule_packs(
 
     if !removed_scopes.is_empty() {
         let mut s = state.write();
-        for (tool, scope) in &removed_scopes {
-            s.remove(&(*tool, scope.clone()));
+        for (tool, scope, pack_id) in &removed_scopes {
+            s.remove(&(*tool, scope.clone(), pack_id.clone()));
         }
     }
 
@@ -713,6 +721,7 @@ mod tests {
                     sigil_core::event::AiGuardScope::Project {
                         path: canonical_a.clone(),
                     },
+                    None::<String>,
                 ),
                 crate::ai_guard::task::CachedAssessment {
                     score: 5.0,
@@ -747,6 +756,7 @@ mod tests {
                 sigil_core::event::AiGuardScope::Project {
                     path: canonical_a.clone(),
                 },
+                None::<String>,
             );
             assert!(
                 !s.contains_key(&key),
