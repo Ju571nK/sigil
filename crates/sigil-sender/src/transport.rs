@@ -17,45 +17,58 @@ pub enum TransportError {
     Identity(reqwest::Error),
     #[error("invalid root CA bundle")]
     InvalidCa,
+    #[error("incomplete mTLS config: client_cert_path and client_key_path must be set together")]
+    IncompleteMtls,
     #[error("client build: {0}")]
     Build(reqwest::Error),
 }
 
-/// Build a reqwest client preconfigured with mTLS using the supplied
-/// PEM-encoded client cert chain + private key, validating server certs
-/// against the supplied PEM-encoded CA bundle.
+/// Build a reqwest client. mTLS is applied when both `client_cert_pem` and
+/// `client_key_pem` are supplied; a `server_ca_pem` pins the server cert to
+/// that CA (built-in roots disabled). With all three `None`, a plain client is
+/// returned (built-in roots, no client identity) — e.g. for a plain-HTTP dev
+/// server. Supplying exactly one of cert/key is rejected as `IncompleteMtls`.
 pub fn build_client(
-    client_cert_pem: &Path,
-    client_key_pem: &Path,
-    server_ca_pem: &Path,
+    client_cert_pem: Option<&Path>,
+    client_key_pem: Option<&Path>,
+    server_ca_pem: Option<&Path>,
 ) -> Result<Client, TransportError> {
-    let cert_pem = std::fs::read(client_cert_pem).map_err(|source| TransportError::Read {
-        path: client_cert_pem.to_path_buf(),
-        source,
-    })?;
-    let key_pem = std::fs::read(client_key_pem).map_err(|source| TransportError::Read {
-        path: client_key_pem.to_path_buf(),
-        source,
-    })?;
-    let mut combined = Vec::with_capacity(cert_pem.len() + key_pem.len() + 1);
-    combined.extend_from_slice(&cert_pem);
-    combined.push(b'\n');
-    combined.extend_from_slice(&key_pem);
-    let identity = Identity::from_pem(&combined).map_err(TransportError::Identity)?;
+    let mut builder = ClientBuilder::new().use_rustls_tls();
 
-    let ca_pem = std::fs::read(server_ca_pem).map_err(|source| TransportError::Read {
-        path: server_ca_pem.to_path_buf(),
-        source,
-    })?;
-    let ca_cert = reqwest::Certificate::from_pem(&ca_pem).map_err(|_| TransportError::InvalidCa)?;
+    match (client_cert_pem, client_key_pem) {
+        (Some(cert_path), Some(key_path)) => {
+            let cert_pem = std::fs::read(cert_path).map_err(|source| TransportError::Read {
+                path: cert_path.to_path_buf(),
+                source,
+            })?;
+            let key_pem = std::fs::read(key_path).map_err(|source| TransportError::Read {
+                path: key_path.to_path_buf(),
+                source,
+            })?;
+            let mut combined = Vec::with_capacity(cert_pem.len() + key_pem.len() + 1);
+            combined.extend_from_slice(&cert_pem);
+            combined.push(b'\n');
+            combined.extend_from_slice(&key_pem);
+            let identity = Identity::from_pem(&combined).map_err(TransportError::Identity)?;
+            builder = builder.identity(identity);
+        }
+        (None, None) => {}
+        _ => return Err(TransportError::IncompleteMtls),
+    }
 
-    ClientBuilder::new()
-        .use_rustls_tls()
-        .identity(identity)
-        .add_root_certificate(ca_cert)
-        .tls_built_in_root_certs(false)
-        .build()
-        .map_err(TransportError::Build)
+    if let Some(ca_path) = server_ca_pem {
+        let ca_pem = std::fs::read(ca_path).map_err(|source| TransportError::Read {
+            path: ca_path.to_path_buf(),
+            source,
+        })?;
+        let ca_cert =
+            reqwest::Certificate::from_pem(&ca_pem).map_err(|_| TransportError::InvalidCa)?;
+        builder = builder
+            .add_root_certificate(ca_cert)
+            .tls_built_in_root_certs(false);
+    }
+
+    builder.build().map_err(TransportError::Build)
 }
 
 /// High-level outcome of an HTTP send. The data_task uses this to decide
@@ -128,9 +141,9 @@ mod tests {
     fn missing_cert_returns_read_error() {
         let dir = tempdir().unwrap();
         let err = build_client(
-            &dir.path().join("missing.crt"),
-            &dir.path().join("missing.key"),
-            &dir.path().join("missing-ca.pem"),
+            Some(&dir.path().join("missing.crt")),
+            Some(&dir.path().join("missing.key")),
+            Some(&dir.path().join("missing-ca.pem")),
         )
         .unwrap_err();
         assert!(matches!(err, TransportError::Read { .. }));
@@ -145,8 +158,30 @@ mod tests {
         std::fs::write(&cert, b"not a pem").unwrap();
         std::fs::write(&key, b"not a pem either").unwrap();
         std::fs::write(&ca, b"definitely not pem").unwrap();
-        let err = build_client(&cert, &key, &ca).unwrap_err();
+        let err = build_client(Some(&cert), Some(&key), Some(&ca)).unwrap_err();
         assert!(matches!(err, TransportError::Identity(_)));
+    }
+
+    #[test]
+    fn no_certs_builds_plain_client() {
+        // Plain-HTTP / no-mTLS path: all None → a usable client, no error.
+        assert!(build_client(None, None, None).is_ok());
+    }
+
+    #[test]
+    fn partial_mtls_is_rejected() {
+        let dir = tempdir().unwrap();
+        let cert = dir.path().join("c.crt");
+        std::fs::write(&cert, b"x").unwrap();
+        // cert without key (and vice versa) → IncompleteMtls, before any read.
+        assert!(matches!(
+            build_client(Some(&cert), None, None).unwrap_err(),
+            TransportError::IncompleteMtls
+        ));
+        assert!(matches!(
+            build_client(None, Some(&cert), None).unwrap_err(),
+            TransportError::IncompleteMtls
+        ));
     }
 
     #[test]

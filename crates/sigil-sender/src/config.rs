@@ -11,12 +11,19 @@ use thiserror::Error;
 pub struct SenderConfig {
     /// HTTPS URL of `sigil-server-gateway`. e.g., `https://sigil.example.com`.
     pub server_base_url: String,
-    /// Path to client cert (PEM).
-    pub client_cert_path: PathBuf,
-    /// Path to client private key (PEM).
-    pub client_key_path: PathBuf,
-    /// Path to CA bundle that signs the server cert (PEM).
-    pub server_ca_path: PathBuf,
+    /// Path to client cert (PEM). Optional: omit (with `client_key_path`) to
+    /// run without an mTLS client identity — e.g. against a plain-HTTP dev
+    /// server. mTLS is the recommended production posture.
+    #[serde(default)]
+    pub client_cert_path: Option<PathBuf>,
+    /// Path to client private key (PEM). Required iff `client_cert_path` is set.
+    #[serde(default)]
+    pub client_key_path: Option<PathBuf>,
+    /// Path to CA bundle that signs the server cert (PEM). Optional: when set,
+    /// the server cert is pinned to this CA (built-in roots disabled);
+    /// otherwise the platform's built-in roots are used.
+    #[serde(default)]
+    pub server_ca_path: Option<PathBuf>,
     /// Path to the agent's events directory (where JSONL spool lives). The
     /// sender only *reads* this (the agent owns it `root:sigil`), so it is
     /// reachable by the `sigil` group.
@@ -191,6 +198,27 @@ policy_poll_interval: 30
         assert_eq!(cfg.max_batch_events, 64);
         assert_eq!(cfg.max_batch_bytes, 65536);
         assert_eq!(cfg.policy_poll_interval.as_secs(), 30);
+    }
+
+    #[test]
+    fn certs_absent_parses_to_none() {
+        // A plain-HTTP / no-mTLS config: the three cert paths may be omitted.
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sender.yaml");
+        write(
+            &p,
+            r#"
+server_base_url: "http://127.0.0.1:8443"
+events_dir: "/d"
+offset_path: "/e"
+agent_control: "/f"
+dead_letter_dir: "/g"
+"#,
+        );
+        let cfg = SenderConfig::load(&p).unwrap();
+        assert!(cfg.client_cert_path.is_none());
+        assert!(cfg.client_key_path.is_none());
+        assert!(cfg.server_ca_path.is_none());
     }
 
     #[test]

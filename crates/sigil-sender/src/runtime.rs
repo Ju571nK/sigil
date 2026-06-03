@@ -31,10 +31,16 @@ pub struct RuntimeCtx {
 }
 
 pub async fn run(ctx: RuntimeCtx) -> Result<()> {
+    if ctx.config.client_cert_path.is_none() {
+        tracing::warn!(
+            "sigil-sender: no client_cert_path configured — running WITHOUT an mTLS \
+             client identity. mTLS is the recommended production posture."
+        );
+    }
     let client = build_client(
-        &ctx.config.client_cert_path,
-        &ctx.config.client_key_path,
-        &ctx.config.server_ca_path,
+        ctx.config.client_cert_path.as_deref(),
+        ctx.config.client_key_path.as_deref(),
+        ctx.config.server_ca_path.as_deref(),
     )?;
     let stats = heartbeat::shared();
     let etag_path = etag_path_for(&ctx.config.offset_path);
