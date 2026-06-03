@@ -19,6 +19,8 @@ use std::sync::{Arc, Mutex};
 pub struct AppState {
     pub events_out_dir: PathBuf,
     pub policy_bundle_path: PathBuf,
+    /// Path to the signed pack-set bundle. `None` ⇒ `GET /v1/rule-packs` 404s.
+    pub rule_packs_bundle_path: Option<std::path::PathBuf>,
     pub high_water_path: PathBuf,
     /// `None` ⇒ every authenticated host is accepted.
     pub allowlist: Option<HashSet<String>>,
@@ -54,6 +56,10 @@ pub fn build_router(state: SharedState) -> Router {
     Router::new()
         .route("/v1/events", post(crate::events_route::post_events))
         .route("/v1/policy", get(crate::policy_route::get_policy))
+        .route(
+            "/v1/rule-packs",
+            get(crate::rule_packs_route::get_rule_packs),
+        )
         .route(HEALTHZ_PATH, get(crate::routes::healthz::get_healthz))
         .route(
             "/v1/meta",

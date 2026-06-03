@@ -35,6 +35,10 @@ pub struct ServerConfig {
     /// Path to the operator-signed policy bundle (`SignedPolicyResponse` JSON,
     /// produced by `sigil-sign`). Absent file ⇒ `GET /v1/policy` returns 404.
     pub policy_bundle_path: PathBuf,
+    /// Path to the signed pack-set bundle (`SignedPolicyResponse`-shaped JSON,
+    /// produced by `sigil-sign`). Absent ⇒ `GET /v1/rule-packs` returns 404.
+    #[serde(default)]
+    pub rule_packs_bundle_path: Option<std::path::PathBuf>,
     /// Optional allowlist of `host_id`s. Absent ⇒ accept all authenticated hosts.
     #[serde(default)]
     pub host_allowlist_path: Option<PathBuf>,

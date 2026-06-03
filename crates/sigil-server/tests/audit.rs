@@ -19,6 +19,7 @@ async fn meta_reports_audit_head_when_signing_enabled() {
     let state = Arc::new(AppState {
         events_out_dir: dir.path().to_path_buf(),
         policy_bundle_path: dir.path().join("p.json"),
+        rule_packs_bundle_path: None,
         high_water_path: dir.path().join(".hw.json"),
         allowlist: None::<HashSet<String>>,
         high_water: Mutex::new(HighWater::default()),
@@ -69,6 +70,7 @@ async fn meta_reports_null_audit_head_when_disabled() {
     let state = Arc::new(AppState {
         events_out_dir: dir.path().to_path_buf(),
         policy_bundle_path: dir.path().join("p.json"),
+        rule_packs_bundle_path: None,
         high_water_path: dir.path().join(".hw.json"),
         allowlist: None::<HashSet<String>>,
         high_water: Mutex::new(HighWater::default()),
