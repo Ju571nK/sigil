@@ -33,6 +33,28 @@ impl RulePackParser {
             repo_root: None,
         })
     }
+
+    /// Phase 3b.7.2 — a Project-scoped instance bound to one discovered repo.
+    /// on_file / watched_paths are resolved relative to `repo_root`.
+    pub fn new_project(
+        pack: RulePack,
+        repo_root: std::path::PathBuf,
+    ) -> Result<Self, PackLoadError> {
+        let mut p = Self::new(pack)?;
+        p.repo_root = Some(repo_root);
+        Ok(p)
+    }
+
+    /// UserGlobal: env-expand the raw path (absolute). Project: join the raw
+    /// (relative) path under repo_root.
+    fn resolve(&self, raw: &str) -> Option<PathBuf> {
+        match &self.repo_root {
+            Some(root) => Some(root.join(raw)),
+            None => {
+                sigil_core::policy::expand::expand(raw, &sigil_core::policy::expand::EnvLookup).ok()
+            }
+        }
+    }
 }
 
 impl AiGuardParser for RulePackParser {
@@ -49,27 +71,27 @@ impl AiGuardParser for RulePackParser {
         }
     }
 
+    fn rule_pack_id(&self) -> Option<&str> {
+        Some(&self.pack.id)
+    }
+
     fn watched_paths(&self, _home: &Path) -> Vec<PathBuf> {
         self.pack
             .watched_paths
             .iter()
-            .filter_map(|raw| {
-                sigil_core::policy::expand::expand(raw, &sigil_core::policy::expand::EnvLookup).ok()
-            })
+            .filter_map(|raw| self.resolve(raw))
             .collect()
     }
 
     fn assess(&self, _home: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
         let mut out = Vec::new();
         for (idx, rule) in self.pack.rules.iter().enumerate() {
-            let file_path = sigil_core::policy::expand::expand(
-                &rule.on_file,
-                &sigil_core::policy::expand::EnvLookup,
-            )
-            .map_err(|e| AssessError::Parse {
-                path: PathBuf::from(&rule.on_file),
-                message: format!("expand: {e:?}"),
-            })?;
+            let Some(file_path) = self.resolve(&rule.on_file) else {
+                return Err(AssessError::Parse {
+                    path: PathBuf::from(&rule.on_file),
+                    message: "resolve failed".into(),
+                });
+            };
 
             let text = match std::fs::read_to_string(&file_path) {
                 Ok(s) => s,
@@ -271,5 +293,35 @@ mod tests {
         let p = RulePackParser::new(pack).unwrap();
         assert_eq!(p.tool(), AiTool::Gemini);
         assert!(matches!(p.scope(), AiGuardScope::UserGlobal));
+    }
+
+    #[test]
+    fn new_project_resolves_on_file_under_repo_root() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repoA");
+        std::fs::create_dir_all(repo.join(".gemini")).unwrap();
+        std::fs::write(repo.join(".gemini/settings.json"), r#"{"sandbox": false}"#).unwrap();
+
+        let mut pack = pack_with_one_rule(
+            ".gemini/settings.json",
+            "$.sandbox",
+            Matcher::Equals {
+                value: "false".into(),
+            },
+            AiGuardReason::SandboxDisabled,
+        );
+        pack.scope = RulePackScope::Project;
+        pack.watched_paths = vec![".gemini/settings.json".into()];
+
+        let p = RulePackParser::new_project(pack, repo.clone()).unwrap();
+        assert_eq!(p.scope(), AiGuardScope::Project { path: repo.clone() });
+        assert_eq!(p.rule_pack_id(), Some("test-pack"));
+        assert_eq!(
+            p.watched_paths(Path::new("/unused")),
+            vec![repo.join(".gemini/settings.json")]
+        );
+        let out = p.assess(Path::new("/unused")).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], AiGuardReason::SandboxDisabled));
     }
 }
