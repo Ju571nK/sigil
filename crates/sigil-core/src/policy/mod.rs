@@ -87,6 +87,17 @@ pub struct RulePack {
     pub rules: Vec<RuleEntry>,
 }
 
+/// Phase 3b.7.1 (Tier 2) — a gate condition on a rule. The rule emits only when
+/// every condition holds; a condition holds iff its selector finds at least one
+/// value matching its matcher, XOR `negate`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Condition {
+    pub selector: String,
+    pub matcher: Matcher,
+    #[serde(default)]
+    pub negate: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RuleEntry {
     pub id: String,
@@ -95,6 +106,10 @@ pub struct RuleEntry {
     pub selector: String,
     pub matcher: Matcher,
     pub emit: crate::event::AiGuardReason,
+    /// Phase 3b.7.1 (Tier 2) — gate conditions (AND). Empty (default) = the flat
+    /// Tier-1 rule (no gating). Requires pack_version 2.
+    #[serde(default)]
+    pub when: Vec<Condition>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -1018,6 +1033,22 @@ host_id_strategy: hostname
         let doc = parse("version: 1\n").unwrap();
         assert!(doc.gemini_workspaces.is_empty());
         assert!(doc.cursor_workspaces.is_empty());
+    }
+
+    #[test]
+    fn rule_entry_when_defaults_empty_and_round_trips() {
+        // a rule WITHOUT `when` parses to an empty when (back-compat)
+        let r: RuleEntry = serde_yaml::from_str(
+            "id: r1\non_file: /x\nformat: json\nselector: \"$.a\"\nmatcher: { kind: exists }\nemit: { kind: sandbox_disabled }\n",
+        ).unwrap();
+        assert!(r.when.is_empty());
+
+        // a rule WITH when conditions (incl. negate default) round-trips
+        let y = "id: r2\non_file: /x\nformat: json\nselector: \"$.a\"\nmatcher: { kind: exists }\nemit: { kind: sandbox_disabled }\nwhen:\n  - selector: \"$.b\"\n    matcher: { kind: equals, value: \"true\" }\n  - selector: \"$.c\"\n    matcher: { kind: exists }\n    negate: true\n";
+        let r2: RuleEntry = serde_yaml::from_str(y).unwrap();
+        assert_eq!(r2.when.len(), 2);
+        assert!(!r2.when[0].negate);
+        assert!(r2.when[1].negate);
     }
 
     #[test]

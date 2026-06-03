@@ -179,6 +179,7 @@ mod tests {
                 selector: selector.into(),
                 matcher,
                 emit,
+                when: vec![],
             }],
         }
     }
@@ -283,6 +284,7 @@ mod tests {
                     pattern: "[unclosed".into(),
                 },
                 emit: AiGuardReason::SandboxDisabled,
+                when: vec![],
             }],
         };
         assert!(RulePackParser::new(pack).is_err());

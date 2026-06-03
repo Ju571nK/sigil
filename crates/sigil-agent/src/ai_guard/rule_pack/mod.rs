@@ -92,6 +92,7 @@ mod tests {
                 selector: "$.x".into(),
                 matcher: Matcher::Exists,
                 emit: AiGuardReason::SandboxDisabled,
+                when: vec![],
             }],
         }
     }
@@ -112,6 +113,7 @@ mod tests {
                 selector: "$.x".into(),
                 matcher: Matcher::Exists,
                 emit: AiGuardReason::SandboxDisabled,
+                when: vec![],
             }],
         }
     }

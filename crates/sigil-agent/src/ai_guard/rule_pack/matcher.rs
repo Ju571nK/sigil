@@ -138,6 +138,7 @@ mod tests {
                 selector: "$.x".into(),
                 matcher: Matcher::Exists,
                 emit: sigil_core::event::AiGuardReason::SandboxDisabled,
+                when: vec![],
             },
             sigil_core::policy::RuleEntry {
                 id: "r2".into(),
@@ -148,6 +149,7 @@ mod tests {
                     pattern: "^http".into(),
                 },
                 emit: sigil_core::event::AiGuardReason::SandboxDisabled,
+                when: vec![],
             },
         ];
         let out = compile_pack_regexes(&rules).unwrap();
@@ -167,6 +169,7 @@ mod tests {
                 pattern: "[unclosed".into(),
             },
             emit: sigil_core::event::AiGuardReason::SandboxDisabled,
+            when: vec![],
         }];
         let err = compile_pack_regexes(&rules).unwrap_err();
         assert_eq!(err.rule_id, "bad");
