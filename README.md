@@ -246,10 +246,17 @@ workspace libraries.
   (Claude Code `PreToolUse` first; the per-agent adapter shape generalizes to
   Codex/Gemini/Cursor). It normalizes and redacts the call (blake3 hash over
   the raw text + masked preview) and emits one event to `sigil-agent` over a
-  dedicated `hook.sock`, reusing the JSONL event log → sender pipeline. **Observe-only**
-  — never denies, always exits 0, latency-bounded; the agent stamps the kernel
-  peer-uid for attribution. The *runtime* companion to AI Guard's *static*
-  config scoring (#64, Stage 1).
+  dedicated `hook.sock`, reusing the JSONL event log → sender pipeline. The agent
+  stamps the kernel peer-uid for attribution. The *runtime* companion to AI Guard's
+  *static* config scoring (#64, Stage 1).
+- **Enforce (Stage 2, #100)** — the same Claude Code hook can also **deny** a tool
+  call when an agent-local deny rule matches, over a synchronous `hook-decide.sock`;
+  the agent records a `HookDecision` event and returns the verdict, which the hook
+  translates to a `permissionDecision: deny`. This is **in-domain, advisory
+  enforcement** — it blocks ordinary tool calls when the agent honors the registered
+  hook, **fails open by default**, and is *agent-intent policy + tamper-evidence*,
+  **not** tamper-resistant runtime command security (the agent owns the config that
+  registers its own hook). Always exits 0, latency-bounded.
 
 **Libraries**
 

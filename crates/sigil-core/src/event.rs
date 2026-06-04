@@ -225,6 +225,30 @@ pub struct HookInvocationEvidence {
     pub capture_status: String,
 }
 
+/// sigil-hook Stage 2 (#100). A consequential decision outcome — a deny, or a
+/// degradation where enforcement could not be evaluated. NOT emitted on allow
+/// (observe already records every invocation via HookInvocation).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HookDecisionEvidence {
+    pub agent: AiTool,
+    pub peer_uid: u32,
+    pub agent_session_id: Option<String>,
+    pub tool_use_id: Option<String>,
+    /// Normalized action kind: "bash" | "file_edit" | "mcp_call" | "other".
+    pub action_kind: String,
+    pub action_hash: String,
+    pub action_preview: Option<String>,
+    /// "deny" | "fail_open_error" | "fail_closed_error".
+    /// `fail_*_error` values are reserved for the daemon-reachable-but-failed
+    /// degradation path (follow-on); slice 1's pre-compiled evaluator emits only "deny".
+    pub decision: String,
+    pub rule_id: Option<String>,
+    pub deny_reason: Option<String>,
+    /// "observe" | "enforce".
+    pub enforcement_mode: String,
+    pub capture_level: String,
+}
+
 /// Phase 3b.4-pre — full host identity / OS / network snapshot, emitted by
 /// host_meta_snapshot_task. Surfaces hostname (so server-side fleet views
 /// can label hosts with something human-readable instead of UUIDs) plus
@@ -460,6 +484,8 @@ pub enum Evidence {
     },
     /// sigil-hook Stage 1 (#64). One observed agent tool call.
     HookInvocation(HookInvocationEvidence),
+    /// sigil-hook Stage 2 (#100). A deny / degradation decision outcome.
+    HookDecision(HookDecisionEvidence),
     /// Forward-compat: an evidence kind this build doesn't recognize. A newer
     /// producer's variant deserializes here instead of failing the whole event.
     #[serde(other)]
@@ -1162,5 +1188,28 @@ mod tests {
         let s = serde_json::to_string(&ev).unwrap();
         assert!(s.contains(r#""rule_pack_id":"my-pack""#));
         assert_eq!(ev, serde_json::from_str::<Evidence>(&s).unwrap());
+    }
+
+    #[test]
+    fn hook_decision_evidence_serializes_snake_case() {
+        let ev = Evidence::HookDecision(HookDecisionEvidence {
+            agent: AiTool::ClaudeCode,
+            peer_uid: 501,
+            agent_session_id: Some("s".into()),
+            tool_use_id: None,
+            action_kind: "bash".into(),
+            action_hash: "ab".repeat(32),
+            action_preview: Some("rm -rf /".into()),
+            decision: "deny".into(),
+            rule_id: Some("no-rm-rf-root".into()),
+            deny_reason: Some("destructive".into()),
+            enforcement_mode: "enforce".into(),
+            capture_level: "redacted".into(),
+        });
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"kind\":\"hook_decision\""));
+        assert!(s.contains("\"decision\":\"deny\""));
+        let back: Evidence = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, ev);
     }
 }

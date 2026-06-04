@@ -19,6 +19,9 @@ pub use pubkeys::{Keystore, KeystoreEntry, KeystoreError};
 pub use signed_envelope::{SignedEnvelope, SignedPolicyResponse};
 pub use verify::{verify_envelope, VerifiedPolicy, VerifyError};
 
+pub mod deny_rule;
+pub use deny_rule::{DenyRule, FailMode, HookActionMatch};
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
@@ -182,6 +185,15 @@ pub struct PolicyDocument {
     /// runtime. Absent field = no overrides.
     #[serde(default)]
     pub rubric_overrides: HashMap<String, f32>,
+    /// Stage 2 (#100) — operator deny rules evaluated by the hook-decide path.
+    /// Empty/absent = no enforcement (observe-only). Wire-additive, back-compat.
+    #[serde(default)]
+    pub hook_deny_rules: Vec<deny_rule::DenyRule>,
+    /// Stage 2 (#100) — behavior when a verdict cannot be obtained. Default open.
+    // Consumed by the hook locally via its --on-failure registration flag (not by
+    // the agent); intentionally not threaded into EffectivePolicy.
+    #[serde(default)]
+    pub on_failure: deny_rule::FailMode,
 }
 
 fn default_host_id_strategy() -> HostIdStrategy {
@@ -253,6 +265,9 @@ pub struct EffectivePolicy {
     /// Phase 3b.5 — operator-tunable rubric weights (merged from user
     /// PolicyDocument; defaults map is empty).
     pub rubric_overrides: HashMap<String, f32>,
+    /// Stage 2 (#100) — operator deny rules forwarded from user PolicyDocument.
+    /// Empty = no enforcement (observe-only).
+    pub hook_deny_rules: Vec<deny_rule::DenyRule>,
 }
 
 /// Merge a defaults document and a user-override document into an effective policy.
@@ -359,6 +374,11 @@ pub fn merge(
         .map(|u| u.rubric_overrides.clone())
         .unwrap_or_default();
 
+    let hook_deny_rules = user
+        .as_ref()
+        .map(|u| u.hook_deny_rules.clone())
+        .unwrap_or_default();
+
     Ok(EffectivePolicy {
         host_id_strategy: strategy,
         targets: by_id,
@@ -370,6 +390,7 @@ pub fn merge(
         antigravity_workspaces,
         rule_packs,
         rubric_overrides,
+        hook_deny_rules,
     })
 }
 
@@ -403,6 +424,8 @@ pub fn defaults() -> Result<PolicyDocument, PolicyError> {
             antigravity_workspaces: vec![],
             rule_packs,
             rubric_overrides: HashMap::new(),
+            hook_deny_rules: vec![],
+            on_failure: deny_rule::FailMode::Open,
         }),
     }
 }
@@ -538,6 +561,8 @@ targets:
             antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
+            hook_deny_rules: vec![],
+            on_failure: deny_rule::FailMode::Open,
         }
     }
 
@@ -605,6 +630,8 @@ targets:
             antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
+            hook_deny_rules: vec![],
+            on_failure: deny_rule::FailMode::Open,
         };
         let eff = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap();
         let ids: Vec<&str> = eff.targets.iter().map(|t| t.id.as_str()).collect();
@@ -630,6 +657,8 @@ targets:
             antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
+            hook_deny_rules: vec![],
+            on_failure: deny_rule::FailMode::Open,
         };
         let eff = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap();
         assert_eq!(eff.targets[0].tier, Tier::Standard);
@@ -654,6 +683,8 @@ targets:
             antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
+            hook_deny_rules: vec![],
+            on_failure: deny_rule::FailMode::Open,
         };
         let err = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::UnknownOverrideId(_)));
@@ -674,6 +705,8 @@ targets:
             antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
+            hook_deny_rules: vec![],
+            on_failure: deny_rule::FailMode::Open,
         };
         let err = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::DuplicateId(_)));
@@ -698,6 +731,8 @@ targets:
             antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
+            hook_deny_rules: vec![],
+            on_failure: deny_rule::FailMode::Open,
         };
         let err = merge(defaults, None, None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::EmptyTargets));
@@ -1010,6 +1045,8 @@ host_id_strategy: hostname
             antigravity_workspaces: vec![],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
+            hook_deny_rules: vec![],
+            on_failure: deny_rule::FailMode::Open,
         };
         user.rubric_overrides
             .insert("destructive_in_hook_script".into(), 5.5);
@@ -1081,10 +1118,20 @@ host_id_strategy: hostname
             antigravity_workspaces: vec!["~/src/c".to_string()],
             rule_packs: vec![],
             rubric_overrides: HashMap::new(),
+            hook_deny_rules: vec![],
+            on_failure: deny_rule::FailMode::Open,
         };
         let eff = merge(defaults().unwrap(), Some(user), None, current_platform()).unwrap();
         assert_eq!(eff.gemini_workspaces, vec!["~/src/a".to_string()]);
         assert_eq!(eff.cursor_workspaces, vec!["~/src/b".to_string()]);
         assert_eq!(eff.antigravity_workspaces, vec!["~/src/c".to_string()]);
+    }
+
+    #[test]
+    fn policy_without_hook_deny_rules_defaults_empty_open() {
+        // use the same minimal valid policy shape the other tests in this module use
+        let doc = parse(yaml_minimal()).unwrap();
+        assert!(doc.hook_deny_rules.is_empty());
+        assert_eq!(doc.on_failure, FailMode::Open);
     }
 }

@@ -69,6 +69,7 @@ fn evidence_kind_str(e: &sigil_core::event::Evidence) -> &'static str {
         AiGuardRiskAssessed { .. } => "ai_guard_risk_assessed",
         HostMetaSnapshot { .. } => "host_meta_snapshot",
         HookInvocation(_) => "hook_invocation",
+        HookDecision(_) => "hook_decision",
         Unknown => "unknown",
     }
 }

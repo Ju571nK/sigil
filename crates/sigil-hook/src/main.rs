@@ -1,4 +1,5 @@
 mod adapters;
+mod decide;
 mod emit;
 mod install;
 mod install_antigravity;
@@ -109,6 +110,32 @@ fn hook_socket_path() -> PathBuf {
         .unwrap_or_default()
 }
 
+/// Resolve the decide socket for the enforce path. Mirrors `hook_socket_path`
+/// but targets `hook-decide.sock` (the Stage 2 synchronous channel).
+/// `SIGIL_HOOK_DECIDE_SOCKET` overrides everything.
+#[cfg(unix)]
+fn hook_decide_socket_path() -> PathBuf {
+    if let Ok(p) = std::env::var("SIGIL_HOOK_DECIDE_SOCKET") {
+        return PathBuf::from(p);
+    }
+    let system = PathBuf::from("/var/run/sigil/hook-decide.sock");
+    if system.exists() {
+        return system;
+    }
+    let uid = unsafe { libc::geteuid() };
+    let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
+    let tmp = std::env::var("TMPDIR").ok();
+    sigil_core::control_proto::resolve_control_socket(uid == 0, xdg, tmp, uid)
+        .with_file_name("hook-decide.sock")
+}
+
+#[cfg(not(unix))]
+fn hook_decide_socket_path() -> PathBuf {
+    std::env::var("SIGIL_HOOK_DECIDE_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
 #[derive(Parser)]
 #[command(
     name = "sigil-hook",
@@ -126,6 +153,12 @@ enum Cmd {
     ClaudeCode {
         #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
         capture: CaptureArg,
+        /// Stage 2: run the synchronous deny-decision path instead of observe.
+        #[arg(long)]
+        enforce: bool,
+        /// Behavior when no verdict is obtainable. Default open (fail-open).
+        #[arg(long, value_enum, default_value_t = OnFailureArg::Open)]
+        on_failure: OnFailureArg,
     },
 
     /// Codex CLI PreToolUse entrypoint: read stdin, emit, exit 0.
@@ -160,6 +193,12 @@ enum Cmd {
         /// Capture level for the registered hook command.
         #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
         capture: CaptureArg,
+        /// Register the Stage 2 enforce (deny-decision) hook instead of observe.
+        #[arg(long)]
+        enforce: bool,
+        /// Fail mode baked into the enforce command. Default open.
+        #[arg(long, value_enum, default_value_t = OnFailureArg::Open)]
+        on_failure: OnFailureArg,
     },
 
     /// Remove the sigil-hook registration from an agent's settings.
@@ -190,10 +229,103 @@ impl From<CaptureArg> for CaptureLevel {
     }
 }
 
+/// Behavior when no verdict is obtainable from the decide daemon.
+#[derive(Copy, Clone, ValueEnum)]
+enum OnFailureArg {
+    Open,
+    Closed,
+}
+
+/// Maximum elapsed time waiting for a verdict before falling back to on_failure.
+const DECISION_DEADLINE: Duration = Duration::from_millis(250);
+
+/// claude-code enforce entrypoint. Panic-safe; never hangs past the watchdog.
+/// On Deny → print the permissionDecision JSON; on Allow → nothing.
+/// No verdict (daemon down / timeout / malformed) → apply on_failure.
+fn run_enforce(capture: CaptureLevel, on_failure: OnFailureArg) -> ! {
+    std::panic::set_hook(Box::new(|_| std::process::exit(0)));
+    emit::arm_watchdog(Duration::from_millis(800)); // > decision deadline, < agent UX budget
+    let adapter = match adapters::for_agent("claude-code") {
+        Some(a) => a,
+        None => std::process::exit(0),
+    };
+
+    let mut buf = Vec::new();
+    let _ = std::io::stdin()
+        .take(MAX_STDIN as u64 + 1)
+        .read_to_end(&mut buf);
+    let oversized = buf.len() > MAX_STDIN;
+    let payload: serde_json::Value =
+        serde_json::from_slice(&buf).unwrap_or(serde_json::Value::Null);
+    let mut inv = match adapter.normalize(&payload, capture) {
+        Ok(i) => i,
+        Err(status) => minimal_unparsed(adapter.agent(), capture, status),
+    };
+    if oversized {
+        inv.capture_status = CaptureStatus::Oversized;
+    }
+
+    let req = HookDecisionRequest {
+        protocol_version: HOOK_PROTOCOL_VERSION,
+        request_id: uuid::Uuid::now_v7(),
+        sent_at_unix_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        invocation: inv,
+        deadline_ms: DECISION_DEADLINE.as_millis() as u32,
+    };
+
+    match decide::request_verdict(&hook_decide_socket_path(), &req, DECISION_DEADLINE) {
+        Some(v) => match (v.decision, v.enforcement_mode) {
+            // Only block when the daemon explicitly says Deny AND is in Enforce mode.
+            // A Deny down-shifted to Observe (spec §4) must not block the tool call.
+            (Decision::Deny { rule_id, reason }, EnforcementMode::Enforce) => {
+                print_deny(&rule_id, &reason);
+                std::process::exit(0);
+            }
+            // Allow, or a Deny down-shifted to Observe → do not block.
+            _ => std::process::exit(0),
+        },
+        None => match on_failure {
+            OnFailureArg::Open => std::process::exit(0),
+            OnFailureArg::Closed => {
+                print_deny("fail_closed", "decision unavailable; on_failure=closed");
+                std::process::exit(0);
+            }
+        },
+    }
+}
+
+/// Pure builder for the Claude Code PreToolUse deny JSON (testable).
+fn deny_json(rule_id: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": format!("Blocked by Sigil rule {rule_id}: {reason}")
+        }
+    })
+}
+
+fn print_deny(rule_id: &str, reason: &str) {
+    println!("{}", deny_json(rule_id, reason));
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::ClaudeCode { capture } => run_hook("claude-code", capture.into()),
+        Cmd::ClaudeCode {
+            capture,
+            enforce,
+            on_failure,
+        } => {
+            if enforce {
+                run_enforce(capture.into(), on_failure)
+            } else {
+                run_hook("claude-code", capture.into())
+            }
+        }
         Cmd::Codex { capture } => run_hook("codex", capture.into()),
         Cmd::Cursor { capture } => run_hook("cursor", capture.into()),
         Cmd::Antigravity { capture } => run_hook("antigravity", capture.into()),
@@ -201,7 +333,9 @@ fn main() {
             agent,
             write,
             capture,
-        } => cmd_install(&agent, write, capture),
+            enforce,
+            on_failure,
+        } => cmd_install(&agent, write, capture, enforce, on_failure),
         Cmd::Uninstall { agent, write } => cmd_uninstall(&agent, write),
     }
 }
@@ -214,11 +348,21 @@ fn exe_path() -> String {
         .unwrap_or_else(|| "sigil-hook".to_string())
 }
 
-fn cmd_install(agent: &str, write: bool, capture: CaptureArg) {
+fn cmd_install(
+    agent: &str,
+    write: bool,
+    capture: CaptureArg,
+    enforce: bool,
+    on_failure: OnFailureArg,
+) {
     let capture_str = match capture {
         CaptureArg::Redacted => "redacted",
         CaptureArg::Raw => "raw",
         CaptureArg::HashOnly => "hash-only",
+    };
+    let on_failure_str = match on_failure {
+        OnFailureArg::Open => "open",
+        OnFailureArg::Closed => "closed",
     };
     let exe = exe_path();
 
@@ -229,8 +373,27 @@ fn cmd_install(agent: &str, write: bool, capture: CaptureArg) {
     }
 
     if !write {
-        print!("{}", install::render_block(&exe, agent, capture_str));
+        if enforce {
+            print!(
+                "{}",
+                install::render_block_enforce(&exe, agent, capture_str, on_failure_str)
+            );
+        } else {
+            print!("{}", install::render_block(&exe, agent, capture_str));
+        }
         return;
+    }
+
+    // Enforce-mode --write is only supported for claude-code in slice 1.
+    // The Codex subcommand has no --enforce flag (clap would exit 2 at runtime),
+    // and codex enforce is out of scope for slice 1. For any other agent, guard
+    // explicitly so we never write a misleading settings file or print a
+    // confusing "already installed (no change)" message.
+    if enforce && agent != "claude-code" {
+        eprintln!(
+            "error: enforce-mode install is only supported for claude-code in slice 1 (agent '{agent}' not registered)"
+        );
+        std::process::exit(1);
     }
 
     // Resolve the settings path for this agent.
@@ -256,7 +419,11 @@ fn cmd_install(agent: &str, write: bool, capture: CaptureArg) {
         serde_json::json!({})
     };
 
-    let changed = install::merge_into(&mut root, &exe, agent, capture_str);
+    let changed = if enforce {
+        install::merge_into_enforce(&mut root, &exe, agent, capture_str, on_failure_str)
+    } else {
+        install::merge_into(&mut root, &exe, agent, capture_str)
+    };
 
     // Write back atomically: write to a temp file beside the target, then rename.
     let pretty = serde_json::to_string_pretty(&root).unwrap_or_default();
@@ -439,4 +606,24 @@ fn cmd_uninstall_antigravity(write: bool) {
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deny_json_has_pretooluse_deny_shape() {
+        let v = deny_json("no-rm", "destructive");
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert!(v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains("no-rm"));
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecisionReason"],
+            "Blocked by Sigil rule no-rm: destructive"
+        );
+    }
 }

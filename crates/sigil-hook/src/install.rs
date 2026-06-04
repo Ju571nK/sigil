@@ -42,6 +42,13 @@ fn command_string(exe: &str, agent: &str, capture: &str) -> String {
     format!("{exe} {agent} --capture {capture}")
 }
 
+fn command_string_enforce(exe: &str, agent: &str, capture: &str, on_failure: &str) -> String {
+    // Registrations dedupe by binary path: installing enforce over an existing observe
+    // registration (same exe) REPLACES it — operators upgrading observe→enforce get the
+    // observe entry overwritten, not a second entry.
+    format!("{exe} {agent} --enforce --on-failure {on_failure} --capture {capture}")
+}
+
 /// First whitespace token of a command string (= the binary path).
 fn first_token(cmd: &str) -> &str {
     cmd.split_whitespace().next().unwrap_or("")
@@ -160,9 +167,9 @@ fn merge_cursor(root: &mut Value, exe: &str, cmd: &str) -> bool {
 // Public API (dispatched by agent format)
 // ---------------------------------------------------------------------------
 
-/// Human-pasteable block showing the settings fragment + undo hint.
-pub fn render_block(exe: &str, agent: &str, capture: &str) -> String {
-    let cmd = command_string(exe, agent, capture);
+/// Shared body for `render_block` / `render_block_enforce`: builds the
+/// human-pasteable settings fragment + undo hint for a prebuilt command string.
+fn render_block_inner(cmd: &str, agent: &str) -> String {
     let Some(fmt) = agent_format(agent) else {
         return format!("// unsupported agent '{agent}'\n");
     };
@@ -170,7 +177,7 @@ pub fn render_block(exe: &str, agent: &str, capture: &str) -> String {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "<settings>".into());
     let fragment = match fmt {
-        HookFormat::NestedPreToolUse => json!({ "hooks": { "PreToolUse": [claude_entry(&cmd)] } }),
+        HookFormat::NestedPreToolUse => json!({ "hooks": { "PreToolUse": [claude_entry(cmd)] } }),
         HookFormat::Cursor => json!({
             "version": 1,
             "hooks": {
@@ -192,6 +199,12 @@ pub fn render_block(exe: &str, agent: &str, capture: &str) -> String {
     )
 }
 
+/// Human-pasteable block showing the settings fragment + undo hint.
+pub fn render_block(exe: &str, agent: &str, capture: &str) -> String {
+    let cmd = command_string(exe, agent, capture);
+    render_block_inner(&cmd, agent)
+}
+
 /// Idempotently ensure the sigil-hook entry is present. Returns `true` if the
 /// document was modified.
 pub fn merge_into(root: &mut Value, exe: &str, agent: &str, capture: &str) -> bool {
@@ -199,6 +212,33 @@ pub fn merge_into(root: &mut Value, exe: &str, agent: &str, capture: &str) -> bo
     match agent_format(agent) {
         Some(HookFormat::NestedPreToolUse) => merge_claude(pretooluse_array_mut(root), exe, &cmd),
         Some(HookFormat::Cursor) => merge_cursor(root, exe, &cmd),
+        None => false,
+    }
+}
+
+/// Like `render_block`, but the registered command runs the Stage 2 enforce
+/// (deny-decision) path with the given on_failure mode.
+pub fn render_block_enforce(exe: &str, agent: &str, capture: &str, on_failure: &str) -> String {
+    let cmd = command_string_enforce(exe, agent, capture, on_failure);
+    render_block_inner(&cmd, agent)
+}
+
+/// Merge an enforce-mode registration into the settings JSON.
+/// For claude-code (NestedPreToolUse): merges with the enforce command string.
+/// For Cursor and unknown agents: returns false (not supported in slice 1).
+///
+/// slice 1: enforce is claude-code only; the CLI guards non-claude-code before reaching here.
+pub fn merge_into_enforce(
+    root: &mut Value,
+    exe: &str,
+    agent: &str,
+    capture: &str,
+    on_failure: &str,
+) -> bool {
+    let cmd = command_string_enforce(exe, agent, capture, on_failure);
+    match agent_format(agent) {
+        Some(HookFormat::NestedPreToolUse) => merge_claude(pretooluse_array_mut(root), exe, &cmd),
+        Some(HookFormat::Cursor) => false,
         None => false,
     }
 }
@@ -335,6 +375,15 @@ pub fn write_baseline(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_block_enforce_carries_flags() {
+        let s = render_block_enforce("/abs/sigil-hook", "claude-code", "redacted", "open");
+        assert!(s.contains(
+            "/abs/sigil-hook claude-code --enforce --on-failure open --capture redacted"
+        ));
+        assert!(s.contains("PreToolUse"));
+    }
 
     // --- Claude Code (nested) ---
     #[test]
