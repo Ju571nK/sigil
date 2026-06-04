@@ -1,8 +1,7 @@
 //! Stage 2 (#100): hook-side synchronous decision transport. Blocking std
 //! sockets (the hook is a short-lived process; no tokio). Any failure → None
 //! so the caller falls back to its local on_failure mode.
-use sigil_core::hook_proto::{HookDecisionRequest, HookDecisionResponse, HookVerdict};
-use std::io::{BufRead, BufReader, Write};
+use sigil_core::hook_proto::{HookDecisionRequest, HookVerdict};
 use std::path::Path;
 use std::time::Duration;
 
@@ -13,6 +12,9 @@ pub fn request_verdict(
     req: &HookDecisionRequest,
     deadline: Duration,
 ) -> Option<HookVerdict> {
+    // unix-only imports kept local so the non-unix stub doesn't trip unused-import.
+    use sigil_core::hook_proto::HookDecisionResponse;
+    use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
     let stream = UnixStream::connect(socket).ok()?;
     stream.set_read_timeout(Some(deadline)).ok()?;
