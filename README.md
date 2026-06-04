@@ -204,16 +204,16 @@ Out of the box, with built-in defaults plus your policy YAML:
 
 Sigil is a Rust workspace with nine crates: three long-running binaries,
 one operator CLI, one read-only MCP server, one runtime hook, and three
-shared libraries.
+workspace libraries.
 
 **Long-running binaries**
 
 - `sigil-agent` — the host daemon (`sigil` binary). Owns the `tokio`
   runtime, the `notify`-based filesystem watcher, the event pipeline, CLI
   commands, and platform glue. Writes JSONL posture events to the local
-  spool.
+  event log.
 - `sigil-sender` — the uploader (`sigil-sender` binary). Reads JSONL
-  batches from the spool, ships them to a SIEM endpoint over HTTPS
+  batches from the local event log, ships them to a SIEM endpoint over HTTPS
   (rustls), and hands signed policy responses back to the agent over IPC.
 - `sigil-server` — OSS reference receiver (`sigil-server` binary). Accepts
   events from `sigil-sender` over mTLS, persists JSONL, and serves
@@ -246,7 +246,7 @@ shared libraries.
   (Claude Code `PreToolUse` first; the per-agent adapter shape generalizes to
   Codex/Gemini/Cursor). It normalizes and redacts the call (blake3 hash over
   the raw text + masked preview) and emits one event to `sigil-agent` over a
-  dedicated `hook.sock`, reusing the spool → sender pipeline. **Observe-only**
+  dedicated `hook.sock`, reusing the JSONL event log → sender pipeline. **Observe-only**
   — never denies, always exits 0, latency-bounded; the agent stamps the kernel
   peer-uid for attribution. The *runtime* companion to AI Guard's *static*
   config scoring (#64, Stage 1).
@@ -256,17 +256,21 @@ shared libraries.
 - `sigil-core` — pure domain library (event, policy, state, hashing, …).
   No OS, `tokio`, or filesystem-watcher dependencies. Consumed by every
   binary.
-- `sigil-spool` — JSONL=IPC primitive (`Producer` / `Consumer` /
-  `Checkpoint` / `Retention`) used at the agent → sender hop. Durable,
-  crash-recoverable, domain-neutral.
+- `sigil-spool` — standalone JSONL=IPC primitive (`Producer` / `Consumer` /
+  `Checkpoint` / `Retention`). Durable, crash-recoverable, domain-neutral.
+  The current `sigil-agent` → `sigil-sender` runtime path uses the simpler
+  `sigil-core::sink::jsonl::JsonlSink` plus `sigil-sender`'s `batch_reader`
+  over local `events-*.jsonl` files; `sigil-spool` is kept as a workspace
+  library rather than a live box in that path.
 - `sigil-rules-basic` — compile-time-embedded baseline rulesets (macOS,
   Linux, and Windows defaults). The OSS fallback when no operator policy
   is supplied; extended rule packs ship separately.
 
 The diagram below is a **runtime view** — where each component runs and how data
 and signed policy flow between machines. The pure libraries (`sigil-core`,
-`sigil-rules-basic`) compile into the binaries above, so they aren't drawn as
-separate boxes.
+`sigil-rules-basic`) compile into the binaries above, and `sigil-spool` is not
+currently wired into the agent/sender runtime path, so those libraries are not
+drawn as separate boxes.
 
 ```mermaid
 flowchart LR
@@ -281,9 +285,7 @@ flowchart LR
             a_ctrl["supervisor · policy_apply · hook_listener<br/>policy_reload · doctor · show"]
         end
 
-        subgraph spool["sigil-spool (JSONL=IPC)"]
-            spoolmods["Producer · Consumer<br/>Checkpoint · Retention"]
-        end
+        events[("Local event log<br/>events-*.jsonl")]
 
         subgraph sender["sigil-sender (bin: sigil-sender)"]
             s_pipe["batch_reader · manifest · transport (HTTPS + rustls)<br/>control_task · agent_ipc · dead_letter · heartbeat"]
@@ -316,22 +318,23 @@ flowchart LR
     %% Optional, exploratory — an internal or external LLM for deeper analysis
     llm["LLM analysis<br/>internal or external<br/>(optional · exploratory)"]:::optional
 
-    %% Optional — operator fleet view (sigil-fleet) for an MCP client; the
-    %% per-developer default (sigil-check) reads the local agent, not the server.
-    mcp["sigil-mcp<br/>sigil-fleet: read-only fleet view<br/>(operator · GET only · optional)"]
-    mcpclient(["MCP client<br/>(Claude Desktop / Code)"]):::optional
+    %% Optional MCP views. sigil-check is the default local view; sigil-fleet
+    %% is the operator view backed by sigil-server's read API.
+    mcplocal["sigil-mcp<br/>sigil-check: this host only<br/>(local · default · optional)"]:::optional
+    mcpfleet["sigil-mcp<br/>sigil-fleet: read-only fleet view<br/>(operator · GET only · optional)"]:::optional
+    mcpclient(["MCP client<br/>(Claude Desktop / Code / Codex)"]):::optional
 
     %% Data plane
     FS --> a_pipe
     FS --> a_aiguard
-    a_pipe -- "writes JSONL" --> spool
-    a_aiguard -- "writes JSONL" --> spool
+    a_pipe -- "JsonlSink writes JSONL" --> events
+    a_aiguard -- "JsonlSink writes JSONL" --> events
 
     %% Runtime observe plane (#64) — the agent spawns sigil-hook per tool call;
     %% it emits a redacted HookInvocation into the agent's sink over hook.sock.
     aiagent -- "PreToolUse spawns" --> hookmods
     hookmods -- "HookInvocation<br/>hook.sock" --> a_pipe
-    spool -- "reads JSONL" --> s_pipe
+    events -- "batch_reader reads JSONL" --> s_pipe
     s_pipe -- "HTTPS" --> SIEM
     s_pipe -- "mTLS (alt)" --> server
 
@@ -344,18 +347,20 @@ flowchart LR
     %% Optional consumers
     server -. "read API" .-> manager
     manager -. "deeper analysis · governance" .-> llm
-    server -. "read API (GET)" .-> mcp
-    mcp -. "MCP tools (stdio)" .-> mcpclient
+    a_ctrl -. "control socket<br/>my_risk · my_findings" .-> mcplocal
+    server -. "read API (GET)" .-> mcpfleet
+    mcplocal -. "MCP tools (stdio)" .-> mcpclient
+    mcpfleet -. "MCP tools (stdio)" .-> mcpclient
 
     classDef optional stroke-dasharray: 5 5,fill:#f5f5f5,stroke:#999,color:#666
 
     %% Components (crates) in green so they stand out from the location boxes
     style agent  fill:#d1fae5,stroke:#059669,color:#064e3b
-    style spool  fill:#d1fae5,stroke:#059669,color:#064e3b
     style sender fill:#d1fae5,stroke:#059669,color:#064e3b
     style signer fill:#d1fae5,stroke:#059669,color:#064e3b
     style server fill:#d1fae5,stroke:#059669,color:#064e3b
-    style mcp    fill:#d1fae5,stroke:#059669,color:#064e3b
+    style mcplocal fill:#d1fae5,stroke:#059669,color:#064e3b
+    style mcpfleet fill:#d1fae5,stroke:#059669,color:#064e3b
     style hook   fill:#d1fae5,stroke:#059669,color:#064e3b
 ```
 
@@ -469,7 +474,7 @@ packaging/build.sh sender rpm                 # or: just one package, one format
 sudo dnf install ./target/generate-rpm/sigil-0.1.0-1.x86_64.rpm
 sudo systemctl enable --now sigil
 
-# Sender (uploads spool to a sigil-server over mTLS).
+# Sender (uploads the JSONL event log to a sigil-server over mTLS).
 sudo dnf install ./target/generate-rpm/sigil-sender-0.1.0-1.x86_64.rpm
 sudo cp /etc/sigil/sender.yaml.example /etc/sigil/sender.yaml && sudo $EDITOR /etc/sigil/sender.yaml
 sudo systemctl enable --now sigil-sender
