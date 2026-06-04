@@ -522,6 +522,10 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
         ),
         Evidence::HostMetaSnapshot { .. } => ("host_meta_snapshot", String::new()),
         Evidence::HookInvocation(_) => ("hook_invocation", String::new()),
+        Evidence::HookDecision(d) => (
+            "hook_decision",
+            format!("kind={} decision={}", d.action_kind, d.decision),
+        ),
         Evidence::Unknown => ("unknown", String::new()),
     }
 }

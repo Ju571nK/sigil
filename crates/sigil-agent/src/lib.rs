@@ -9,6 +9,7 @@ pub mod doctor;
 pub mod gc_config;
 pub mod hasher;
 pub mod heartbeat;
+pub mod hook_deny;
 // The hook listener uses Unix-domain sockets (tokio UnixListener); Windows agent
 // IPC is a named pipe (see control.rs) and a named-pipe hook listener is a
 // follow-up, so the module is unix-only for Stage 1.
