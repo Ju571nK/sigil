@@ -193,6 +193,12 @@ enum Cmd {
         /// Capture level for the registered hook command.
         #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
         capture: CaptureArg,
+        /// Register the Stage 2 enforce (deny-decision) hook instead of observe.
+        #[arg(long)]
+        enforce: bool,
+        /// Fail mode baked into the enforce command. Default open.
+        #[arg(long, value_enum, default_value_t = OnFailureArg::Open)]
+        on_failure: OnFailureArg,
     },
 
     /// Remove the sigil-hook registration from an agent's settings.
@@ -324,7 +330,9 @@ fn main() {
             agent,
             write,
             capture,
-        } => cmd_install(&agent, write, capture),
+            enforce,
+            on_failure,
+        } => cmd_install(&agent, write, capture, enforce, on_failure),
         Cmd::Uninstall { agent, write } => cmd_uninstall(&agent, write),
     }
 }
@@ -337,11 +345,21 @@ fn exe_path() -> String {
         .unwrap_or_else(|| "sigil-hook".to_string())
 }
 
-fn cmd_install(agent: &str, write: bool, capture: CaptureArg) {
+fn cmd_install(
+    agent: &str,
+    write: bool,
+    capture: CaptureArg,
+    enforce: bool,
+    on_failure: OnFailureArg,
+) {
     let capture_str = match capture {
         CaptureArg::Redacted => "redacted",
         CaptureArg::Raw => "raw",
         CaptureArg::HashOnly => "hash-only",
+    };
+    let on_failure_str = match on_failure {
+        OnFailureArg::Open => "open",
+        OnFailureArg::Closed => "closed",
     };
     let exe = exe_path();
 
@@ -352,8 +370,26 @@ fn cmd_install(agent: &str, write: bool, capture: CaptureArg) {
     }
 
     if !write {
-        print!("{}", install::render_block(&exe, agent, capture_str));
+        if enforce {
+            print!(
+                "{}",
+                install::render_block_enforce(&exe, agent, capture_str, on_failure_str)
+            );
+        } else {
+            print!("{}", install::render_block(&exe, agent, capture_str));
+        }
         return;
+    }
+
+    // Enforce-mode --write is only wired for NestedPreToolUse agents in slice 1
+    // (claude-code, codex). For Cursor or unknown agents, merge_into_enforce is
+    // a no-op — guard explicitly so we never print a misleading "already
+    // installed (no change)" or write an unchanged settings file as if it took.
+    if enforce && !matches!(agent, "claude-code" | "codex") {
+        eprintln!(
+            "error: enforce-mode install is only supported for claude-code/codex in slice 1 (agent '{agent}' not registered)"
+        );
+        std::process::exit(1);
     }
 
     // Resolve the settings path for this agent.
@@ -379,7 +415,11 @@ fn cmd_install(agent: &str, write: bool, capture: CaptureArg) {
         serde_json::json!({})
     };
 
-    let changed = install::merge_into(&mut root, &exe, agent, capture_str);
+    let changed = if enforce {
+        install::merge_into_enforce(&mut root, &exe, agent, capture_str, on_failure_str)
+    } else {
+        install::merge_into(&mut root, &exe, agent, capture_str)
+    };
 
     // Write back atomically: write to a temp file beside the target, then rename.
     let pretty = serde_json::to_string_pretty(&root).unwrap_or_default();
