@@ -239,6 +239,8 @@ pub struct HookDecisionEvidence {
     pub action_hash: String,
     pub action_preview: Option<String>,
     /// "deny" | "fail_open_error" | "fail_closed_error".
+    /// `fail_*_error` values are reserved for the daemon-reachable-but-failed
+    /// degradation path (follow-on); slice 1's pre-compiled evaluator emits only "deny".
     pub decision: String,
     pub rule_id: Option<String>,
     pub deny_reason: Option<String>,

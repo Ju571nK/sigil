@@ -43,6 +43,9 @@ fn command_string(exe: &str, agent: &str, capture: &str) -> String {
 }
 
 fn command_string_enforce(exe: &str, agent: &str, capture: &str, on_failure: &str) -> String {
+    // Registrations dedupe by binary path: installing enforce over an existing observe
+    // registration (same exe) REPLACES it — operators upgrading observe→enforce get the
+    // observe entry overwritten, not a second entry.
     format!("{exe} {agent} --enforce --on-failure {on_failure} --capture {capture}")
 }
 
@@ -223,6 +226,8 @@ pub fn render_block_enforce(exe: &str, agent: &str, capture: &str, on_failure: &
 /// Merge an enforce-mode registration into the settings JSON.
 /// For claude-code (NestedPreToolUse): merges with the enforce command string.
 /// For Cursor and unknown agents: returns false (not supported in slice 1).
+///
+/// slice 1: enforce is claude-code only; the CLI guards non-claude-code before reaching here.
 pub fn merge_into_enforce(
     root: &mut Value,
     exe: &str,

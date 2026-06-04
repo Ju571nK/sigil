@@ -277,12 +277,15 @@ fn run_enforce(capture: CaptureLevel, on_failure: OnFailureArg) -> ! {
     };
 
     match decide::request_verdict(&hook_decide_socket_path(), &req, DECISION_DEADLINE) {
-        Some(v) => match v.decision {
-            Decision::Deny { rule_id, reason } => {
+        Some(v) => match (v.decision, v.enforcement_mode) {
+            // Only block when the daemon explicitly says Deny AND is in Enforce mode.
+            // A Deny down-shifted to Observe (spec §4) must not block the tool call.
+            (Decision::Deny { rule_id, reason }, EnforcementMode::Enforce) => {
                 print_deny(&rule_id, &reason);
                 std::process::exit(0);
             }
-            Decision::Allow => std::process::exit(0),
+            // Allow, or a Deny down-shifted to Observe → do not block.
+            _ => std::process::exit(0),
         },
         None => match on_failure {
             OnFailureArg::Open => std::process::exit(0),
@@ -381,13 +384,14 @@ fn cmd_install(
         return;
     }
 
-    // Enforce-mode --write is only wired for NestedPreToolUse agents in slice 1
-    // (claude-code, codex). For Cursor or unknown agents, merge_into_enforce is
-    // a no-op — guard explicitly so we never print a misleading "already
-    // installed (no change)" or write an unchanged settings file as if it took.
-    if enforce && !matches!(agent, "claude-code" | "codex") {
+    // Enforce-mode --write is only supported for claude-code in slice 1.
+    // The Codex subcommand has no --enforce flag (clap would exit 2 at runtime),
+    // and codex enforce is out of scope for slice 1. For any other agent, guard
+    // explicitly so we never write a misleading settings file or print a
+    // confusing "already installed (no change)" message.
+    if enforce && agent != "claude-code" {
         eprintln!(
-            "error: enforce-mode install is only supported for claude-code/codex in slice 1 (agent '{agent}' not registered)"
+            "error: enforce-mode install is only supported for claude-code in slice 1 (agent '{agent}' not registered)"
         );
         std::process::exit(1);
     }
