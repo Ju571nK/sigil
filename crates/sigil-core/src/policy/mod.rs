@@ -190,6 +190,8 @@ pub struct PolicyDocument {
     #[serde(default)]
     pub hook_deny_rules: Vec<deny_rule::DenyRule>,
     /// Stage 2 (#100) — behavior when a verdict cannot be obtained. Default open.
+    // Consumed by the hook locally via its --on-failure registration flag (not by
+    // the agent); intentionally not threaded into EffectivePolicy.
     #[serde(default)]
     pub on_failure: deny_rule::FailMode,
 }
@@ -263,6 +265,9 @@ pub struct EffectivePolicy {
     /// Phase 3b.5 — operator-tunable rubric weights (merged from user
     /// PolicyDocument; defaults map is empty).
     pub rubric_overrides: HashMap<String, f32>,
+    /// Stage 2 (#100) — operator deny rules forwarded from user PolicyDocument.
+    /// Empty = no enforcement (observe-only).
+    pub hook_deny_rules: Vec<deny_rule::DenyRule>,
 }
 
 /// Merge a defaults document and a user-override document into an effective policy.
@@ -369,6 +374,11 @@ pub fn merge(
         .map(|u| u.rubric_overrides.clone())
         .unwrap_or_default();
 
+    let hook_deny_rules = user
+        .as_ref()
+        .map(|u| u.hook_deny_rules.clone())
+        .unwrap_or_default();
+
     Ok(EffectivePolicy {
         host_id_strategy: strategy,
         targets: by_id,
@@ -380,6 +390,7 @@ pub fn merge(
         antigravity_workspaces,
         rule_packs,
         rubric_overrides,
+        hook_deny_rules,
     })
 }
 

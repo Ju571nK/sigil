@@ -784,6 +784,46 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         );
     }
 
+    // Hook decide listener (sigil-hook Stage 2): bidirectional socket at
+    // `hook-decide.sock`. Agents write HookDecideRequest JSON; server
+    // evaluates deny rules and replies with HookDecideResponse. Built from
+    // the loaded policy's hook_deny_rules at startup (no hot-reload in slice 1).
+    #[cfg(unix)]
+    {
+        let decide_sock = cfg.control_socket.with_file_name("hook-decide.sock");
+        let tx_decide = tx_sink.clone();
+        let host_id_decide = host_id.clone();
+        // Build the evaluator from policy deny rules; a malformed regex disables
+        // enforcement (empty evaluator) rather than crashing — fail-open.
+        let evaluator = match crate::hook_deny::DenyEvaluator::new(&effective.hook_deny_rules) {
+            Ok(e) => Arc::new(e),
+            Err(e) => {
+                tracing::warn!(error = ?e, "hook deny rules failed to compile; enforcement disabled (fail-open)");
+                // safe: empty rules compile infallibly (no regex to compile)
+                Arc::new(crate::hook_deny::DenyEvaluator::new(&[]).unwrap())
+            }
+        };
+        sup.track(
+            "hook_decide_listener",
+            tokio::spawn(async move {
+                if let Err(e) = crate::hook_decide_listener::serve(
+                    decide_sock.clone(),
+                    tx_decide,
+                    host_id_decide,
+                    evaluator,
+                )
+                .await
+                {
+                    tracing::error!(
+                        error = ?e,
+                        socket = %decide_sock.display(),
+                        "hook-decide listener exited"
+                    );
+                }
+            }),
+        );
+    }
+
     // Drop-report fan-in: forward DropReports to sink as RateLimitExceeded events.
     {
         let tx_sink_dr = tx_sink.clone();
