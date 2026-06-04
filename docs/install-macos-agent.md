@@ -20,8 +20,9 @@ curl --proto '=https' --tlsv1.2 -fsSL \
   https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
 ```
 
-Installs `sigil`, `sigil-sender`, `sigil-server`, `sigil-sign` to
-`~/.local/bin` (verifies SHA-256). Make sure `~/.local/bin` is on your `PATH`.
+Installs `sigil`, `sigil-sender`, `sigil-server`, `sigil-sign`, `sigil-mcp`, and
+`sigil-hook` to `~/.local/bin` (verifies SHA-256). Make sure `~/.local/bin` is on
+your `PATH`.
 
 ### Option B — build from source
 

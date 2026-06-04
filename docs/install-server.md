@@ -18,14 +18,22 @@ Debian/Ubuntu works via the `.deb` package; deltas are called out inline.
 
 ## 1. Topology & ports
 
-```
- agent host(s)                          server host
-┌───────────────────────┐    mTLS      ┌──────────────────────────┐
-│ sigil  ──► JSONL spool │   HTTPS      │ sigil-server             │
-│ sigil-sender  ─────────┼──── :8443 ──►│  POST /v1/events         │
-│                 ◄───────┼── /v1/policy │  GET  /v1/policy         │
-└───────────────────────┘              │  GET  /v1/fleet/* (bearer)│
-                                        └──────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph agent_host["agent host(s)"]
+        sigil["sigil<br/>host daemon"]
+        eventlog[("event log<br/>events-*.jsonl")]
+        sender["sigil-sender"]
+        sigil --> eventlog
+        eventlog --> sender
+    end
+
+    subgraph server_host["server host"]
+        server["sigil-server<br/>POST /v1/events<br/>GET /v1/policy<br/>GET /v1/fleet/* (bearer)"]
+    end
+
+    sender -- "mTLS HTTPS :8443<br/>POST /v1/events" --> server
+    server -- "GET /v1/policy" --> sender
 ```
 
 - **Server inbound:** exactly **one** port — `8443/tcp` (the `bind` value). All
@@ -72,8 +80,9 @@ curl --proto '=https' --tlsv1.2 -fsSL \
   https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
 ```
 
-Installs all four binaries to `~/.local/bin`. You then wire up the systemd unit
-and config by hand (sections 4–6).
+Installs the six release binaries (`sigil`, `sigil-sender`, `sigil-server`,
+`sigil-sign`, `sigil-mcp`, `sigil-hook`) to `~/.local/bin`. You then wire up the
+systemd unit and config by hand (sections 4–6).
 
 ### Option C — build from source
 
