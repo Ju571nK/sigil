@@ -14,6 +14,8 @@ pub mod hook_deny;
 // IPC is a named pipe (see control.rs) and a named-pipe hook listener is a
 // follow-up, so the module is unix-only for Stage 1.
 #[cfg(unix)]
+pub mod hook_decide_listener;
+#[cfg(unix)]
 pub mod hook_listener;
 pub mod host_meta_snapshot;
 pub mod host_meta_snapshot_task;
