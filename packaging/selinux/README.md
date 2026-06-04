@@ -13,7 +13,7 @@ on RHEL-family systems (Rocky/RHEL/Fedora) instead of leaving them in
 State/log/runtime get dedicated file types (`sigil_var_lib_t`, `sigil_var_log_t`,
 `sigil_conf_t`, `sigil_*_var_lib_t`, …). The agent can read any file (it does
 file-integrity monitoring by design) but is otherwise tightly confined; the
-sender/server only touch their own state, the agent's spool/socket, and the
+sender/server only touch their own state, the agent's event log/socket, and the
 network they need.
 
 ## Why `init_nnp_daemon_domain`
