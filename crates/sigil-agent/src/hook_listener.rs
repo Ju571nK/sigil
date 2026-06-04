@@ -130,7 +130,11 @@ pub async fn serve(
 
 /// Convert a decoded `HookEnvelope` + kernel-verified `peer_uid` into an
 /// `Event` suitable for the sink pipeline.
-fn to_event(env: HookEnvelope, peer_uid: u32, host_id: &str) -> sigil_core::event::Event {
+pub(crate) fn to_event(
+    env: HookEnvelope,
+    peer_uid: u32,
+    host_id: &str,
+) -> sigil_core::event::Event {
     let inv = env.payload;
 
     // Decompose the action into normalized fields.
@@ -192,7 +196,7 @@ fn to_event(env: HookEnvelope, peer_uid: u32, host_id: &str) -> sigil_core::even
 /// persisted evidence schema must match the serde wire form exactly
 /// (`"hash_only"`, `"unsupported_agent_schema"`, …), NOT the Rust Debug form.
 /// Falls back to an empty string if the value somehow isn't a JSON string.
-fn enum_str<T: serde::Serialize>(v: &T) -> String {
+pub(crate) fn enum_str<T: serde::Serialize>(v: &T) -> String {
     serde_json::to_value(v)
         .ok()
         .and_then(|j| j.as_str().map(String::from))
