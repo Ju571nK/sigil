@@ -1,4 +1,5 @@
 mod adapters;
+mod decide;
 mod emit;
 mod install;
 mod install_antigravity;
