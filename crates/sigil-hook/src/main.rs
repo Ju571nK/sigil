@@ -110,6 +110,32 @@ fn hook_socket_path() -> PathBuf {
         .unwrap_or_default()
 }
 
+/// Resolve the decide socket for the enforce path. Mirrors `hook_socket_path`
+/// but targets `hook-decide.sock` (the Stage 2 synchronous channel).
+/// `SIGIL_HOOK_DECIDE_SOCKET` overrides everything.
+#[cfg(unix)]
+fn hook_decide_socket_path() -> PathBuf {
+    if let Ok(p) = std::env::var("SIGIL_HOOK_DECIDE_SOCKET") {
+        return PathBuf::from(p);
+    }
+    let system = PathBuf::from("/var/run/sigil/hook-decide.sock");
+    if system.exists() {
+        return system;
+    }
+    let uid = unsafe { libc::geteuid() };
+    let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
+    let tmp = std::env::var("TMPDIR").ok();
+    sigil_core::control_proto::resolve_control_socket(uid == 0, xdg, tmp, uid)
+        .with_file_name("hook-decide.sock")
+}
+
+#[cfg(not(unix))]
+fn hook_decide_socket_path() -> PathBuf {
+    std::env::var("SIGIL_HOOK_DECIDE_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
 #[derive(Parser)]
 #[command(
     name = "sigil-hook",
@@ -127,6 +153,12 @@ enum Cmd {
     ClaudeCode {
         #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
         capture: CaptureArg,
+        /// Stage 2: run the synchronous deny-decision path instead of observe.
+        #[arg(long)]
+        enforce: bool,
+        /// Behavior when no verdict is obtainable. Default open (fail-open).
+        #[arg(long, value_enum, default_value_t = OnFailureArg::Open)]
+        on_failure: OnFailureArg,
     },
 
     /// Codex CLI PreToolUse entrypoint: read stdin, emit, exit 0.
@@ -191,10 +223,100 @@ impl From<CaptureArg> for CaptureLevel {
     }
 }
 
+/// Behavior when no verdict is obtainable from the decide daemon.
+#[derive(Copy, Clone, ValueEnum)]
+enum OnFailureArg {
+    Open,
+    Closed,
+}
+
+/// Maximum elapsed time waiting for a verdict before falling back to on_failure.
+const DECISION_DEADLINE: Duration = Duration::from_millis(250);
+
+/// claude-code enforce entrypoint. Panic-safe; never hangs past the watchdog.
+/// On Deny → print the permissionDecision JSON; on Allow → nothing.
+/// No verdict (daemon down / timeout / malformed) → apply on_failure.
+fn run_enforce(capture: CaptureLevel, on_failure: OnFailureArg) -> ! {
+    std::panic::set_hook(Box::new(|_| std::process::exit(0)));
+    emit::arm_watchdog(Duration::from_millis(800)); // > decision deadline, < agent UX budget
+    let adapter = match adapters::for_agent("claude-code") {
+        Some(a) => a,
+        None => std::process::exit(0),
+    };
+
+    let mut buf = Vec::new();
+    let _ = std::io::stdin()
+        .take(MAX_STDIN as u64 + 1)
+        .read_to_end(&mut buf);
+    let oversized = buf.len() > MAX_STDIN;
+    let payload: serde_json::Value =
+        serde_json::from_slice(&buf).unwrap_or(serde_json::Value::Null);
+    let mut inv = match adapter.normalize(&payload, capture) {
+        Ok(i) => i,
+        Err(status) => minimal_unparsed(adapter.agent(), capture, status),
+    };
+    if oversized {
+        inv.capture_status = CaptureStatus::Oversized;
+    }
+
+    let req = HookDecisionRequest {
+        protocol_version: HOOK_PROTOCOL_VERSION,
+        request_id: uuid::Uuid::now_v7(),
+        sent_at_unix_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        invocation: inv,
+        deadline_ms: DECISION_DEADLINE.as_millis() as u32,
+    };
+
+    match decide::request_verdict(&hook_decide_socket_path(), &req, DECISION_DEADLINE) {
+        Some(v) => match v.decision {
+            Decision::Deny { rule_id, reason } => {
+                print_deny(&rule_id, &reason);
+                std::process::exit(0);
+            }
+            Decision::Allow => std::process::exit(0),
+        },
+        None => match on_failure {
+            OnFailureArg::Open => std::process::exit(0),
+            OnFailureArg::Closed => {
+                print_deny("fail_closed", "decision unavailable; on_failure=closed");
+                std::process::exit(0);
+            }
+        },
+    }
+}
+
+/// Pure builder for the Claude Code PreToolUse deny JSON (testable).
+fn deny_json(rule_id: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": format!("Blocked by Sigil rule {rule_id}: {reason}")
+        }
+    })
+}
+
+fn print_deny(rule_id: &str, reason: &str) {
+    println!("{}", deny_json(rule_id, reason));
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::ClaudeCode { capture } => run_hook("claude-code", capture.into()),
+        Cmd::ClaudeCode {
+            capture,
+            enforce,
+            on_failure,
+        } => {
+            if enforce {
+                run_enforce(capture.into(), on_failure)
+            } else {
+                run_hook("claude-code", capture.into())
+            }
+        }
         Cmd::Codex { capture } => run_hook("codex", capture.into()),
         Cmd::Cursor { capture } => run_hook("cursor", capture.into()),
         Cmd::Antigravity { capture } => run_hook("antigravity", capture.into()),
@@ -440,4 +562,24 @@ fn cmd_uninstall_antigravity(write: bool) {
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deny_json_has_pretooluse_deny_shape() {
+        let v = deny_json("no-rm", "destructive");
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert!(v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains("no-rm"));
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecisionReason"],
+            "Blocked by Sigil rule no-rm: destructive"
+        );
+    }
 }

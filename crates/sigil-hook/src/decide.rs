@@ -8,7 +8,6 @@ use std::time::Duration;
 
 // called by the claude-code enforce path (Task 9)
 #[cfg(unix)]
-#[allow(dead_code)]
 pub fn request_verdict(
     socket: &Path,
     req: &HookDecisionRequest,
@@ -33,7 +32,6 @@ pub fn request_verdict(
 
 // called by the claude-code enforce path (Task 9)
 #[cfg(not(unix))]
-#[allow(dead_code)]
 pub fn request_verdict(
     _socket: &Path,
     _req: &HookDecisionRequest,
