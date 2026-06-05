@@ -138,8 +138,11 @@ pub fn apply_event(host: &mut HostSummary, event: &Event) {
         | Evidence::EventUnprocessableLocal { .. }
         | Evidence::ServerProtocolViolation { .. }
         | Evidence::RulePackBundleApplied { .. } => { /* identity + severity only */ }
-        Evidence::HookInvocation(_) | Evidence::HookDecision(_) | Evidence::Unknown => {
-            // Hook observe/decision events are not indexed into the fleet rollup
+        Evidence::HookInvocation(_)
+        | Evidence::HookDecision(_)
+        | Evidence::HookConfigDrift(_)
+        | Evidence::Unknown => {
+            // Hook observe/decision/drift events are not indexed into the fleet rollup
             // (slice 1); the severity-bucket increment above already counts them.
         }
     }
