@@ -14,9 +14,12 @@
 
 use crate::state_task::CommittableEvent;
 use sigil_core::event::{
-    Evidence, HookInvocationEvidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
+    Evidence, HookConfigDriftEvidence, HookInvocationEvidence, Severity, SourceKind, Subject,
+    AGENT_VERSION, SCHEMA_VERSION,
 };
-use sigil_core::hook_proto::{HookAction, HookEnvelope};
+use sigil_core::hook_proto::{
+    HookAction, HookConfigDriftReport, HookDriftEnvelope, HookEnvelope, HookMsgType,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -103,20 +106,46 @@ pub async fn serve(
                 return;
             }
 
-            let env: HookEnvelope = match serde_json::from_str(line.trim()) {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::debug!(error = ?e, "hook: malformed envelope; dropping");
+            let line = line.trim();
+            let kind = serde_json::from_str::<MsgTypeHeader>(line)
+                .ok()
+                .map(|h| h.msg_type);
+            let committable = match kind {
+                Some(HookMsgType::DriftReport) => {
+                    match serde_json::from_str::<HookDriftEnvelope>(line) {
+                        Ok(env) => CommittableEvent {
+                            event: to_drift_event(env, peer_uid, &host_id),
+                            new_hash: None,
+                            path_for_db: PathBuf::new(),
+                            target_id: String::new(),
+                        },
+                        Err(e) => {
+                            tracing::debug!(error = ?e, "hook: malformed drift report; dropping");
+                            return;
+                        }
+                    }
+                }
+                Some(HookMsgType::HookInvocation) | None => {
+                    // observe (hook_invocation), and legacy senders with no msg_type field — existing path, unchanged.
+                    let env: HookEnvelope = match serde_json::from_str(line) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            tracing::debug!(error = ?e, "hook: malformed envelope; dropping");
+                            return;
+                        }
+                    };
+                    CommittableEvent {
+                        event: to_event(env, peer_uid, &host_id),
+                        new_hash: None,
+                        path_for_db: PathBuf::new(),
+                        target_id: String::new(),
+                    }
+                }
+                Some(other) => {
+                    // DecisionRequest/DecisionResponse belong on hook-decide.sock, not here; any other type is unhandled on the observe socket.
+                    tracing::debug!(?other, "hook: unhandled msg_type on hook.sock; dropping");
                     return;
                 }
-            };
-
-            let ev = to_event(env, peer_uid, &host_id);
-            let committable = CommittableEvent {
-                event: ev,
-                new_hash: None,
-                path_for_db: PathBuf::new(),
-                target_id: String::new(),
             };
 
             // try_send: if the channel is full (sink backpressure) we drop rather
@@ -125,6 +154,43 @@ pub async fn serve(
                 tracing::debug!("hook: event channel full; dropping hook event");
             }
         });
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct MsgTypeHeader {
+    msg_type: HookMsgType,
+}
+
+/// Convert a decoded `HookDriftEnvelope` + kernel-verified `peer_uid` into a
+/// `HookConfigDrift` Event for the sink pipeline.
+pub(crate) fn to_drift_event(
+    env: HookDriftEnvelope,
+    peer_uid: u32,
+    host_id: &str,
+) -> sigil_core::event::Event {
+    // envelope metadata (protocol_version/request_id/sent_at) is intentionally not threaded into the event, matching to_event.
+    let r: HookConfigDriftReport = env.payload;
+    sigil_core::event::Event {
+        schema_version: SCHEMA_VERSION,
+        event_id: uuid::Uuid::now_v7(),
+        ts: time::OffsetDateTime::now_utc(),
+        host_id: host_id.to_string(),
+        agent_version: AGENT_VERSION.to_string(),
+        severity: Severity::Warn,
+        source: SourceKind::AgentHook,
+        subject: Subject::Self_,
+        evidence: Evidence::HookConfigDrift(HookConfigDriftEvidence {
+            agent: r.agent,
+            peer_uid,
+            drift_kind: enum_str(&r.drift_kind),
+            settings_path: r.settings_path,
+            expected_command_hash: r.expected_command_hash,
+            observed_command_hash: r.observed_command_hash,
+            expected_matcher: r.expected_matcher,
+            observed_matcher: r.observed_matcher,
+        }),
+        target_id: None,
     }
 }
 
@@ -301,5 +367,37 @@ mod tests {
             }
             other => panic!("expected HookInvocation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn drift_report_becomes_hook_config_drift_event() {
+        use sigil_core::hook_proto::{
+            DriftKind, HookConfigDriftReport, HookDriftEnvelope, HookMsgType, HOOK_PROTOCOL_VERSION,
+        };
+        let env = HookDriftEnvelope {
+            protocol_version: HOOK_PROTOCOL_VERSION,
+            msg_type: HookMsgType::DriftReport,
+            request_id: uuid::Uuid::now_v7(),
+            sent_at_unix_ms: 0,
+            payload: HookConfigDriftReport {
+                agent: sigil_core::event::AiTool::ClaudeCode,
+                drift_kind: DriftKind::MatcherDrift,
+                settings_path: "/s".into(),
+                expected_command_hash: "ab".repeat(32),
+                observed_command_hash: Some("cd".repeat(32)),
+                expected_matcher: Some("*".into()),
+                observed_matcher: Some("Bash".into()),
+            },
+        };
+        let ev = to_drift_event(env, 501, "host-x");
+        match ev.evidence {
+            Evidence::HookConfigDrift(d) => {
+                assert_eq!(d.drift_kind, "matcher_drift");
+                assert_eq!(d.peer_uid, 501);
+                assert_eq!(d.observed_matcher.as_deref(), Some("Bash"));
+            }
+            other => panic!("expected HookConfigDrift, got {other:?}"),
+        }
+        assert!(matches!(ev.severity, Severity::Warn));
     }
 }

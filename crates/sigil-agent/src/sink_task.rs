@@ -70,6 +70,7 @@ fn evidence_kind_str(e: &sigil_core::event::Evidence) -> &'static str {
         HostMetaSnapshot { .. } => "host_meta_snapshot",
         HookInvocation(_) => "hook_invocation",
         HookDecision(_) => "hook_decision",
+        HookConfigDrift(_) => "hook_config_drift",
         Unknown => "unknown",
     }
 }

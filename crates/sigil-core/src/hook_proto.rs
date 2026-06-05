@@ -9,12 +9,13 @@ use uuid::Uuid;
 /// Hook IPC protocol version. Bump on any breaking wire change.
 pub const HOOK_PROTOCOL_VERSION: u16 = 2;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HookMsgType {
     HookInvocation,
     DecisionRequest,
     DecisionResponse,
+    DriftReport,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -125,6 +126,37 @@ pub enum EnforcementMode {
     Enforce,
 }
 
+/// tamper-evidence (#100): a one-way config-drift report on `hook.sock`.
+/// Separate envelope so the v1 `HookEnvelope` shape stays byte-identical.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HookDriftEnvelope {
+    pub protocol_version: u16,
+    pub msg_type: HookMsgType,
+    pub request_id: Uuid,
+    pub sent_at_unix_ms: u64,
+    pub payload: HookConfigDriftReport,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HookConfigDriftReport {
+    pub agent: AiTool,
+    pub drift_kind: DriftKind,
+    pub settings_path: String,
+    pub expected_command_hash: String,
+    pub observed_command_hash: Option<String>,
+    pub expected_matcher: Option<String>,
+    pub observed_matcher: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DriftKind {
+    BaselineAbsent,
+    EntryMissing,
+    CommandDrift,
+    MatcherDrift,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +221,56 @@ mod tests {
                 agent: AiTool::ClaudeCode,
                 agent_session_id: Some("s".into()),
                 tool_use_id: Some("t".into()),
+                action: HookAction::Bash {
+                    command_hash: "ab".repeat(32),
+                    command_preview: None,
+                },
+                capture_level: CaptureLevel::Redacted,
+                capture_status: CaptureStatus::Ok,
+                cwd: None,
+            },
+        };
+        let s = serde_json::to_string(&env).unwrap();
+        assert!(s.contains("\"msg_type\":\"hook_invocation\""));
+        let back: HookEnvelope = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, env);
+    }
+
+    #[test]
+    fn drift_envelope_round_trips() {
+        let env = HookDriftEnvelope {
+            protocol_version: HOOK_PROTOCOL_VERSION,
+            msg_type: HookMsgType::DriftReport,
+            request_id: uuid::Uuid::nil(),
+            sent_at_unix_ms: 1_700_000_000_000,
+            payload: HookConfigDriftReport {
+                agent: AiTool::ClaudeCode,
+                drift_kind: DriftKind::MatcherDrift,
+                settings_path: "/home/dev/.claude/settings.json".into(),
+                expected_command_hash: "ab".repeat(32),
+                observed_command_hash: Some("ab".repeat(32)),
+                expected_matcher: Some("*".into()),
+                observed_matcher: Some("Bash".into()),
+            },
+        };
+        let s = serde_json::to_string(&env).unwrap();
+        assert!(s.contains("\"msg_type\":\"drift_report\""));
+        assert!(s.contains("\"drift_kind\":\"matcher_drift\""));
+        let back: HookDriftEnvelope = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, env);
+    }
+
+    #[test]
+    fn v1_observe_envelope_unchanged_alongside_drift() {
+        let env = HookEnvelope {
+            protocol_version: HOOK_PROTOCOL_VERSION,
+            msg_type: HookMsgType::HookInvocation,
+            request_id: uuid::Uuid::nil(),
+            sent_at_unix_ms: 1,
+            payload: HookInvocation {
+                agent: AiTool::ClaudeCode,
+                agent_session_id: None,
+                tool_use_id: None,
                 action: HookAction::Bash {
                     command_hash: "ab".repeat(32),
                     command_preview: None,

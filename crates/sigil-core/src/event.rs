@@ -249,6 +249,21 @@ pub struct HookDecisionEvidence {
     pub capture_level: String,
 }
 
+/// sigil-hook tamper-evidence (#100). A detected drift between the recorded
+/// hook registration baseline and the live agent settings file.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HookConfigDriftEvidence {
+    pub agent: AiTool,
+    pub peer_uid: u32,
+    /// "baseline_absent" | "entry_missing" | "command_drift" | "matcher_drift".
+    pub drift_kind: String,
+    pub settings_path: String,
+    pub expected_command_hash: String,
+    pub observed_command_hash: Option<String>,
+    pub expected_matcher: Option<String>,
+    pub observed_matcher: Option<String>,
+}
+
 /// Phase 3b.4-pre — full host identity / OS / network snapshot, emitted by
 /// host_meta_snapshot_task. Surfaces hostname (so server-side fleet views
 /// can label hosts with something human-readable instead of UUIDs) plus
@@ -486,6 +501,8 @@ pub enum Evidence {
     HookInvocation(HookInvocationEvidence),
     /// sigil-hook Stage 2 (#100). A deny / degradation decision outcome.
     HookDecision(HookDecisionEvidence),
+    /// sigil-hook tamper-evidence (#100). Hook registration drift vs the install baseline.
+    HookConfigDrift(HookConfigDriftEvidence),
     /// Forward-compat: an evidence kind this build doesn't recognize. A newer
     /// producer's variant deserializes here instead of failing the whole event.
     #[serde(other)]
@@ -1188,6 +1205,25 @@ mod tests {
         let s = serde_json::to_string(&ev).unwrap();
         assert!(s.contains(r#""rule_pack_id":"my-pack""#));
         assert_eq!(ev, serde_json::from_str::<Evidence>(&s).unwrap());
+    }
+
+    #[test]
+    fn hook_config_drift_evidence_serializes_snake_case() {
+        let ev = Evidence::HookConfigDrift(HookConfigDriftEvidence {
+            agent: AiTool::ClaudeCode,
+            peer_uid: 501,
+            drift_kind: "matcher_drift".into(),
+            settings_path: "/home/dev/.claude/settings.json".into(),
+            expected_command_hash: "ab".repeat(32),
+            observed_command_hash: Some("ab".repeat(32)),
+            expected_matcher: Some("*".into()),
+            observed_matcher: Some("Bash".into()),
+        });
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"kind\":\"hook_config_drift\""));
+        assert!(s.contains("\"drift_kind\":\"matcher_drift\""));
+        let back: Evidence = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, ev);
     }
 
     #[test]

@@ -526,6 +526,10 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
             "hook_decision",
             format!("kind={} decision={}", d.action_kind, d.decision),
         ),
+        Evidence::HookConfigDrift(d) => (
+            "hook_config_drift",
+            format!("kind={} settings_path={}", d.drift_kind, d.settings_path),
+        ),
         Evidence::Unknown => ("unknown", String::new()),
     }
 }
