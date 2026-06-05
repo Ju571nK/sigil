@@ -4,6 +4,7 @@ mod emit;
 mod install;
 mod install_antigravity;
 mod redact;
+mod verify;
 
 use sigil_core::hook_proto::*;
 use std::io::Read;
