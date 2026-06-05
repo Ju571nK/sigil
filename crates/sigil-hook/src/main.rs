@@ -149,7 +149,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Claude Code PreToolUse entrypoint: read stdin, emit, exit 0.
+    /// Claude Code PreToolUse entrypoint: observe (emit, exit 0), or --enforce (deny-decision path).
     #[command(name = "claude-code")]
     ClaudeCode {
         #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
@@ -162,10 +162,16 @@ enum Cmd {
         on_failure: OnFailureArg,
     },
 
-    /// Codex CLI PreToolUse entrypoint: read stdin, emit, exit 0.
+    /// Codex CLI PreToolUse entrypoint: observe (emit, exit 0), or --enforce (deny-decision path).
     Codex {
         #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
         capture: CaptureArg,
+        /// Stage 2: run the synchronous deny-decision path instead of observe.
+        #[arg(long)]
+        enforce: bool,
+        /// Behavior when no verdict is obtainable. Default open (fail-open).
+        #[arg(long, value_enum, default_value_t = OnFailureArg::Open)]
+        on_failure: OnFailureArg,
     },
 
     /// Cursor before{Shell,MCP}Execution entrypoint: read stdin, emit, exit 0.
@@ -247,13 +253,13 @@ enum OnFailureArg {
 /// Maximum elapsed time waiting for a verdict before falling back to on_failure.
 const DECISION_DEADLINE: Duration = Duration::from_millis(250);
 
-/// claude-code enforce entrypoint. Panic-safe; never hangs past the watchdog.
-/// On Deny → print the permissionDecision JSON; on Allow → nothing.
+/// Per-agent enforce entrypoint. Panic-safe; never hangs past the watchdog.
+/// On Deny → emit the agent's deny output; on Allow → nothing.
 /// No verdict (daemon down / timeout / malformed) → apply on_failure.
-fn run_enforce(capture: CaptureLevel, on_failure: OnFailureArg) -> ! {
+fn run_enforce(agent: &str, capture: CaptureLevel, on_failure: OnFailureArg) -> ! {
     std::panic::set_hook(Box::new(|_| std::process::exit(0)));
     emit::arm_watchdog(Duration::from_millis(800)); // > decision deadline, < agent UX budget
-    let adapter = match adapters::for_agent("claude-code") {
+    let adapter = match adapters::for_agent(agent) {
         Some(a) => a,
         None => std::process::exit(0),
     };
@@ -289,8 +295,7 @@ fn run_enforce(capture: CaptureLevel, on_failure: OnFailureArg) -> ! {
             // Only block when the daemon explicitly says Deny AND is in Enforce mode.
             // A Deny down-shifted to Observe (spec §4) must not block the tool call.
             (Decision::Deny { rule_id, reason }, EnforcementMode::Enforce) => {
-                print_deny(&rule_id, &reason);
-                std::process::exit(0);
+                emit_deny(&*adapter, &rule_id, &reason);
             }
             // Allow, or a Deny down-shifted to Observe → do not block.
             _ => std::process::exit(0),
@@ -298,26 +303,24 @@ fn run_enforce(capture: CaptureLevel, on_failure: OnFailureArg) -> ! {
         None => match on_failure {
             OnFailureArg::Open => std::process::exit(0),
             OnFailureArg::Closed => {
-                print_deny("fail_closed", "decision unavailable; on_failure=closed");
-                std::process::exit(0);
+                emit_deny(
+                    &*adapter,
+                    "fail_closed",
+                    "decision unavailable; on_failure=closed",
+                );
             }
         },
     }
 }
 
-/// Pure builder for the Claude Code PreToolUse deny JSON (testable).
-fn deny_json(rule_id: &str, reason: &str) -> serde_json::Value {
-    serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": format!("Blocked by Sigil rule {rule_id}: {reason}")
-        }
-    })
-}
-
-fn print_deny(rule_id: &str, reason: &str) {
-    println!("{}", deny_json(rule_id, reason));
+/// Print the adapter's deny output (if any) and exit with its code.
+fn emit_deny(adapter: &dyn adapters::HookAdapter, rule_id: &str, reason: &str) -> ! {
+    let out = adapter.deny_output(rule_id, reason);
+    if let Some(s) = out.stdout {
+        // println! appends a trailing newline; the agent reads the deny response as a line.
+        println!("{s}");
+    }
+    std::process::exit(out.exit_code);
 }
 
 fn main() {
@@ -329,12 +332,22 @@ fn main() {
             on_failure,
         } => {
             if enforce {
-                run_enforce(capture.into(), on_failure)
+                run_enforce("claude-code", capture.into(), on_failure)
             } else {
                 run_hook("claude-code", capture.into())
             }
         }
-        Cmd::Codex { capture } => run_hook("codex", capture.into()),
+        Cmd::Codex {
+            capture,
+            enforce,
+            on_failure,
+        } => {
+            if enforce {
+                run_enforce("codex", capture.into(), on_failure)
+            } else {
+                run_hook("codex", capture.into())
+            }
+        }
         Cmd::Cursor { capture } => run_hook("cursor", capture.into()),
         Cmd::Antigravity { capture } => run_hook("antigravity", capture.into()),
         Cmd::Install {
@@ -690,21 +703,6 @@ fn cmd_verify(_agent: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn deny_json_has_pretooluse_deny_shape() {
-        let v = deny_json("no-rm", "destructive");
-        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
-        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
-        assert!(v["hookSpecificOutput"]["permissionDecisionReason"]
-            .as_str()
-            .unwrap()
-            .contains("no-rm"));
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecisionReason"],
-            "Blocked by Sigil rule no-rm: destructive"
-        );
-    }
 
     #[test]
     fn drift_exit_codes() {

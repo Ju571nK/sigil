@@ -9,8 +9,6 @@ pub mod cursor;
 /// deny response, if any) and the process exit code. claude-code/codex/
 /// antigravity: the JSON rides stdout with exit 0; the exit_code field lets a
 /// future agent whose deny path needs a non-zero exit express that.
-// Task 2 wires the production caller; allow until then.
-#[allow(dead_code)]
 pub struct DenyOutput {
     pub stdout: Option<String>,
     pub exit_code: i32,
@@ -19,8 +17,6 @@ pub struct DenyOutput {
 /// Shared PreToolUse deny: `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
 /// "permissionDecision":"deny","permissionDecisionReason":"Blocked by Sigil rule
 /// <id>: <reason>"}}` on stdout, exit 0. Used by every Claude-shaped agent.
-// Task 2 wires the production caller; allow until then.
-#[allow(dead_code)]
 pub(crate) fn pretooluse_deny(rule_id: &str, reason: &str) -> DenyOutput {
     let v = serde_json::json!({
         "hookSpecificOutput": {
@@ -48,8 +44,6 @@ pub trait HookAdapter {
     /// Translate a Deny verdict into this agent's deny-UX wire output. Default =
     /// the shared PreToolUse permissionDecision JSON; override only when an
     /// agent's deny contract differs.
-    // Task 2 wires the production caller; allow until then.
-    #[allow(dead_code)]
     fn deny_output(&self, rule_id: &str, reason: &str) -> DenyOutput {
         pretooluse_deny(rule_id, reason)
     }
