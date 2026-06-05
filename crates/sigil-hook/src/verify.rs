@@ -40,8 +40,6 @@ pub fn load_baseline(path: &Path) -> Option<Baseline> {
 }
 
 /// Full check: None when clean, Some(report) on any drift (incl. baseline_absent).
-// used by the verify subcommand (Task 5)
-#[allow(dead_code)]
 pub fn check() -> Option<DriftReport> {
     let bp = baseline_path();
     let Some(b) = load_baseline(&bp) else {

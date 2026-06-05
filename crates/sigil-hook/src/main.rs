@@ -211,6 +211,13 @@ enum Cmd {
         #[arg(long)]
         write: bool,
     },
+
+    /// tamper-evidence: compare the live hook registration against the install baseline.
+    Verify {
+        /// Agent whose registration to verify (slice 1: claude-code).
+        #[arg(long, default_value = INSTALL_AGENT_DEFAULT)]
+        agent: String,
+    },
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -338,6 +345,7 @@ fn main() {
             on_failure,
         } => cmd_install(&agent, write, capture, enforce, on_failure),
         Cmd::Uninstall { agent, write } => cmd_uninstall(&agent, write),
+        Cmd::Verify { agent } => std::process::exit(cmd_verify(&agent)),
     }
 }
 
@@ -609,6 +617,67 @@ fn cmd_uninstall_antigravity(write: bool) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn drift_exit_code(kind: DriftKind) -> i32 {
+    use sigil_core::hook_proto::DriftKind::*;
+    match kind {
+        BaselineAbsent => 3,
+        EntryMissing | CommandDrift | MatcherDrift => 2,
+    }
+}
+
+fn cmd_verify(_agent: &str) -> i32 {
+    use sigil_core::event::AiTool;
+
+    let Some(report) = verify::check() else {
+        println!("[OK]    hook registration matches baseline");
+        return 0;
+    };
+
+    match report.kind {
+        DriftKind::BaselineAbsent => println!(
+            "[DRIFT] baseline not found at {} (baseline_absent)",
+            report.settings_path
+        ),
+        DriftKind::EntryMissing => println!(
+            "[DRIFT] no sigil hook entry in {} (entry_missing)",
+            report.settings_path
+        ),
+        DriftKind::CommandDrift => println!(
+            "[DRIFT] hook command changed in {} — binary repoint / flag flip (command_drift)",
+            report.settings_path
+        ),
+        DriftKind::MatcherDrift => println!(
+            "[DRIFT] matcher changed: {:?} -> {:?} (matcher_drift)",
+            report.expected_matcher.as_deref().unwrap_or("?"),
+            report.observed_matcher.as_deref().unwrap_or("?"),
+        ),
+    }
+
+    // Best-effort emit over hook.sock (agent-down -> still printed + exits).
+    let env = HookDriftEnvelope {
+        protocol_version: HOOK_PROTOCOL_VERSION,
+        msg_type: HookMsgType::DriftReport,
+        request_id: uuid::Uuid::now_v7(),
+        sent_at_unix_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        payload: HookConfigDriftReport {
+            agent: AiTool::ClaudeCode, // slice 1
+            drift_kind: report.kind,
+            settings_path: report.settings_path.clone(),
+            expected_command_hash: report.expected_command_hash.clone(),
+            observed_command_hash: report.observed_command_hash.clone(),
+            expected_matcher: report.expected_matcher.clone(),
+            observed_matcher: report.observed_matcher.clone(),
+        },
+    };
+    if let Ok(line) = serde_json::to_string(&env) {
+        let _ = emit::send_envelope(&hook_socket_path(), &line, Duration::from_millis(150));
+    }
+    drift_exit_code(report.kind)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,5 +695,14 @@ mod tests {
             v["hookSpecificOutput"]["permissionDecisionReason"],
             "Blocked by Sigil rule no-rm: destructive"
         );
+    }
+
+    #[test]
+    fn drift_exit_codes() {
+        use sigil_core::hook_proto::DriftKind::*;
+        assert_eq!(drift_exit_code(BaselineAbsent), 3);
+        assert_eq!(drift_exit_code(EntryMissing), 2);
+        assert_eq!(drift_exit_code(CommandDrift), 2);
+        assert_eq!(drift_exit_code(MatcherDrift), 2);
     }
 }
