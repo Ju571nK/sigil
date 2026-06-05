@@ -420,6 +420,13 @@ mod tests {
         assert!(s.contains("PreToolUse"));
     }
 
+    #[test]
+    fn render_block_enforce_codex_carries_flags() {
+        let s = render_block_enforce("/abs/sigil-hook", "codex", "redacted", "open");
+        assert!(s.contains("/abs/sigil-hook codex --enforce --on-failure open --capture redacted"));
+        assert!(s.contains("PreToolUse"));
+    }
+
     // --- Claude Code (nested) ---
     #[test]
     fn render_block_has_abs_path_and_capture() {

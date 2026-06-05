@@ -406,14 +406,14 @@ fn cmd_install(
         return;
     }
 
-    // Enforce-mode --write is only supported for claude-code in slice 1.
-    // The Codex subcommand has no --enforce flag (clap would exit 2 at runtime),
-    // and codex enforce is out of scope for slice 1. For any other agent, guard
-    // explicitly so we never write a misleading settings file or print a
-    // confusing "already installed (no change)" message.
-    if enforce && agent != "claude-code" {
+    // Enforce-mode --write is supported for the NestedPreToolUse agents
+    // (claude-code, codex) in this slice. For any other agent (cursor, unknown),
+    // guard explicitly so we never write a misleading settings file or print a
+    // confusing "already installed (no change)" message. (antigravity is routed
+    // to its own plugin path before this point.)
+    if enforce && !matches!(agent, "claude-code" | "codex") {
         eprintln!(
-            "error: enforce-mode install is only supported for claude-code in slice 1 (agent '{agent}' not registered)"
+            "error: enforce-mode install is only supported for claude-code/codex in this slice (agent '{agent}' not registered)"
         );
         std::process::exit(1);
     }
