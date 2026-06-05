@@ -227,7 +227,7 @@ pub fn render_block_enforce(exe: &str, agent: &str, capture: &str, on_failure: &
 /// For claude-code (NestedPreToolUse): merges with the enforce command string.
 /// For Cursor and unknown agents: returns false (not supported in slice 1).
 ///
-/// slice 1: enforce is claude-code only; the CLI guards non-claude-code before reaching here.
+/// Enforce install is for the NestedPreToolUse agents (claude-code, codex); the CLI guards other agents before reaching here.
 pub fn merge_into_enforce(
     root: &mut Value,
     exe: &str,
@@ -417,6 +417,13 @@ mod tests {
         assert!(s.contains(
             "/abs/sigil-hook claude-code --enforce --on-failure open --capture redacted"
         ));
+        assert!(s.contains("PreToolUse"));
+    }
+
+    #[test]
+    fn render_block_enforce_codex_carries_flags() {
+        let s = render_block_enforce("/abs/sigil-hook", "codex", "redacted", "open");
+        assert!(s.contains("/abs/sigil-hook codex --enforce --on-failure open --capture redacted"));
         assert!(s.contains("PreToolUse"));
     }
 

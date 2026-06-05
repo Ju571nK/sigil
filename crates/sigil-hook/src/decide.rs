@@ -5,7 +5,7 @@ use sigil_core::hook_proto::{HookDecisionRequest, HookVerdict};
 use std::path::Path;
 use std::time::Duration;
 
-// called by the claude-code enforce path (Task 9)
+// called by the per-agent enforce path (run_enforce)
 #[cfg(unix)]
 pub fn request_verdict(
     socket: &Path,
@@ -32,7 +32,7 @@ pub fn request_verdict(
     Some(parsed.verdict)
 }
 
-// called by the claude-code enforce path (Task 9)
+// called by the per-agent enforce path (run_enforce)
 #[cfg(not(unix))]
 pub fn request_verdict(
     _socket: &Path,
