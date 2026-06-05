@@ -50,7 +50,7 @@ fn command_string_enforce(exe: &str, agent: &str, capture: &str, on_failure: &st
 }
 
 /// First whitespace token of a command string (= the binary path).
-fn first_token(cmd: &str) -> &str {
+pub(crate) fn first_token(cmd: &str) -> &str {
     cmd.split_whitespace().next().unwrap_or("")
 }
 
@@ -61,7 +61,7 @@ fn claude_entry(cmd: &str) -> Value {
 }
 
 /// The command of a Claude-style entry's first inner hook, if any.
-fn claude_entry_cmd(entry: &Value) -> Option<&str> {
+pub(crate) fn claude_entry_cmd(entry: &Value) -> Option<&str> {
     entry
         .get("hooks")
         .and_then(|h| h.as_array())
@@ -70,7 +70,7 @@ fn claude_entry_cmd(entry: &Value) -> Option<&str> {
         .and_then(|c| c.as_str())
 }
 
-fn claude_entry_is_ours(entry: &Value, exe: &str) -> bool {
+pub(crate) fn claude_entry_is_ours(entry: &Value, exe: &str) -> bool {
     entry
         .get("hooks")
         .and_then(|h| h.as_array())
