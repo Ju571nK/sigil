@@ -257,6 +257,15 @@ workspace libraries.
   hook, **fails open by default**, and is *agent-intent policy + tamper-evidence*,
   **not** tamper-resistant runtime command security (the agent owns the config that
   registers its own hook). Always exits 0, latency-bounded.
+- **Tamper-evidence — `sigil-hook verify` (#100)** — the detection counterweight to
+  advisory enforcement: compares the recorded install **baseline** against the live
+  agent settings file and reports registration **drift** (entry removed, binary
+  repointed, capture/fail-closed flipped, matcher narrowed, or the baseline itself
+  missing). It prints a result + exit code and emits a `HookConfigDrift` event over
+  `hook.sock`. This is **detection, not prevention** — a fully-neutralized hook
+  silences the check too; that blind spot (agent-side silence detection) is tracked
+  separately. Tamper-*evidence* raises the cost and visibility of in-domain tampering;
+  it does not stop it.
 
 **Libraries**
 
