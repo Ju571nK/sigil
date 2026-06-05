@@ -323,6 +323,7 @@ pub fn settings_path(agent: &str) -> Option<PathBuf> {
 }
 
 /// Write `state_dir()/hook-registration.json` + append to the discovery index.
+#[allow(clippy::too_many_arguments)]
 pub fn write_baseline(
     agent: &str,
     settings_path: &std::path::Path,
@@ -330,11 +331,45 @@ pub fn write_baseline(
     agent_arg: &str,
     capture: &str,
     matcher: &str,
+    enforce: bool,
+    on_failure: &str,
 ) -> io::Result<()> {
-    let dir = state_dir();
-    std::fs::create_dir_all(&dir)?;
+    write_baseline_in(
+        &state_dir(),
+        agent,
+        settings_path,
+        exe,
+        agent_arg,
+        capture,
+        matcher,
+        enforce,
+        on_failure,
+    )
+}
 
-    let cmd = command_string(exe, agent_arg, capture);
+/// Directory-injectable core of [`write_baseline`]: writes
+/// `dir/hook-registration.json` + appends to `dir/hook-index.json`. Kept
+/// separate so tests can supply a temp dir without touching the process-global
+/// `XDG_STATE_HOME` env var (which would race other tests).
+#[allow(clippy::too_many_arguments)]
+fn write_baseline_in(
+    dir: &std::path::Path,
+    agent: &str,
+    settings_path: &std::path::Path,
+    exe: &str,
+    agent_arg: &str,
+    capture: &str,
+    matcher: &str,
+    enforce: bool,
+    on_failure: &str,
+) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+
+    let cmd = if enforce {
+        command_string_enforce(exe, agent_arg, capture, on_failure)
+    } else {
+        command_string(exe, agent_arg, capture)
+    };
     let block_hash = blake3::hash(cmd.as_bytes()).to_hex().to_string();
     let written_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -491,5 +526,81 @@ mod tests {
     fn unsupported_agent_paths() {
         assert!(settings_path("nope").is_none());
         assert_eq!(count_sigil_entries(&json!({}), "/x", "nope"), 0);
+    }
+
+    // --- write_baseline records the actual installed command ---
+
+    /// Helper: call the directory-injectable `write_baseline_in` with `dir` and
+    /// return the parsed JSON from `dir/hook-registration.json`. Race-free: no
+    /// process-global env var (`XDG_STATE_HOME`) is touched, so these tests are
+    /// safe to run in parallel with any other state_dir()-dependent test.
+    fn baseline_json_in(
+        dir: &std::path::Path,
+        enforce: bool,
+        on_failure: &str,
+    ) -> serde_json::Value {
+        let settings = dir.join("settings.json");
+        write_baseline_in(
+            dir,
+            "claude-code",
+            &settings,
+            "/usr/bin/sigil-hook",
+            "claude-code",
+            "redacted",
+            "*",
+            enforce,
+            on_failure,
+        )
+        .unwrap();
+        let raw = std::fs::read(dir.join("hook-registration.json")).unwrap();
+        serde_json::from_slice(&raw).unwrap()
+    }
+
+    /// `command_string_enforce` produces the right flag sequence (pure, race-free).
+    #[test]
+    fn command_string_enforce_contains_enforce_flags() {
+        let cmd = command_string_enforce("/usr/bin/sigil-hook", "claude-code", "redacted", "open");
+        assert!(
+            cmd.contains("--enforce --on-failure open"),
+            "command_string_enforce must include enforce flags, got: {cmd}"
+        );
+        assert!(
+            cmd.contains("--capture redacted"),
+            "command_string_enforce must include --capture, got: {cmd}"
+        );
+    }
+
+    /// write_baseline(enforce=true) records the enforce command and a matching hash.
+    #[test]
+    fn write_baseline_records_enforce_command_when_enforce() {
+        let tmp = tempfile::tempdir().unwrap();
+        let v = baseline_json_in(tmp.path(), true, "open");
+        let cmd = v["command"].as_str().unwrap();
+        assert!(
+            cmd.contains("--enforce --on-failure open"),
+            "baseline must record the enforce command, got: {cmd}"
+        );
+        let expected_hash = blake3::hash(cmd.as_bytes()).to_hex().to_string();
+        assert_eq!(
+            v["block_hash"].as_str().unwrap(),
+            expected_hash,
+            "block_hash must be blake3 of the enforce command"
+        );
+    }
+
+    /// write_baseline(enforce=false) records the observe command (regression guard).
+    #[test]
+    fn write_baseline_records_observe_command_when_not_enforce() {
+        let tmp = tempfile::tempdir().unwrap();
+        let v = baseline_json_in(tmp.path(), false, "open");
+        let cmd = v["command"].as_str().unwrap();
+        assert!(
+            !cmd.contains("--enforce"),
+            "non-enforce baseline must NOT contain --enforce, got: {cmd}"
+        );
+        assert!(
+            cmd.contains("--capture redacted"),
+            "non-enforce baseline must contain --capture, got: {cmd}"
+        );
     }
 }

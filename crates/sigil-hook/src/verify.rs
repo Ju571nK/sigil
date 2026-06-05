@@ -194,4 +194,76 @@ mod tests {
     fn baseline_absent_when_no_baseline() {
         assert!(load_baseline(Path::new("/nonexistent/hook-registration.json")).is_none());
     }
+
+    // --- enforce-install baseline tests (#100 regression) ---
+
+    /// An enforce-mode baseline is clean when the settings file contains the
+    /// exact enforce command string that was written at install time.
+    #[test]
+    fn clean_for_enforce_install_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = "/usr/bin/sigil-hook";
+        let enforce_cmd =
+            format!("{exe} claude-code --enforce --on-failure open --capture redacted");
+        let b = Baseline {
+            agent: "claude-code".into(),
+            settings_path: dir
+                .path()
+                .join("settings.json")
+                .to_string_lossy()
+                .into_owned(),
+            command: enforce_cmd.clone(),
+            matcher: "*".into(),
+            block_hash: blake3::hash(enforce_cmd.as_bytes()).to_hex().to_string(),
+        };
+        // Settings registered WITH the enforce command => clean (no drift).
+        let mut f = std::fs::File::create(&b.settings_path).unwrap();
+        write!(
+            f,
+            r#"{{"hooks":{{"PreToolUse":[{{"matcher":"*","hooks":[{{"type":"command","command":"{enforce_cmd}"}}]}}]}}}}"#
+        )
+        .unwrap();
+        assert_eq!(
+            check_one(&b),
+            None,
+            "enforce baseline must be clean against matching settings"
+        );
+    }
+
+    /// An enforce-mode baseline detects drift when the settings file contains
+    /// only the observe command (the bug this fix addresses: verify spuriously
+    /// reported command_drift right after 'install --enforce --write').
+    #[test]
+    fn command_drift_when_observe_command_in_enforce_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = "/usr/bin/sigil-hook";
+        let enforce_cmd =
+            format!("{exe} claude-code --enforce --on-failure open --capture redacted");
+        let observe_cmd = format!("{exe} claude-code --capture redacted");
+        let b = Baseline {
+            agent: "claude-code".into(),
+            settings_path: dir
+                .path()
+                .join("settings.json")
+                .to_string_lossy()
+                .into_owned(),
+            command: enforce_cmd.clone(),
+            matcher: "*".into(),
+            block_hash: blake3::hash(enforce_cmd.as_bytes()).to_hex().to_string(),
+        };
+        // Settings registered with the OBSERVE command while baseline expects ENFORCE
+        // => command_drift (this is the genuine tamper signal, not a false positive).
+        let mut f = std::fs::File::create(&b.settings_path).unwrap();
+        write!(
+            f,
+            r#"{{"hooks":{{"PreToolUse":[{{"matcher":"*","hooks":[{{"type":"command","command":"{observe_cmd}"}}]}}]}}}}"#
+        )
+        .unwrap();
+        let report = check_one(&b).expect("should detect drift");
+        assert_eq!(
+            report.kind,
+            DriftKind::CommandDrift,
+            "downgrade from enforce to observe command must be reported as command_drift"
+        );
+    }
 }

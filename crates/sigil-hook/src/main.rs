@@ -456,7 +456,16 @@ fn cmd_install(
     }
 
     // Write baseline / update discovery index.
-    if let Err(e) = install::write_baseline(agent, &sp, &exe, agent, capture_str, "*") {
+    if let Err(e) = install::write_baseline(
+        agent,
+        &sp,
+        &exe,
+        agent,
+        capture_str,
+        "*",
+        enforce,
+        on_failure_str,
+    ) {
         eprintln!("warning: could not write baseline: {e}");
     }
 
