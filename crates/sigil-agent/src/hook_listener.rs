@@ -47,6 +47,7 @@ pub async fn serve(
     socket: PathBuf,
     tx: mpsc::Sender<CommittableEvent>,
     host_id: String,
+    activity_map: crate::hook_silence::ActivityMap,
 ) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -93,6 +94,7 @@ pub async fn serve(
 
         let tx = tx.clone();
         let host_id = host_id.clone();
+        let activity_map = activity_map.clone();
 
         tokio::spawn(async move {
             // Permit is held for the lifetime of this task.
@@ -134,6 +136,14 @@ pub async fn serve(
                             return;
                         }
                     };
+                    // D6: record BEFORE try_send so a dropped-on-backpressure
+                    // observation never becomes false silence.
+                    crate::hook_silence::record_hook_event(
+                        &activity_map,
+                        env.payload.agent,
+                        peer_uid,
+                        time::OffsetDateTime::now_utc(),
+                    );
                     CommittableEvent {
                         event: to_event(env, peer_uid, &host_id),
                         new_hash: None,

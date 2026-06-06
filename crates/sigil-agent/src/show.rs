@@ -530,6 +530,13 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
             "hook_config_drift",
             format!("kind={} settings_path={}", d.drift_kind, d.settings_path),
         ),
+        Evidence::PossibleHookActivitySilent(d) => (
+            "possible_hook_activity_silent",
+            format!(
+                "{:?} hook silent for {}s (confidence {:?})",
+                d.agent, d.window_secs, d.confidence
+            ),
+        ),
         Evidence::Unknown => ("unknown", String::new()),
     }
 }

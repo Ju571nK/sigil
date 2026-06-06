@@ -29,9 +29,14 @@ mod unix_only {
         // 3. Start the hook listener in a background task.
         let sock_path_clone = sock_path.clone();
         let _listener_task = tokio::spawn(async move {
-            hook_listener::serve(sock_path_clone, tx, "host-1".to_string())
-                .await
-                .expect("hook listener should not exit early");
+            hook_listener::serve(
+                sock_path_clone,
+                tx,
+                "host-1".to_string(),
+                sigil_agent::hook_silence::new_map(),
+            )
+            .await
+            .expect("hook listener should not exit early");
         });
 
         // 4. Wait for the socket file to appear (max 2 s).
@@ -151,9 +156,14 @@ mod unix_only {
 
         let sock_path_clone = sock_path.clone();
         let _listener_task = tokio::spawn(async move {
-            hook_listener::serve(sock_path_clone, tx, "host-overload".to_string())
-                .await
-                .expect("hook listener should not exit early");
+            hook_listener::serve(
+                sock_path_clone,
+                tx,
+                "host-overload".to_string(),
+                sigil_agent::hook_silence::new_map(),
+            )
+            .await
+            .expect("hook listener should not exit early");
         });
 
         // Wait for the socket to appear.

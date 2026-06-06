@@ -194,10 +194,91 @@ pub struct PolicyDocument {
     // the agent); intentionally not threaded into EffectivePolicy.
     #[serde(default)]
     pub on_failure: deny_rule::FailMode,
+    /// #107 — opt-in hook-silence detection config. Empty `enabled_agents` = feature OFF.
+    #[serde(default)]
+    pub hook_silence: HookSilenceCfg,
 }
 
 fn default_host_id_strategy() -> HostIdStrategy {
     HostIdStrategy::MachineId
+}
+
+fn dflt_window() -> u64 {
+    43_200
+}
+fn dflt_horizon() -> u64 {
+    604_800
+}
+fn dflt_tick() -> u64 {
+    1_800
+}
+fn dflt_max_entries() -> usize {
+    256
+}
+fn dflt_max_depth() -> usize {
+    3
+}
+fn dflt_budget_ms() -> u64 {
+    50
+}
+
+/// Caps bounding the cost (and privacy exposure) of one session-dir probe scan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeCap {
+    /// Max directory entries visited per probe scan.
+    #[serde(default = "dflt_max_entries")]
+    pub max_entries: usize,
+    /// Max directory-traversal depth per probe scan.
+    #[serde(default = "dflt_max_depth")]
+    pub max_depth: usize,
+    /// Wall-time budget per probe scan, in milliseconds.
+    #[serde(default = "dflt_budget_ms")]
+    pub budget_ms: u64,
+}
+impl Default for ProbeCap {
+    fn default() -> Self {
+        Self {
+            max_entries: dflt_max_entries(),
+            max_depth: dflt_max_depth(),
+            budget_ms: dflt_budget_ms(),
+        }
+    }
+}
+
+/// #107 — opt-in hook-silence detection. Empty `enabled_agents` = feature OFF.
+/// When enabled for an agent, the daemon flags it when it has recent session
+/// activity but its hook has gone silent (a low-confidence tamper hint).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookSilenceCfg {
+    /// Per-agent opt-in allowlist. Empty = the whole feature is off.
+    #[serde(default)]
+    pub enabled_agents: Vec<crate::event::AiTool>,
+    /// Silence window W (seconds): an opted-in agent with session activity but
+    /// zero hook events for longer than this is flagged (default 43200 = 12h).
+    #[serde(default = "dflt_window")]
+    pub window_secs: u64,
+    /// Expectation horizon H (seconds): an agent is only eligible to be flagged
+    /// if its last hook event was within this long; older = treated as
+    /// abandoned and never flagged (default 604800 = 7d).
+    #[serde(default = "dflt_horizon")]
+    pub horizon_secs: u64,
+    /// How often the detector sweeps, in seconds (default 1800 = 30min).
+    #[serde(default = "dflt_tick")]
+    pub tick_secs: u64,
+    /// Caps on the per-agent session-directory scan.
+    #[serde(default)]
+    pub probe_cap: ProbeCap,
+}
+impl Default for HookSilenceCfg {
+    fn default() -> Self {
+        Self {
+            enabled_agents: vec![],
+            window_secs: dflt_window(),
+            horizon_secs: dflt_horizon(),
+            tick_secs: dflt_tick(),
+            probe_cap: ProbeCap::default(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -268,6 +349,8 @@ pub struct EffectivePolicy {
     /// Stage 2 (#100) — operator deny rules forwarded from user PolicyDocument.
     /// Empty = no enforcement (observe-only).
     pub hook_deny_rules: Vec<deny_rule::DenyRule>,
+    /// #107 — opt-in hook-silence detection config forwarded from user PolicyDocument.
+    pub hook_silence: HookSilenceCfg,
 }
 
 /// Merge a defaults document and a user-override document into an effective policy.
@@ -379,6 +462,11 @@ pub fn merge(
         .map(|u| u.hook_deny_rules.clone())
         .unwrap_or_default();
 
+    let hook_silence = user
+        .as_ref()
+        .map(|u| u.hook_silence.clone())
+        .unwrap_or_default();
+
     Ok(EffectivePolicy {
         host_id_strategy: strategy,
         targets: by_id,
@@ -391,6 +479,7 @@ pub fn merge(
         rule_packs,
         rubric_overrides,
         hook_deny_rules,
+        hook_silence,
     })
 }
 
@@ -426,6 +515,7 @@ pub fn defaults() -> Result<PolicyDocument, PolicyError> {
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: deny_rule::FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         }),
     }
 }
@@ -563,6 +653,7 @@ targets:
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: deny_rule::FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         }
     }
 
@@ -632,6 +723,7 @@ targets:
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: deny_rule::FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         let eff = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap();
         let ids: Vec<&str> = eff.targets.iter().map(|t| t.id.as_str()).collect();
@@ -659,6 +751,7 @@ targets:
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: deny_rule::FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         let eff = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap();
         assert_eq!(eff.targets[0].tier, Tier::Standard);
@@ -685,6 +778,7 @@ targets:
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: deny_rule::FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         let err = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::UnknownOverrideId(_)));
@@ -707,6 +801,7 @@ targets:
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: deny_rule::FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         let err = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::DuplicateId(_)));
@@ -733,6 +828,7 @@ targets:
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: deny_rule::FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         let err = merge(defaults, None, None, Platform::Macos).unwrap_err();
         assert!(matches!(err, PolicyError::EmptyTargets));
@@ -1047,6 +1143,7 @@ host_id_strategy: hostname
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: deny_rule::FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         user.rubric_overrides
             .insert("destructive_in_hook_script".into(), 5.5);
@@ -1120,6 +1217,7 @@ host_id_strategy: hostname
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: deny_rule::FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         let eff = merge(defaults().unwrap(), Some(user), None, current_platform()).unwrap();
         assert_eq!(eff.gemini_workspaces, vec!["~/src/a".to_string()]);
@@ -1133,5 +1231,34 @@ host_id_strategy: hostname
         let doc = parse(yaml_minimal()).unwrap();
         assert!(doc.hook_deny_rules.is_empty());
         assert_eq!(doc.on_failure, FailMode::Open);
+    }
+
+    #[test]
+    fn hook_silence_defaults_disabled() {
+        let doc: PolicyDocument = parse(
+            "version: 1\ntargets:\n  - id: t\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"~/x\"]\n",
+        ).unwrap();
+        assert!(doc.hook_silence.enabled_agents.is_empty());
+        assert_eq!(doc.hook_silence.window_secs, 43_200);
+        assert_eq!(doc.hook_silence.horizon_secs, 604_800);
+        assert_eq!(doc.hook_silence.tick_secs, 1_800);
+        assert_eq!(doc.hook_silence.probe_cap.max_entries, 256);
+        assert_eq!(doc.hook_silence.probe_cap.max_depth, 3);
+        assert_eq!(doc.hook_silence.probe_cap.budget_ms, 50);
+    }
+
+    #[test]
+    fn merge_forwards_hook_silence_from_user() {
+        let user: PolicyDocument = parse(
+            "version: 1\ntargets: []\nhook_silence:\n  enabled_agents: [codex]\n  window_secs: 60\n",
+        ).unwrap();
+        let eff = merge(defaults_doc(), Some(user), None, Platform::Macos).unwrap();
+        assert_eq!(
+            eff.hook_silence.enabled_agents,
+            vec![crate::event::AiTool::Codex]
+        );
+        assert_eq!(eff.hook_silence.window_secs, 60);
+        // a field absent from the user's partial block still takes the documented default
+        assert_eq!(eff.hook_silence.horizon_secs, 604_800);
     }
 }
