@@ -71,6 +71,30 @@ fn evidence_kind_str(e: &sigil_core::event::Evidence) -> &'static str {
         HookInvocation(_) => "hook_invocation",
         HookDecision(_) => "hook_decision",
         HookConfigDrift(_) => "hook_config_drift",
+        PossibleHookActivitySilent(_) => "possible_hook_activity_silent",
         Unknown => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn possible_hook_activity_silent_has_sink_label() {
+        use sigil_core::event::{AiTool, Confidence, Evidence, PossibleHookActivitySilentEvidence};
+        let ev = Evidence::PossibleHookActivitySilent(PossibleHookActivitySilentEvidence {
+            agent: AiTool::Codex,
+            uid: None,
+            last_hook_seen_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_session_activity_at: None,
+            window_secs: 0,
+            probe_kind: "codex_sessions".into(),
+            path_hash: None,
+            probe_error: None,
+            scan_truncated: false,
+            confidence: Confidence::Low,
+        });
+        assert_eq!(evidence_kind_str(&ev), "possible_hook_activity_silent");
     }
 }

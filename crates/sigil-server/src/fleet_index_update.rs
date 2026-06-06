@@ -141,6 +141,7 @@ pub fn apply_event(host: &mut HostSummary, event: &Event) {
         Evidence::HookInvocation(_)
         | Evidence::HookDecision(_)
         | Evidence::HookConfigDrift(_)
+        | Evidence::PossibleHookActivitySilent(_)
         | Evidence::Unknown => {
             // Hook observe/decision/drift events are not indexed into the fleet rollup
             // (slice 1); the severity-bucket increment above already counts them.
