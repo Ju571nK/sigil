@@ -31,6 +31,7 @@ pub mod policy_reload_task;
 pub mod runtime;
 pub mod sender_offset;
 pub mod show;
+pub mod silence_task;
 pub mod sink_task;
 pub mod state_task;
 pub mod supervisor;
