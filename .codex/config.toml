@@ -1,5 +1,5 @@
 [mcp_servers.sigil-fleet]
-command = "/Users/ju571nk3n/Documents/Dev-Factory/anti_i/target/release/sigil-mcp"
+command = "/Users/ju571nk3n/Documents/SigilProject/sigil/target/release/sigil-mcp"
 
 [mcp_servers.sigil-fleet.env]
 SIGIL_SERVER_BASE_URL = "http://192.168.50.213:9090"

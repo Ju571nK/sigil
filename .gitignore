@@ -44,3 +44,5 @@ docs/**/superpowers*
 demo/
 scripts/
 scripts/demo/
+# Local Codex CLI config (may contain server tokens/paths — never commit)
+.codex/
