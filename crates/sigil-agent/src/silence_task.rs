@@ -240,6 +240,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabled_policy_makes_run_return_immediately() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let rc = RunCfg {
+            host_id: "h".into(),
+            map: crate::hook_silence::new_map(),
+            enabled: vec![],
+            window: time::Duration::hours(12),
+            horizon: time::Duration::days(7),
+            tick: std::time::Duration::from_millis(5),
+            cap: crate::hook_silence::ProbeCapRt {
+                max_entries: 16,
+                max_depth: 1,
+                budget: std::time::Duration::from_millis(5),
+            },
+            home: std::env::temp_dir(),
+            event_tx: tx,
+            shutdown: tokio_util::sync::CancellationToken::new(),
+        };
+        tokio::time::timeout(std::time::Duration::from_millis(200), run(rc))
+            .await
+            .expect("run() must return immediately when enabled is empty");
+    }
+
+    #[tokio::test]
     async fn empty_map_no_alarm() {
         // restart behavior
         let (mut ctx, mut rx) = ctx_with(true);

@@ -759,6 +759,10 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         );
     }
 
+    // #107 — one shared activity map for both hook listeners so the silence
+    // task sees events from both sides (hook.sock + hook-decide.sock).
+    let activity_map = crate::hook_silence::new_map();
+
     // Hook IPC listener (sigil-hook Stage 1 #64): sits in the same socket
     // directory as the control socket, at `hook.sock`. One-way: emitters write
     // HookEnvelope JSON lines; no response is ever sent. Peer-cred stamping,
@@ -768,8 +772,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         let hook_sock = cfg.control_socket.with_file_name("hook.sock");
         let tx_hook = tx_sink.clone();
         let host_id_hook = host_id.clone();
-        // TODO(#107 T8): share one map across both listeners
-        let hook_activity_map = crate::hook_silence::new_map();
+        let hook_activity_map = activity_map.clone();
         sup.track(
             "hook_listener",
             tokio::spawn(async move {
@@ -810,8 +813,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 Arc::new(crate::hook_deny::DenyEvaluator::new(&[]).unwrap())
             }
         };
-        // TODO(#107 T8): share one map across both listeners
-        let decide_activity_map = crate::hook_silence::new_map();
+        let decide_activity_map = activity_map.clone();
         sup.track(
             "hook_decide_listener",
             tokio::spawn(async move {
@@ -831,6 +833,32 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                     );
                 }
             }),
+        );
+    }
+
+    // #107 — silence-detection task. Uses the shared activity_map populated by
+    // both hook listeners above. Early-returns immediately when enabled_agents
+    // is empty (the default), so there is zero overhead when the feature is OFF.
+    {
+        let hs = effective.hook_silence.clone();
+        sup.track(
+            "silence",
+            tokio::spawn(crate::silence_task::run(crate::silence_task::RunCfg {
+                host_id: host_id.clone(),
+                map: activity_map.clone(),
+                enabled: hs.enabled_agents.clone(),
+                window: time::Duration::seconds(hs.window_secs as i64),
+                horizon: time::Duration::seconds(hs.horizon_secs as i64),
+                tick: std::time::Duration::from_secs(hs.tick_secs),
+                cap: crate::hook_silence::ProbeCapRt {
+                    max_entries: hs.probe_cap.max_entries,
+                    max_depth: hs.probe_cap.max_depth,
+                    budget: std::time::Duration::from_millis(hs.probe_cap.budget_ms),
+                },
+                home: home_dir.clone(),
+                event_tx: tx_sink.clone(),
+                shutdown: cancel.clone(),
+            })),
         );
     }
 
