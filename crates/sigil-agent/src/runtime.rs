@@ -768,11 +768,18 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         let hook_sock = cfg.control_socket.with_file_name("hook.sock");
         let tx_hook = tx_sink.clone();
         let host_id_hook = host_id.clone();
+        // TODO(#107 T8): share one map across both listeners
+        let hook_activity_map = crate::hook_silence::new_map();
         sup.track(
             "hook_listener",
             tokio::spawn(async move {
-                if let Err(e) =
-                    crate::hook_listener::serve(hook_sock.clone(), tx_hook, host_id_hook).await
+                if let Err(e) = crate::hook_listener::serve(
+                    hook_sock.clone(),
+                    tx_hook,
+                    host_id_hook,
+                    hook_activity_map,
+                )
+                .await
                 {
                     tracing::error!(
                         error = ?e,
@@ -803,6 +810,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 Arc::new(crate::hook_deny::DenyEvaluator::new(&[]).unwrap())
             }
         };
+        // TODO(#107 T8): share one map across both listeners
+        let decide_activity_map = crate::hook_silence::new_map();
         sup.track(
             "hook_decide_listener",
             tokio::spawn(async move {
@@ -811,6 +820,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                     tx_decide,
                     host_id_decide,
                     evaluator,
+                    decide_activity_map,
                 )
                 .await
                 {

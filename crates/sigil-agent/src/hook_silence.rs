@@ -24,6 +24,20 @@ pub fn new_map() -> ActivityMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+/// Update at receive in the listeners — BEFORE the lossy `try_send` — so a
+/// dropped-on-backpressure observation never becomes false silence. A fresh
+/// hook event also closes any open silence episode.
+pub fn record_hook_event(map: &ActivityMap, agent: AiTool, uid: u32, now: OffsetDateTime) {
+    let mut g = map.lock();
+    let r = g.entry((agent, uid)).or_insert(ActivityRecord {
+        last_hook_event_at: now,
+        last_emitted_at: None,
+        episode_open: false,
+    });
+    r.last_hook_event_at = now;
+    r.episode_open = false;
+}
+
 /// Window W (silence threshold) and horizon H (expectation decay).
 #[derive(Debug, Clone, Copy)]
 pub struct SilenceCfg {
@@ -123,5 +137,25 @@ mod tests {
         let base = OffsetDateTime::UNIX_EPOCH + Duration::days(100);
         let now = base + Duration::days(7); // since == H (inclusive) AND > W → silent
         assert!(decide(&rec_at(base), true, now, &cfg()).silent);
+    }
+
+    #[test]
+    fn record_hook_event_marks_seen_and_closes_episode() {
+        use sigil_core::event::AiTool;
+        let map = new_map();
+        let now = OffsetDateTime::UNIX_EPOCH + Duration::days(100);
+        map.lock().insert(
+            (AiTool::Codex, 501),
+            ActivityRecord {
+                last_hook_event_at: now - Duration::days(1),
+                last_emitted_at: Some(now - Duration::days(1)),
+                episode_open: true,
+            },
+        );
+        record_hook_event(&map, AiTool::Codex, 501, now);
+        let g = map.lock();
+        let r = g.get(&(AiTool::Codex, 501)).unwrap();
+        assert_eq!(r.last_hook_event_at, now);
+        assert!(!r.episode_open);
     }
 }

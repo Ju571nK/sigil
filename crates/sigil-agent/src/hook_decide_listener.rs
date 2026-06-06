@@ -27,6 +27,7 @@ pub async fn serve(
     tx: mpsc::Sender<CommittableEvent>,
     host_id: String,
     evaluator: Arc<DenyEvaluator>,
+    activity_map: crate::hook_silence::ActivityMap,
 ) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     if socket.exists() {
@@ -62,6 +63,7 @@ pub async fn serve(
         let tx = tx.clone();
         let host_id = host_id.clone();
         let evaluator = evaluator.clone();
+        let activity_map = activity_map.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let mut line = String::new();
@@ -83,6 +85,14 @@ pub async fn serve(
             let mut stream = rd.into_inner().into_inner();
 
             // 1) Observe event (best-effort, like Stage 1's one-way path).
+            // D6: record BEFORE try_send so a dropped-on-backpressure
+            // observation never becomes false silence.
+            crate::hook_silence::record_hook_event(
+                &activity_map,
+                req.invocation.agent,
+                peer_uid,
+                time::OffsetDateTime::now_utc(),
+            );
             let action = req.invocation.action.clone();
             let inv = req.invocation.clone();
             let observe_env = HookEnvelope {
@@ -266,7 +276,14 @@ mod tests {
         );
         let sock2 = socket.clone();
         tokio::spawn(async move {
-            let _ = serve(sock2, tx, "host-x".into(), ev).await;
+            let _ = serve(
+                sock2,
+                tx,
+                "host-x".into(),
+                ev,
+                crate::hook_silence::new_map(),
+            )
+            .await;
         });
         for _ in 0..50 {
             if socket.exists() {
