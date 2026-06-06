@@ -4,7 +4,7 @@ use proptest::prelude::*;
 use sigil_core::debounce::Debouncer;
 use sigil_core::event::{Event, FileChangeKind};
 use sigil_core::policy::{
-    merge, FailMode, HostIdStrategy, Platform, PolicyDocument, Tier, WatchTarget,
+    merge, FailMode, HookSilenceCfg, HostIdStrategy, Platform, PolicyDocument, Tier, WatchTarget,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -47,6 +47,7 @@ proptest! {
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         let r1 = merge(defaults.clone(), None, None, Platform::Any).unwrap();
         let r2 = merge(defaults, None, None, Platform::Any).unwrap();
@@ -77,6 +78,7 @@ proptest! {
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         let user = PolicyDocument {
             version: 1,
@@ -93,6 +95,7 @@ proptest! {
             rubric_overrides: HashMap::new(),
             hook_deny_rules: vec![],
             on_failure: FailMode::Open,
+            hook_silence: HookSilenceCfg::default(),
         };
         let res = merge(defaults, Some(user), None, Platform::Any);
         prop_assert!(res.is_err());
