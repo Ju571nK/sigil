@@ -74,9 +74,12 @@ sandboxed; it never touches your real `~/.claude`).
 
 Sigil's core **measures; it does not block** — but `sigil-hook` Stage 2 adds an
 **opt-in, in-domain advisory** layer: the same `PreToolUse` hook can **deny** a
-tool call when an agent-local deny rule matches. Below, a Claude Code session
-asks to run a shell command and the registered Sigil hook blocks it — Claude
-honors the hook's `permissionDecision: deny` and the tool call never runs:
+tool call when an agent-local deny rule matches. Both **Codex** and **Claude
+Code** honor the hook's `permissionDecision: deny`, so the matched tool call
+never runs. Here the same mechanism blocks a shell command in **Codex** first,
+then in **Claude Code**:
+
+![A Codex (gpt-5.5) terminal session: the agent issues a Bash tool call, and a registered PreToolUse deny hook blocks it — Codex surfaces the hook's deny reason and the command never runs](docs/sigil-hook-codex-block01.gif)
 
 ![A Claude Code terminal session: the agent attempts a Bash tool call, and a registered PreToolUse deny hook blocks it — the command never runs and Claude surfaces the hook's deny reason](docs/sigil-hook-claude-block01.gif)
 
