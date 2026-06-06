@@ -14,6 +14,15 @@ pub enum Severity {
     Warn,
 }
 
+/// Confidence in an inferred (non-definitive) signal. v1 emits only `Low`.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Confidence {
+    Low,
+    Medium,
+    High,
+}
+
 /// Origin of an event.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -264,6 +273,27 @@ pub struct HookConfigDriftEvidence {
     pub observed_matcher: Option<String>,
 }
 
+/// sigil-hook silence-detection (#107). A low-confidence tamper hint: an agent
+/// recently observed using its hook went hook-silent while its session files
+/// were still being written. Detection, not proof; a knowledgeable same-uid
+/// attacker is out of model.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PossibleHookActivitySilentEvidence {
+    pub agent: AiTool,
+    pub uid: Option<u32>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub last_hook_seen_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_session_activity_at: Option<OffsetDateTime>,
+    pub window_secs: u64,
+    pub probe_kind: String,
+    // blake3 of the matched session path — NEVER the raw path.
+    pub path_hash: Option<String>,
+    pub probe_error: Option<String>,
+    pub scan_truncated: bool,
+    pub confidence: Confidence,
+}
+
 /// Phase 3b.4-pre — full host identity / OS / network snapshot, emitted by
 /// host_meta_snapshot_task. Surfaces hostname (so server-side fleet views
 /// can label hosts with something human-readable instead of UUIDs) plus
@@ -503,6 +533,8 @@ pub enum Evidence {
     HookDecision(HookDecisionEvidence),
     /// sigil-hook tamper-evidence (#100). Hook registration drift vs the install baseline.
     HookConfigDrift(HookConfigDriftEvidence),
+    /// #107 — low-confidence hook-silence hint.
+    PossibleHookActivitySilent(PossibleHookActivitySilentEvidence),
     /// Forward-compat: an evidence kind this build doesn't recognize. A newer
     /// producer's variant deserializes here instead of failing the whole event.
     #[serde(other)]
@@ -1222,6 +1254,30 @@ mod tests {
         let s = serde_json::to_string(&ev).unwrap();
         assert!(s.contains("\"kind\":\"hook_config_drift\""));
         assert!(s.contains("\"drift_kind\":\"matcher_drift\""));
+        let back: Evidence = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn possible_hook_activity_silent_roundtrips() {
+        use time::OffsetDateTime;
+        let ev = Evidence::PossibleHookActivitySilent(PossibleHookActivitySilentEvidence {
+            agent: AiTool::Codex,
+            uid: Some(501),
+            last_hook_seen_at: OffsetDateTime::UNIX_EPOCH,
+            last_session_activity_at: Some(OffsetDateTime::UNIX_EPOCH),
+            window_secs: 43_200,
+            probe_kind: "codex_sessions".into(),
+            path_hash: Some("blake3:abc".into()),
+            probe_error: None,
+            scan_truncated: false,
+            confidence: Confidence::Low,
+        });
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("possible_hook_activity_silent"));
+        assert!(s.contains("\"confidence\":\"low\""));
+        assert!(s.contains("1970-01-01T00:00:00Z")); // rfc3339 wire format guard
+        assert!(!s.contains("\"path\"")); // raw path never serialized
         let back: Evidence = serde_json::from_str(&s).unwrap();
         assert_eq!(back, ev);
     }
