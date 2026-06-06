@@ -70,6 +70,50 @@ and Sigil re-scores that project **7.5 / critical**
 [`docs/aiguard-demo.sh`](docs/aiguard-demo.sh) from the repo root (fully
 sandboxed; it never touches your real `~/.claude`).
 
+### Enforce in action (opt-in, Stage 2)
+
+Sigil's core **measures; it does not block** — but `sigil-hook` Stage 2 adds an
+**opt-in, in-domain advisory** layer: the same `PreToolUse` hook can **deny** a
+tool call when an agent-local deny rule matches. Below, a Claude Code session
+asks to run a shell command and the registered Sigil hook blocks it — Claude
+honors the hook's `permissionDecision: deny` and the tool call never runs:
+
+![A Claude Code terminal session: the agent attempts a Bash tool call, and a registered PreToolUse deny hook blocks it — the command never runs and Claude surfaces the hook's deny reason](docs/sigil-hook-claude-block01.gif)
+
+You wire it the way Claude Code registers any hook — a `PreToolUse` command in
+`.claude/settings.json` pointing at `sigil-hook … --enforce`
+(or `sigil-hook install --agent claude-code --enforce --write`):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash",
+        "hooks": [
+          { "type": "command",
+            "command": "sigil-hook claude-code --enforce --on-failure open" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The deny rules live in the agent's policy — e.g. block a destructive shell pattern:
+
+```yaml
+hook_deny_rules:
+  - id: no-rm-rf-root
+    match: { kind: bash, command: { kind: regex, pattern: "rm\\s+-rf\\s+/" } }
+on_failure: open    # fail open: if Sigil can't decide, the tool call proceeds
+```
+
+This is **advisory** — it blocks ordinary calls *when the agent honors the
+registered hook*, and **fails open by default**. It is *agent-intent policy +
+tamper-evidence*, **not** tamper-resistant runtime command security (the agent
+owns the config that registers its own hook). Claude Code and Codex share this
+mechanism today; other agents are added as their hook engines are verified.
+
 ## Why now
 
 Through 2025–2026, the AI coding agent's *configuration* became the attack
