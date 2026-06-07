@@ -138,3 +138,27 @@ fn cursor_verify_baseline_absent_exits_3() {
         String::from_utf8_lossy(&v.stdout)
     );
 }
+
+/// No-false-positive lock for observe (open) mode: an observe install records
+/// baseline fail_closed=Some(false), and the live entry carries no failClosed
+/// field (=false). PASS 3 must treat absent==false as a match → clean (exit 0).
+#[test]
+fn cursor_verify_observe_install_is_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let state = home.join("state");
+    // observe install (no --enforce): baseline fail_closed=Some(false), live entry has no failClosed
+    let out = sigil(home, &state, &["install", "--agent", "cursor", "--write"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v = sigil(home, &state, &["verify", "--agent", "cursor"]);
+    assert_eq!(
+        v.status.code(),
+        Some(0),
+        "observe install must verify clean (no failClosed false-positive): {}",
+        String::from_utf8_lossy(&v.stdout)
+    );
+}

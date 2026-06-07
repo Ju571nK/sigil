@@ -8,7 +8,6 @@ use std::path::Path;
 /// Subset of hook-registration-<agent>.json we compare against (serde ignores the rest).
 #[derive(Deserialize, Debug, Clone)]
 pub struct Baseline {
-    #[allow(dead_code)] // used by the verify subcommand (agent dispatch)
     pub agent: String,
     pub settings_path: String,
     pub command: String,
