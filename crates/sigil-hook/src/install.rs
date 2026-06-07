@@ -127,7 +127,27 @@ fn cursor_entry_is_ours(entry: &Value, exe: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn merge_cursor(root: &mut Value, exe: &str, cmd: &str) -> bool {
+/// The settings entry object for our hook on a Cursor event. Observe = bare
+/// command; enforce-closed additionally carries `failClosed:true`, coupling our
+/// `--on-failure closed` to Cursor's own fail-closed so a hook process that
+/// crashes / times out / returns invalid JSON blocks the tool call instead of
+/// failing open.
+fn cursor_observe_entry(cmd: &str) -> Value {
+    cursor_enforce_entry(cmd, "open")
+}
+
+fn cursor_enforce_entry(cmd: &str, on_failure: &str) -> Value {
+    if on_failure == "closed" {
+        json!({ "command": cmd, "failClosed": true })
+    } else {
+        json!({ "command": cmd })
+    }
+}
+
+/// Upsert our prebuilt entry on BOTH Cursor gate events, keyed by exe first-token.
+/// Replaces the whole entry object on change (so a stale `failClosed` from a prior
+/// closed install is dropped on a later open install). Returns true if changed.
+fn upsert_cursor_entry(root: &mut Value, exe: &str, entry: &Value) -> bool {
     if !root.is_object() {
         *root = json!({});
     }
@@ -149,18 +169,26 @@ fn merge_cursor(root: &mut Value, exe: &str, cmd: &str) -> bool {
         };
         match arr.iter().position(|e| cursor_entry_is_ours(e, exe)) {
             Some(i) => {
-                if arr[i].get("command").and_then(|c| c.as_str()) != Some(cmd) {
-                    arr[i] = json!({ "command": cmd });
+                if &arr[i] != entry {
+                    arr[i] = entry.clone();
                     changed = true;
                 }
             }
             None => {
-                arr.push(json!({ "command": cmd }));
+                arr.push(entry.clone());
                 changed = true;
             }
         }
     }
     changed
+}
+
+fn merge_cursor(root: &mut Value, exe: &str, cmd: &str) -> bool {
+    upsert_cursor_entry(root, exe, &cursor_observe_entry(cmd))
+}
+
+fn merge_cursor_enforce(root: &mut Value, exe: &str, cmd: &str, on_failure: &str) -> bool {
+    upsert_cursor_entry(root, exe, &cursor_enforce_entry(cmd, on_failure))
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +197,9 @@ fn merge_cursor(root: &mut Value, exe: &str, cmd: &str) -> bool {
 
 /// Shared body for `render_block` / `render_block_enforce`: builds the
 /// human-pasteable settings fragment + undo hint for a prebuilt command string.
-fn render_block_inner(cmd: &str, agent: &str) -> String {
+/// `cursor_entry` is the pre-built Cursor entry object (observe or enforce with
+/// optional `failClosed`) — used only for the Cursor format arm.
+fn render_block_inner(cmd: &str, agent: &str, cursor_entry: &Value) -> String {
     let Some(fmt) = agent_format(agent) else {
         return format!("// unsupported agent '{agent}'\n");
     };
@@ -181,8 +211,8 @@ fn render_block_inner(cmd: &str, agent: &str) -> String {
         HookFormat::Cursor => json!({
             "version": 1,
             "hooks": {
-                "beforeShellExecution": [{ "command": cmd }],
-                "beforeMCPExecution": [{ "command": cmd }],
+                "beforeShellExecution": [cursor_entry],
+                "beforeMCPExecution": [cursor_entry],
             }
         }),
     };
@@ -202,7 +232,7 @@ fn render_block_inner(cmd: &str, agent: &str) -> String {
 /// Human-pasteable block showing the settings fragment + undo hint.
 pub fn render_block(exe: &str, agent: &str, capture: &str) -> String {
     let cmd = command_string(exe, agent, capture);
-    render_block_inner(&cmd, agent)
+    render_block_inner(&cmd, agent, &cursor_observe_entry(&cmd))
 }
 
 /// Idempotently ensure the sigil-hook entry is present. Returns `true` if the
@@ -220,14 +250,14 @@ pub fn merge_into(root: &mut Value, exe: &str, agent: &str, capture: &str) -> bo
 /// (deny-decision) path with the given on_failure mode.
 pub fn render_block_enforce(exe: &str, agent: &str, capture: &str, on_failure: &str) -> String {
     let cmd = command_string_enforce(exe, agent, capture, on_failure);
-    render_block_inner(&cmd, agent)
+    render_block_inner(&cmd, agent, &cursor_enforce_entry(&cmd, on_failure))
 }
 
 /// Merge an enforce-mode registration into the settings JSON.
-/// For claude-code (NestedPreToolUse): merges with the enforce command string.
-/// For Cursor and unknown agents: returns false (not supported in slice 1).
-///
-/// Enforce install is for the NestedPreToolUse agents (claude-code, codex); the CLI guards other agents before reaching here.
+/// For claude-code / codex (NestedPreToolUse): merges with the enforce command string.
+/// For Cursor: upserts both gate-event entries; adds `failClosed:true` when
+/// `on_failure == "closed"` to couple Cursor's own fail-closed behaviour to ours.
+/// Returns `true` if the document was modified, `false` if already up-to-date.
 pub fn merge_into_enforce(
     root: &mut Value,
     exe: &str,
@@ -238,7 +268,7 @@ pub fn merge_into_enforce(
     let cmd = command_string_enforce(exe, agent, capture, on_failure);
     match agent_format(agent) {
         Some(HookFormat::NestedPreToolUse) => merge_claude(pretooluse_array_mut(root), exe, &cmd),
-        Some(HookFormat::Cursor) => false,
+        Some(HookFormat::Cursor) => merge_cursor_enforce(root, exe, &cmd, on_failure),
         None => false,
     }
 }
@@ -533,6 +563,117 @@ mod tests {
     fn unsupported_agent_paths() {
         assert!(settings_path("nope").is_none());
         assert_eq!(count_sigil_entries(&json!({}), "/x", "nope"), 0);
+    }
+
+    // --- Cursor enforce ---
+
+    #[test]
+    fn cursor_enforce_registers_both_events_with_failclosed() {
+        let mut v = json!({});
+        assert!(merge_into_enforce(
+            &mut v,
+            "/abs/sigil-hook",
+            "cursor",
+            "redacted",
+            "closed"
+        ));
+        for ev in CURSOR_EVENTS {
+            let arr = v["hooks"][ev].as_array().unwrap();
+            assert_eq!(arr.len(), 1, "{ev} has exactly one entry");
+            assert_eq!(arr[0]["failClosed"], json!(true));
+            let cmd = arr[0]["command"].as_str().unwrap();
+            assert!(cmd.contains("--enforce"), "got: {cmd}");
+            assert!(cmd.contains("--on-failure closed"), "got: {cmd}");
+        }
+        // idempotent
+        assert!(!merge_into_enforce(
+            &mut v,
+            "/abs/sigil-hook",
+            "cursor",
+            "redacted",
+            "closed"
+        ));
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "cursor"), 2);
+    }
+
+    #[test]
+    fn cursor_enforce_open_has_no_failclosed() {
+        let mut v = json!({});
+        merge_into_enforce(&mut v, "/abs/sigil-hook", "cursor", "redacted", "open");
+        let arr = v["hooks"]["beforeShellExecution"].as_array().unwrap();
+        assert!(arr[0].get("failClosed").is_none());
+    }
+
+    #[test]
+    fn cursor_closed_to_open_strips_failclosed() {
+        let mut v = json!({});
+        merge_into_enforce(&mut v, "/abs/sigil-hook", "cursor", "redacted", "closed");
+        assert!(merge_into_enforce(
+            &mut v,
+            "/abs/sigil-hook",
+            "cursor",
+            "redacted",
+            "open"
+        ));
+        let arr = v["hooks"]["beforeShellExecution"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert!(
+            arr[0].get("failClosed").is_none(),
+            "stale failClosed must be removed"
+        );
+        assert_eq!(
+            arr[0].as_object().unwrap().len(),
+            1,
+            "entry is exactly {{command}}"
+        );
+    }
+
+    #[test]
+    fn cursor_observe_to_enforce_replaces_in_place() {
+        let mut v = json!({});
+        merge_into(&mut v, "/abs/sigil-hook", "cursor", "redacted");
+        assert!(merge_into_enforce(
+            &mut v,
+            "/abs/sigil-hook",
+            "cursor",
+            "redacted",
+            "open"
+        ));
+        // replaced, not stacked: still one per event (2 total)
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "cursor"), 2);
+        let arr = v["hooks"]["beforeShellExecution"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert!(arr[0]["command"].as_str().unwrap().contains("--enforce"));
+    }
+
+    #[test]
+    fn cursor_enforce_to_observe_strips_enforce() {
+        let mut v = json!({});
+        merge_into_enforce(&mut v, "/abs/sigil-hook", "cursor", "redacted", "closed");
+        assert!(merge_into(&mut v, "/abs/sigil-hook", "cursor", "redacted"));
+        let arr = v["hooks"]["beforeShellExecution"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        let entry = arr[0].as_object().unwrap();
+        assert_eq!(entry.len(), 1, "downgrade leaves exactly {{command}}");
+        assert!(!entry["command"].as_str().unwrap().contains("--enforce"));
+        assert!(
+            entry.get("failClosed").is_none(),
+            "stale failClosed stripped on downgrade"
+        );
+    }
+
+    #[test]
+    fn cursor_enforce_preview_closed_shows_failclosed() {
+        let s = render_block_enforce("/abs/sigil-hook", "cursor", "redacted", "closed");
+        assert!(
+            s.contains("\"failClosed\": true"),
+            "closed preview must show failClosed:\n{s}"
+        );
+        let open = render_block_enforce("/abs/sigil-hook", "cursor", "redacted", "open");
+        assert!(
+            !open.contains("failClosed"),
+            "open preview must NOT show failClosed:\n{open}"
+        );
     }
 
     // --- write_baseline records the actual installed command ---
