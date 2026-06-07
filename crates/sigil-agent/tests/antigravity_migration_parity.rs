@@ -267,3 +267,94 @@ fn parity_else_if_both_true_emits_single_auto_approve() {
     assert!(d.parser_only.is_empty(), "parser_only: {:?}", d.parser_only);
     assert!(d.pack_only.is_empty(), "pack_only: {:?}", d.pack_only);
 }
+
+// ---------------------------------------------------------------------------
+// Task 5 — Type-confusion (pack over-emit) fixtures
+// ---------------------------------------------------------------------------
+
+/// Assert the divergence is exactly: parser_only == [] and pack_only == expected.
+fn assert_pack_only(
+    settings: Option<&str>,
+    mcp: Option<&str>,
+    expected_pack_only: &[AiGuardReason],
+) {
+    let home = tempfile::tempdir().unwrap();
+    if let Some(s) = settings {
+        write_file(home.path(), ".gemini/antigravity-cli/settings.json", s);
+    }
+    if let Some(m) = mcp {
+        write_file(home.path(), ".gemini/config/mcp_config.json", m);
+    }
+    let d = diff(home.path());
+    assert!(
+        d.parser_only.is_empty(),
+        "parser_only must be empty: {:?}",
+        d.parser_only
+    );
+    let mut expected: Vec<String> = expected_pack_only.iter().map(key).collect();
+    expected.sort();
+    assert_eq!(d.pack_only, expected, "pack_only mismatch");
+}
+
+#[test]
+fn over_emit_sandbox_string_false() {
+    // string "false" matches Equals "false" in the pack; parser as_bool() -> None.
+    assert_pack_only(
+        Some(r#"{"enableTerminalSandbox":"false"}"#),
+        None,
+        &[AiGuardReason::SandboxDisabled],
+    );
+}
+#[test]
+fn over_emit_allowall_string_true() {
+    assert_pack_only(
+        Some(r#"{"permissions":{"allowAll":"true"}}"#),
+        None,
+        &[AiGuardReason::AutoApprovalEnabled {
+            mode: "allow_all".into(),
+        }],
+    );
+}
+#[test]
+fn over_emit_trust_string_true() {
+    assert_pack_only(
+        None,
+        Some(r#"{"mcpServers":{"a":{"trust":"true"}}}"#),
+        &[AiGuardReason::TrustedMcpServer {
+            server_name: "a".into(),
+        }],
+    );
+}
+#[test]
+fn over_emit_command_array() {
+    // array command: pack Exists fires on the stringified array; parser as_str() -> None.
+    assert_pack_only(
+        None,
+        Some(r#"{"mcpServers":{"a":{"command":["node","m.js"]}}}"#),
+        &[
+            AiGuardReason::McpServerLocalCommand {
+                server_name: "a".into(),
+                command: "[\"node\",\"m.js\"]".into(),
+            },
+            AiGuardReason::NoSandbox {
+                executor: "mcp_command".into(),
+            },
+        ],
+    );
+}
+#[test]
+fn over_emit_command_number() {
+    assert_pack_only(
+        None,
+        Some(r#"{"mcpServers":{"a":{"command":42}}}"#),
+        &[
+            AiGuardReason::McpServerLocalCommand {
+                server_name: "a".into(),
+                command: "42".into(),
+            },
+            AiGuardReason::NoSandbox {
+                executor: "mcp_command".into(),
+            },
+        ],
+    );
+}
