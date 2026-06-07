@@ -386,3 +386,76 @@ fn gap_destructive_shell_arg_is_parser_only() {
         AiGuardReason::DestructiveInInlineCommand { hook_event, .. } if hook_event == "mcp_command"
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Task 7 — Error parity (variant AND offending path) + absent-file parity
+// ---------------------------------------------------------------------------
+
+use sigil_agent::ai_guard::parser::AssessError;
+
+/// Both parsers must Err with AssessError::Parse on the SAME path.
+fn assert_error_parity_on(home: &Path, expected_path_suffix: &str) {
+    let parser_err = AntigravityParser.assess(home).unwrap_err();
+    let pack_err = RulePackParser::new(rewired_pack(home))
+        .unwrap()
+        .assess(home)
+        .unwrap_err();
+    let pp = match &parser_err {
+        AssessError::Parse { path, .. } => path.to_string_lossy().into_owned(),
+        other => panic!("parser: expected Parse, got {other:?}"),
+    };
+    let kp = match &pack_err {
+        AssessError::Parse { path, .. } => path.to_string_lossy().into_owned(),
+        other => panic!("pack: expected Parse, got {other:?}"),
+    };
+    assert!(pp.ends_with(expected_path_suffix), "parser path {pp}");
+    assert!(kp.ends_with(expected_path_suffix), "pack path {kp}");
+}
+
+#[test]
+fn error_parity_corrupt_settings_first() {
+    let home = tempfile::tempdir().unwrap();
+    write_file(
+        home.path(),
+        ".gemini/antigravity-cli/settings.json",
+        "{ not json",
+    );
+    write_file(
+        home.path(),
+        ".gemini/config/mcp_config.json",
+        r#"{"mcpServers":{}}"#,
+    );
+    // settings rules are first in both read orders -> settings.json is the offending path.
+    assert_error_parity_on(home.path(), "antigravity-cli/settings.json");
+}
+#[test]
+fn error_parity_corrupt_mcp_only() {
+    let home = tempfile::tempdir().unwrap();
+    write_file(
+        home.path(),
+        ".gemini/antigravity-cli/settings.json",
+        r#"{}"#,
+    );
+    write_file(home.path(), ".gemini/config/mcp_config.json", "{ broken");
+    assert_error_parity_on(home.path(), "config/mcp_config.json");
+}
+#[test]
+fn error_parity_both_corrupt_reports_settings() {
+    let home = tempfile::tempdir().unwrap();
+    write_file(
+        home.path(),
+        ".gemini/antigravity-cli/settings.json",
+        "{ not json",
+    );
+    write_file(home.path(), ".gemini/config/mcp_config.json", "{ broken");
+    // settings is read/evaluated first in both -> settings is the reported error.
+    assert_error_parity_on(home.path(), "antigravity-cli/settings.json");
+}
+#[test]
+fn parity_absent_settings_present_mcp() {
+    assert_parity(None, Some(r#"{"mcpServers":{"a":{"url":"https://x"}}}"#));
+}
+#[test]
+fn parity_absent_mcp_present_settings() {
+    assert_parity(Some(r#"{"enableTerminalSandbox":false}"#), None);
+}
