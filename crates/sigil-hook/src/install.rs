@@ -20,15 +20,15 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Copy, PartialEq)]
-enum HookFormat {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookFormat {
     /// `root.hooks.PreToolUse[]` — Claude Code, Codex.
     NestedPreToolUse,
     /// `root.version` + `root.hooks.{beforeShellExecution,beforeMCPExecution}[]`.
     Cursor,
 }
 
-fn agent_format(agent: &str) -> Option<HookFormat> {
+pub(crate) fn agent_format(agent: &str) -> Option<HookFormat> {
     match agent {
         "claude-code" | "codex" => Some(HookFormat::NestedPreToolUse),
         "cursor" => Some(HookFormat::Cursor),
@@ -36,7 +36,7 @@ fn agent_format(agent: &str) -> Option<HookFormat> {
     }
 }
 
-const CURSOR_EVENTS: [&str; 2] = ["beforeShellExecution", "beforeMCPExecution"];
+pub(crate) const CURSOR_EVENTS: [&str; 2] = ["beforeShellExecution", "beforeMCPExecution"];
 
 fn command_string(exe: &str, agent: &str, capture: &str) -> String {
     format!("{exe} {agent} --capture {capture}")
@@ -119,11 +119,26 @@ fn merge_claude(arr: &mut Vec<Value>, exe: &str, cmd: &str) -> bool {
 
 // --- Cursor helpers ---
 
-fn cursor_entry_is_ours(entry: &Value, exe: &str) -> bool {
+pub(crate) fn cursor_entry_is_ours(entry: &Value, exe: &str) -> bool {
     entry
         .get("command")
         .and_then(|c| c.as_str())
         .map(|c| first_token(c) == exe)
+        .unwrap_or(false)
+}
+
+/// The `command` string of a Cursor settings entry, if present.
+#[allow(dead_code)] // consumed by verify.rs in #120 Task 4
+pub(crate) fn cursor_entry_command(entry: &Value) -> Option<&str> {
+    entry.get("command").and_then(|c| c.as_str())
+}
+
+/// Effective `failClosed` of a Cursor entry — absent means false (Cursor default).
+#[allow(dead_code)] // consumed by verify.rs in #120 Task 4
+pub(crate) fn cursor_entry_fail_closed(entry: &Value) -> bool {
+    entry
+        .get("failClosed")
+        .and_then(|v| v.as_bool())
         .unwrap_or(false)
 }
 
@@ -644,6 +659,20 @@ mod tests {
         let arr = v["hooks"]["beforeShellExecution"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert!(arr[0]["command"].as_str().unwrap().contains("--enforce"));
+    }
+
+    #[test]
+    fn cursor_entry_accessors() {
+        let e = json!({ "command": "/x/sigil-hook cursor --enforce", "failClosed": true });
+        assert_eq!(
+            cursor_entry_command(&e),
+            Some("/x/sigil-hook cursor --enforce")
+        );
+        assert!(cursor_entry_fail_closed(&e));
+        let no_fc = json!({ "command": "/x/sigil-hook cursor" });
+        assert!(!cursor_entry_fail_closed(&no_fc)); // absent = false (Cursor default)
+        assert_eq!(cursor_entry_command(&json!({})), None); // command absent → None
+        assert!(!cursor_entry_fail_closed(&json!({ "failClosed": "yes" }))); // non-bool → false
     }
 
     #[test]
