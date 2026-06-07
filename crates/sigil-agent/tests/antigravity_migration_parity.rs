@@ -238,3 +238,32 @@ fn parity_request_review_silent() {
 fn parity_dropped_gemini_approval_mode_silent() {
     assert_parity(Some(r#"{"approval_mode":"yolo"}"#), None);
 }
+
+// ---------------------------------------------------------------------------
+// Task 4 — else-if negate-gate fixture (both toolPermission + allowAll true)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parity_else_if_both_true_emits_single_auto_approve() {
+    let home = tempfile::tempdir().unwrap();
+    write_file(
+        home.path(),
+        ".gemini/antigravity-cli/settings.json",
+        r#"{"toolPermission":"auto-approve","permissions":{"allowAll":true}}"#,
+    );
+    // Direct parser check: exactly one AutoApprovalEnabled, mode auto-approve.
+    let parser_reasons = AntigravityParser.assess(home.path()).unwrap();
+    let approvals: Vec<_> = parser_reasons
+        .iter()
+        .filter(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. }))
+        .collect();
+    assert_eq!(approvals.len(), 1);
+    assert!(matches!(
+        approvals[0],
+        AiGuardReason::AutoApprovalEnabled { mode } if mode == "auto-approve"
+    ));
+    // Parity: the pack's allow_all rule must be gated off -> no divergence.
+    let d = diff(home.path());
+    assert!(d.parser_only.is_empty(), "parser_only: {:?}", d.parser_only);
+    assert!(d.pack_only.is_empty(), "pack_only: {:?}", d.pack_only);
+}
