@@ -459,3 +459,35 @@ fn parity_absent_settings_present_mcp() {
 fn parity_absent_mcp_present_settings() {
     assert_parity(Some(r#"{"enableTerminalSandbox":false}"#), None);
 }
+
+// ---------------------------------------------------------------------------
+// Task 8 — Selector-validity-at-assess assertion
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_selector_is_exercised_without_parse_error() {
+    let home = tempfile::tempdir().unwrap();
+    // Populate every key every rule + `when` selector touches, with VALID JSON,
+    // so each selector is actually parsed by eval_json at least once.
+    write_file(
+        home.path(),
+        ".gemini/antigravity-cli/settings.json",
+        r#"{"enableTerminalSandbox":false,"toolPermission":"auto-approve","permissions":{"allowAll":true}}"#,
+    );
+    write_file(
+        home.path(),
+        ".gemini/config/mcp_config.json",
+        r#"{"mcpServers":{"a":{"url":"https://x","httpUrl":"https://y","trust":true,"command":"node"}}}"#,
+    );
+    // assess() must be Ok: a malformed selector would surface here as AssessError::Parse.
+    let out = RulePackParser::new(rewired_pack(home.path()))
+        .expect("pack loads")
+        .assess(home.path());
+    assert!(
+        out.is_ok(),
+        "selector parse error at assess: {:?}",
+        out.err()
+    );
+    // sanity: it actually produced reasons (every rule path reachable).
+    assert!(!out.unwrap().is_empty());
+}
