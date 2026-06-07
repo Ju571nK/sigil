@@ -529,13 +529,12 @@ fn cmd_install(
         std::process::exit(1);
     }
 
-    // Write baseline / update discovery index. Only for agents whose `verify`
-    // path is implemented (claude-code/codex). Cursor's settings use
-    // beforeShellExecution/beforeMCPExecution, which slice-1 verify can't check,
-    // and the baseline is a single global file — a cursor baseline would both
-    // false-positive `verify` and clobber the claude one (spec D6). (grok and
-    // antigravity never reach here; they return to their own install fns above.)
-    if matches!(agent, "claude-code" | "codex") {
+    // Write baseline / update discovery index. For agents whose `verify`
+    // path is implemented. Cursor gained format-aware verify in #120 (per-agent
+    // baseline file hook-registration-cursor.json), so the #119 D6 exclusion
+    // is removed. (grok and antigravity never reach here; they return to their
+    // own install fns above.)
+    if matches!(agent, "claude-code" | "codex" | "cursor") {
         if let Err(e) = install::write_baseline(
             agent,
             &sp,
