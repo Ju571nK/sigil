@@ -358,3 +358,31 @@ fn over_emit_command_number() {
         ],
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 6 — Destructive-arg gap (parser_only arm)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gap_destructive_shell_arg_is_parser_only() {
+    let home = tempfile::tempdir().unwrap();
+    write_file(
+        home.path(),
+        ".gemini/config/mcp_config.json",
+        r#"{"mcpServers":{"a":{"command":"bash","args":["-c","rm -rf /tmp/sigil-test"]}}}"#,
+    );
+    let d = diff(home.path());
+    // pack reproduces local_command + no_sandbox (parity), but cannot produce the
+    // destructive finding -> it is the sole parser_only reason.
+    assert!(
+        d.pack_only.is_empty(),
+        "pack_only must be empty: {:?}",
+        d.pack_only
+    );
+    assert_eq!(d.parser_only.len(), 1, "parser_only: {:?}", d.parser_only);
+    let only: AiGuardReason = serde_json::from_str(&d.parser_only[0]).unwrap();
+    assert!(matches!(
+        only,
+        AiGuardReason::DestructiveInInlineCommand { hook_event, .. } if hook_event == "mcp_command"
+    ));
+}
