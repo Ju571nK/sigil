@@ -297,6 +297,8 @@ pub enum PolicyError {
     DoubleStarUnsupported(String, String),
     #[error("targets list is empty after merge")]
     EmptyTargets,
+    #[error("duplicate hook deny rule id: {0}")]
+    DuplicateDenyRuleId(String),
 }
 
 /// Parse a YAML document into a `PolicyDocument`. Validates schema version.
@@ -315,7 +317,20 @@ pub fn parse(yaml: &str) -> Result<PolicyDocument, PolicyError> {
             }
         }
     }
+    validate_deny_rule_ids(&doc.hook_deny_rules)?;
     Ok(doc)
+}
+
+/// Reject duplicate ids in a deny-rule set. DenyEvaluator is first-match-wins, so
+/// duplicate ids make replace-by-id (the merge fold) ill-defined; forbid them.
+pub fn validate_deny_rule_ids(rules: &[deny_rule::DenyRule]) -> Result<(), PolicyError> {
+    let mut seen = std::collections::HashSet::new();
+    for r in rules {
+        if !seen.insert(r.id.as_str()) {
+            return Err(PolicyError::DuplicateDenyRuleId(r.id.clone()));
+        }
+    }
+    Ok(())
 }
 
 /// Current host's platform (set at compile time).
@@ -1350,5 +1365,30 @@ host_id_strategy: hostname
         )
         .unwrap();
         assert_eq!(ids(&eff.hook_deny_rules), vec!["a"]);
+    }
+
+    // --- #115 Task 2: id-uniqueness validation ---
+
+    #[test]
+    fn validate_accepts_unique_deny_ids() {
+        assert!(validate_deny_rule_ids(&[deny("a"), deny("b")]).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_deny_ids() {
+        let err = validate_deny_rule_ids(&[deny("dup"), deny("dup")]).unwrap_err();
+        assert!(matches!(err, PolicyError::DuplicateDenyRuleId(ref s) if s == "dup"));
+    }
+
+    #[test]
+    fn parse_rejects_policy_with_duplicate_hook_deny_rule_ids() {
+        // Build a PolicyDocument with duplicate deny ids, serialize to YAML, then
+        // confirm parse() rejects it with DuplicateDenyRuleId.
+        let doc = doc_with_deny(vec![deny("dup"), deny("dup")]);
+        // We need version: 1 and at least one target to pass other validations, but
+        // doc_with_deny already sets version via defaults_doc(). Use serde_yaml directly.
+        let yaml = serde_yaml::to_string(&doc).expect("serialise");
+        let err = parse(&yaml).unwrap_err();
+        assert!(matches!(err, PolicyError::DuplicateDenyRuleId(_)));
     }
 }
