@@ -222,21 +222,47 @@ fn parity_string_command() {
         Some(r#"{"mcpServers":{"a":{"command":"node","args":["m.js"]}}}"#),
     );
 }
+/// Assert BOTH parsers emit zero reasons for a settings-only state. Stronger
+/// than `assert_parity` for the must-not-fire cases: parity alone is `[] == []`
+/// even if both parsers were regressed into silence, so we pin each parser's
+/// raw output to empty independently — the silence is the property under test.
+fn assert_silent(settings: &str) {
+    let home = tempfile::tempdir().unwrap();
+    write_file(
+        home.path(),
+        ".gemini/antigravity-cli/settings.json",
+        settings,
+    );
+    let parser_reasons = AntigravityParser.assess(home.path()).expect("parser Ok");
+    let pack_reasons = RulePackParser::new(rewired_pack(home.path()))
+        .expect("pack loads")
+        .assess(home.path())
+        .expect("pack Ok");
+    assert!(
+        parser_reasons.is_empty(),
+        "hardcoded parser should stay silent, got: {parser_reasons:?}"
+    );
+    assert!(
+        pack_reasons.is_empty(),
+        "rule pack should stay silent, got: {pack_reasons:?}"
+    );
+}
+
 #[test]
 fn parity_sandbox_true_silent() {
-    assert_parity(Some(r#"{"enableTerminalSandbox":true}"#), None);
+    assert_silent(r#"{"enableTerminalSandbox":true}"#);
 }
 #[test]
 fn parity_absent_key_silent() {
-    assert_parity(Some(r#"{}"#), None);
+    assert_silent(r#"{}"#);
 }
 #[test]
 fn parity_request_review_silent() {
-    assert_parity(Some(r#"{"toolPermission":"request-review"}"#), None);
+    assert_silent(r#"{"toolPermission":"request-review"}"#);
 }
 #[test]
 fn parity_dropped_gemini_approval_mode_silent() {
-    assert_parity(Some(r#"{"approval_mode":"yolo"}"#), None);
+    assert_silent(r#"{"approval_mode":"yolo"}"#);
 }
 
 // ---------------------------------------------------------------------------
