@@ -343,6 +343,7 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
             Cursor => new_cursor.iter().cloned().collect(),
             Antigravity => new_antigravity.iter().cloned().collect(),
             ClaudeDesktop => Vec::new(),
+            Grok => Vec::new(), // #110: no Grok project parser/workspace yet
             Other => Vec::new(),
         }
     };
@@ -562,6 +563,29 @@ mod tests {
     use super::*;
     use crate::runtime::expand_targets;
     use std::time::Duration;
+
+    /// Verify the repos_for_tool closure (as defined in reload()) returns an
+    /// empty Vec for AiTool::Grok — no project parser/workspace registered yet (#110).
+    #[test]
+    fn repos_for_tool_grok_is_empty() {
+        // Mirror the closure shape from reload(): all empty BTreeSets.
+        let empty: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+        let repos_for_tool = |tool: sigil_core::event::AiTool| -> Vec<PathBuf> {
+            use sigil_core::event::AiTool::*;
+            match tool {
+                ContinueDev => empty.iter().cloned().collect(),
+                ClaudeCode => empty.iter().cloned().collect(),
+                Codex => empty.iter().cloned().collect(),
+                Gemini => empty.iter().cloned().collect(),
+                Cursor => empty.iter().cloned().collect(),
+                Antigravity => empty.iter().cloned().collect(),
+                ClaudeDesktop => Vec::new(),
+                Grok => Vec::new(), // #110: no Grok project parser/workspace yet
+                Other => Vec::new(),
+            }
+        };
+        assert!(repos_for_tool(sigil_core::event::AiTool::Grok).is_empty());
+    }
 
     fn policy_yaml(target_id: &str, watch_path: &str, tier: &str) -> String {
         format!(

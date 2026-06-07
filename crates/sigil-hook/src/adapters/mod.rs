@@ -4,6 +4,7 @@ pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod cursor;
+pub mod grok;
 
 /// What a deny verdict renders to for a given agent: the text to print (the
 /// deny response, if any) and the process exit code. claude-code/codex/
@@ -24,6 +25,20 @@ pub(crate) fn pretooluse_deny(rule_id: &str, reason: &str) -> DenyOutput {
             "permissionDecision": "deny",
             "permissionDecisionReason": format!("Blocked by Sigil rule {rule_id}: {reason}")
         }
+    });
+    DenyOutput {
+        stdout: Some(v.to_string()),
+        exit_code: 0,
+    }
+}
+
+/// Cursor/Grok-shaped deny: `{"decision":"deny","reason":"…"}` on stdout, exit 0.
+/// Grok honors the deny decision regardless of exit code. Reusable by a future
+/// cursor enforce.
+pub(crate) fn decision_deny(rule_id: &str, reason: &str) -> DenyOutput {
+    let v = serde_json::json!({
+        "decision": "deny",
+        "reason": format!("Blocked by Sigil rule {rule_id}: {reason}"),
     });
     DenyOutput {
         stdout: Some(v.to_string()),
@@ -55,6 +70,7 @@ pub fn for_agent(name: &str) -> Option<Box<dyn HookAdapter>> {
         "codex" => Some(Box::new(codex::Codex)),
         "cursor" => Some(Box::new(cursor::Cursor)),
         "antigravity" => Some(Box::new(antigravity::Antigravity)),
+        "grok" => Some(Box::new(grok::Grok)),
         _ => None,
     }
 }
@@ -85,5 +101,15 @@ mod tests {
             a.deny_output("no-rm", "destructive").stdout,
             pretooluse_deny("no-rm", "destructive").stdout
         );
+    }
+
+    #[test]
+    fn decision_deny_exact_json_and_exit0() {
+        let out = decision_deny("no-rm", "destructive");
+        assert_eq!(out.exit_code, 0);
+        let s = out.stdout.expect("deny prints stdout");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["decision"], "deny");
+        assert_eq!(v["reason"], "Blocked by Sigil rule no-rm: destructive");
     }
 }

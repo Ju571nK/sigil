@@ -259,6 +259,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             Cursor => &cursor_repos,
             Antigravity => &antigravity_repos,
             ClaudeDesktop => &[],
+            Grok => &[], // #110: no Grok project parser/workspace yet
             Other => &[],
         }
     };
@@ -1383,6 +1384,7 @@ pub(crate) fn tool_display_for_extscript(tool: sigil_core::event::AiTool) -> &'s
         AiTool::Gemini => "gemini",
         AiTool::Cursor => "cursor",
         AiTool::Antigravity => "antigravity",
+        AiTool::Grok => "grok",
         AiTool::Other => "other",
     }
 }
