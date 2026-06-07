@@ -760,7 +760,7 @@ fn drift_exit_code(kind: DriftKind) -> i32 {
     use sigil_core::hook_proto::DriftKind::*;
     match kind {
         BaselineAbsent => 3,
-        EntryMissing | CommandDrift | MatcherDrift => 2,
+        EntryMissing | CommandDrift | MatcherDrift | FailModeDrift => 2,
     }
 }
 
@@ -789,6 +789,10 @@ fn cmd_verify(_agent: &str) -> i32 {
             "[DRIFT] matcher changed: {:?} -> {:?} (matcher_drift)",
             report.expected_matcher.as_deref().unwrap_or("?"),
             report.observed_matcher.as_deref().unwrap_or("?"),
+        ),
+        DriftKind::FailModeDrift => println!(
+            "[DRIFT] hook fail-mode (failClosed) changed in {} (fail_mode_drift)",
+            report.settings_path
         ),
     }
 
@@ -828,5 +832,6 @@ mod tests {
         assert_eq!(drift_exit_code(EntryMissing), 2);
         assert_eq!(drift_exit_code(CommandDrift), 2);
         assert_eq!(drift_exit_code(MatcherDrift), 2);
+        assert_eq!(drift_exit_code(FailModeDrift), 2);
     }
 }

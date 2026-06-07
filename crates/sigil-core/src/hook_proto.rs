@@ -155,6 +155,7 @@ pub enum DriftKind {
     EntryMissing,
     CommandDrift,
     MatcherDrift,
+    FailModeDrift,
 }
 
 #[cfg(test)]
@@ -258,6 +259,12 @@ mod tests {
         assert!(s.contains("\"drift_kind\":\"matcher_drift\""));
         let back: HookDriftEnvelope = serde_json::from_str(&s).unwrap();
         assert_eq!(back, env);
+    }
+
+    #[test]
+    fn fail_mode_drift_serializes_snake_case() {
+        let s = serde_json::to_value(DriftKind::FailModeDrift).unwrap();
+        assert_eq!(s, serde_json::json!("fail_mode_drift"));
     }
 
     #[test]
