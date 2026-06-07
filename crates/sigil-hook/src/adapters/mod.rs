@@ -32,13 +32,31 @@ pub(crate) fn pretooluse_deny(rule_id: &str, reason: &str) -> DenyOutput {
     }
 }
 
-/// Cursor/Grok-shaped deny: `{"decision":"deny","reason":"…"}` on stdout, exit 0.
-/// Grok honors the deny decision regardless of exit code. Reusable by a future
-/// cursor enforce.
+/// Grok-shaped deny: `{"decision":"deny","reason":"…"}` on stdout, exit 0.
+/// Grok honors the deny decision regardless of exit code. (Cursor uses a
+/// different `permission`-keyed shape — see `permission_deny`.)
 pub(crate) fn decision_deny(rule_id: &str, reason: &str) -> DenyOutput {
     let v = serde_json::json!({
         "decision": "deny",
         "reason": format!("Blocked by Sigil rule {rule_id}: {reason}"),
+    });
+    DenyOutput {
+        stdout: Some(v.to_string()),
+        exit_code: 0,
+    }
+}
+
+/// Cursor-shaped deny: `{"permission":"deny","agent_message":"…","user_message":"…"}`
+/// on stdout, exit 0. Cursor's `beforeShellExecution`/`beforeMCPExecution` honor a
+/// stdout `permission` field on exit 0 (verified against its bundled hook skill).
+/// Distinct from Grok's `decision_deny` — different field name.
+#[allow(dead_code)] // wired up in the cursor enforce task (next)
+pub(crate) fn permission_deny(rule_id: &str, reason: &str) -> DenyOutput {
+    let msg = format!("Blocked by Sigil rule {rule_id}: {reason}");
+    let v = serde_json::json!({
+        "permission": "deny",
+        "agent_message": msg,
+        "user_message": msg,
     });
     DenyOutput {
         stdout: Some(v.to_string()),
@@ -111,5 +129,22 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["decision"], "deny");
         assert_eq!(v["reason"], "Blocked by Sigil rule no-rm: destructive");
+    }
+
+    #[test]
+    fn permission_deny_exact_json_and_exit0() {
+        let out = permission_deny("no-rm", "destructive");
+        assert_eq!(out.exit_code, 0);
+        let s = out.stdout.expect("deny prints stdout");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["permission"], "deny");
+        assert_eq!(
+            v["agent_message"],
+            "Blocked by Sigil rule no-rm: destructive"
+        );
+        assert_eq!(
+            v["user_message"],
+            "Blocked by Sigil rule no-rm: destructive"
+        );
     }
 }
