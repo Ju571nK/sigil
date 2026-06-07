@@ -50,7 +50,6 @@ pub(crate) fn decision_deny(rule_id: &str, reason: &str) -> DenyOutput {
 /// on stdout, exit 0. Cursor's `beforeShellExecution`/`beforeMCPExecution` honor a
 /// stdout `permission` field on exit 0 (verified against its bundled hook skill).
 /// Distinct from Grok's `decision_deny` — different field name.
-#[allow(dead_code)] // wired up in the cursor enforce task (next)
 pub(crate) fn permission_deny(rule_id: &str, reason: &str) -> DenyOutput {
     let msg = format!("Blocked by Sigil rule {rule_id}: {reason}");
     let v = serde_json::json!({

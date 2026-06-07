@@ -1,4 +1,4 @@
-use super::HookAdapter;
+use super::{permission_deny, DenyOutput, HookAdapter};
 use crate::redact::capture;
 use sigil_core::event::AiTool;
 use sigil_core::hook_proto::*;
@@ -91,6 +91,12 @@ impl HookAdapter for Cursor {
             cwd: p.get("cwd").and_then(|v| v.as_str()).map(String::from),
         })
     }
+
+    /// Cursor blocks via a stdout `{"permission":"deny", …}` on exit 0 — not the
+    /// default Claude PreToolUse JSON.
+    fn deny_output(&self, rule_id: &str, reason: &str) -> DenyOutput {
+        permission_deny(rule_id, reason)
+    }
 }
 
 #[cfg(test)]
@@ -149,5 +155,20 @@ mod tests {
             Cursor.normalize(&p, CaptureLevel::Redacted).unwrap_err(),
             CaptureStatus::Malformed
         );
+    }
+
+    #[test]
+    fn deny_output_is_permission_deny() {
+        let out = Cursor.deny_output("no-rm", "destructive");
+        assert_eq!(out.exit_code, 0);
+        let s = out.stdout.expect("deny prints stdout");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["permission"], "deny");
+        assert_eq!(
+            v["agent_message"],
+            "Blocked by Sigil rule no-rm: destructive"
+        );
+        // NOT the default Claude PreToolUse shape
+        assert!(v.get("hookSpecificOutput").is_none());
     }
 }
