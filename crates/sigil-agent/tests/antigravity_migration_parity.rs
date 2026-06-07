@@ -81,3 +81,79 @@ fn pilot_pack_deserializes_with_real_serde_shape() {
     // v2 + a `when` gate must pass the loadability gate (v1 + when is rejected).
     assert!(sigil_agent::ai_guard::rule_pack::pack_is_loadable(&pack));
 }
+
+// ---------------------------------------------------------------------------
+// Task 2 — parity harness (rewire / diff / multiset)
+// ---------------------------------------------------------------------------
+
+use sigil_agent::ai_guard::parser::AiGuardParser;
+use sigil_agent::ai_guard::{AntigravityParser, RulePackParser};
+use sigil_core::event::AiGuardReason;
+use std::path::Path;
+
+/// Rewire the pack's `~` on_file paths to `home`, so the pack reads the same
+/// tempdir the AntigravityParser does. (UserGlobal RulePackParser env-expands
+/// on_file; an absolute path passes through unchanged.)
+fn rewired_pack(home: &Path) -> RulePack {
+    let mut pack: RulePack = serde_yaml::from_str(PILOT_PACK).unwrap();
+    let home_str = home.to_string_lossy();
+    for r in &mut pack.rules {
+        r.on_file = r.on_file.replacen('~', &home_str, 1);
+    }
+    pack
+}
+
+// used by later parity-fixture tasks (#102)
+#[allow(dead_code)]
+fn write_file(home: &Path, rel: &str, body: &str) {
+    let p = home.join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, body).unwrap();
+}
+
+/// Canonical multiset key for an AiGuardReason (serialized JSON).
+fn key(r: &AiGuardReason) -> String {
+    serde_json::to_string(r).unwrap()
+}
+
+/// Multiset difference a - b (keeps duplicates), sorted.
+fn multiset_minus(a: &[AiGuardReason], b: &[AiGuardReason]) -> Vec<String> {
+    let mut remaining: Vec<String> = b.iter().map(key).collect();
+    let mut only = Vec::new();
+    for r in a {
+        let k = key(r);
+        if let Some(pos) = remaining.iter().position(|x| *x == k) {
+            remaining.remove(pos); // matched -> consume one
+        } else {
+            only.push(k);
+        }
+    }
+    only.sort();
+    only
+}
+
+struct Divergence {
+    parser_only: Vec<String>,
+    pack_only: Vec<String>,
+}
+
+/// Run BOTH parsers over `home` and classify. Both must succeed (Ok).
+fn diff(home: &Path) -> Divergence {
+    let parser_reasons = AntigravityParser.assess(home).expect("parser assess Ok");
+    let pack_reasons = RulePackParser::new(rewired_pack(home))
+        .expect("pack loads")
+        .assess(home)
+        .expect("pack assess Ok");
+    Divergence {
+        parser_only: multiset_minus(&parser_reasons, &pack_reasons),
+        pack_only: multiset_minus(&pack_reasons, &parser_reasons),
+    }
+}
+
+#[test]
+fn empty_home_is_full_parity() {
+    let home = tempfile::tempdir().unwrap();
+    let d = diff(home.path());
+    assert!(d.parser_only.is_empty(), "parser_only: {:?}", d.parser_only);
+    assert!(d.pack_only.is_empty(), "pack_only: {:?}", d.pack_only);
+}
