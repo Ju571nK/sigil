@@ -103,8 +103,6 @@ fn rewired_pack(home: &Path) -> RulePack {
     pack
 }
 
-// used by later parity-fixture tasks (#102)
-#[allow(dead_code)]
 fn write_file(home: &Path, rel: &str, body: &str) {
     let p = home.join(rel);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -156,4 +154,87 @@ fn empty_home_is_full_parity() {
     let d = diff(home.path());
     assert!(d.parser_only.is_empty(), "parser_only: {:?}", d.parser_only);
     assert!(d.pack_only.is_empty(), "pack_only: {:?}", d.pack_only);
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 — parity fixtures (happy-path + must-not-fire)
+// ---------------------------------------------------------------------------
+
+/// Assert full parity (no divergence in either direction) for a given on-disk state.
+fn assert_parity(settings: Option<&str>, mcp: Option<&str>) {
+    let home = tempfile::tempdir().unwrap();
+    if let Some(s) = settings {
+        write_file(home.path(), ".gemini/antigravity-cli/settings.json", s);
+    }
+    if let Some(m) = mcp {
+        write_file(home.path(), ".gemini/config/mcp_config.json", m);
+    }
+    let d = diff(home.path());
+    assert!(
+        d.parser_only.is_empty(),
+        "parser_only not empty: {:?}",
+        d.parser_only
+    );
+    assert!(
+        d.pack_only.is_empty(),
+        "pack_only not empty: {:?}",
+        d.pack_only
+    );
+}
+
+#[test]
+fn parity_sandbox_false() {
+    assert_parity(Some(r#"{"enableTerminalSandbox":false}"#), None);
+}
+#[test]
+fn parity_toolperm_auto_approve() {
+    assert_parity(Some(r#"{"toolPermission":"auto-approve"}"#), None);
+}
+#[test]
+fn parity_allowall_bool_true() {
+    assert_parity(Some(r#"{"permissions":{"allowAll":true}}"#), None);
+}
+#[test]
+fn parity_remote_url() {
+    assert_parity(
+        None,
+        Some(r#"{"mcpServers":{"a":{"url":"https://x/mcp"}}}"#),
+    );
+}
+#[test]
+fn parity_remote_httpurl() {
+    assert_parity(
+        None,
+        Some(r#"{"mcpServers":{"a":{"httpUrl":"https://x/mcp"}}}"#),
+    );
+}
+#[test]
+fn parity_trust_bool_true() {
+    assert_parity(
+        None,
+        Some(r#"{"mcpServers":{"a":{"command":"node","trust":true}}}"#),
+    );
+}
+#[test]
+fn parity_string_command() {
+    assert_parity(
+        None,
+        Some(r#"{"mcpServers":{"a":{"command":"node","args":["m.js"]}}}"#),
+    );
+}
+#[test]
+fn parity_sandbox_true_silent() {
+    assert_parity(Some(r#"{"enableTerminalSandbox":true}"#), None);
+}
+#[test]
+fn parity_absent_key_silent() {
+    assert_parity(Some(r#"{}"#), None);
+}
+#[test]
+fn parity_request_review_silent() {
+    assert_parity(Some(r#"{"toolPermission":"request-review"}"#), None);
+}
+#[test]
+fn parity_dropped_gemini_approval_mode_silent() {
+    assert_parity(Some(r#"{"approval_mode":"yolo"}"#), None);
 }
