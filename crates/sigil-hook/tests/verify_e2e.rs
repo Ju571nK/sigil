@@ -25,7 +25,7 @@ fn setup(state: &std::path::Path, settings: &std::path::Path, matcher: &str, set
     let dir = state.join("sigil");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("hook-registration.json"),
+        dir.join("hook-registration-claude-code.json"),
         serde_json::to_vec(&baseline).unwrap(),
     )
     .unwrap();

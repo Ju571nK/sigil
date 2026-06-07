@@ -128,13 +128,11 @@ pub(crate) fn cursor_entry_is_ours(entry: &Value, exe: &str) -> bool {
 }
 
 /// The `command` string of a Cursor settings entry, if present.
-#[allow(dead_code)] // consumed by verify.rs in #120 Task 4
 pub(crate) fn cursor_entry_command(entry: &Value) -> Option<&str> {
     entry.get("command").and_then(|c| c.as_str())
 }
 
 /// Effective `failClosed` of a Cursor entry — absent means false (Cursor default).
-#[allow(dead_code)] // consumed by verify.rs in #120 Task 4
 pub(crate) fn cursor_entry_fail_closed(entry: &Value) -> bool {
     entry
         .get("failClosed")
@@ -362,7 +360,6 @@ pub(crate) fn baseline_path_in(dir: &std::path::Path, agent: &str) -> Option<Pat
     Some(dir.join(format!("hook-registration-{agent}.json")))
 }
 
-#[allow(dead_code)] // consumed by verify.rs in #120 Task 4
 pub(crate) fn baseline_path(agent: &str) -> Option<PathBuf> {
     baseline_path_in(&state_dir(), agent)
 }

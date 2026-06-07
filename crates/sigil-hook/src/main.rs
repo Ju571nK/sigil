@@ -764,10 +764,22 @@ fn drift_exit_code(kind: DriftKind) -> i32 {
     }
 }
 
-fn cmd_verify(_agent: &str) -> i32 {
+fn cmd_verify(agent: &str) -> i32 {
     use sigil_core::event::AiTool;
 
-    let Some(report) = verify::check() else {
+    // TODO(#120 follow-on): consolidate this agent→AiTool table with install::agent_format
+    // when more agents (grok/antigravity) gain verify support — keep the two in sync until then.
+    let aitool = match agent {
+        "claude-code" => AiTool::ClaudeCode,
+        "codex" => AiTool::Codex,
+        "cursor" => AiTool::Cursor,
+        other => {
+            eprintln!("sigil-hook verify: unsupported --agent '{other}' (expected: claude-code, codex, cursor)");
+            return 1; // usage error — distinct from drift (2) / baseline_absent (3) / clean (0)
+        }
+    };
+
+    let Some(report) = verify::check(agent) else {
         println!("[OK]    hook registration matches baseline");
         return 0;
     };
@@ -791,8 +803,8 @@ fn cmd_verify(_agent: &str) -> i32 {
             report.observed_matcher.as_deref().unwrap_or("?"),
         ),
         DriftKind::FailModeDrift => println!(
-            "[DRIFT] hook fail-mode (failClosed) changed in {} (fail_mode_drift)",
-            report.settings_path
+            "[DRIFT] fail-mode changed in {}: failClosed {:?} -> {:?} (fail_mode_drift)",
+            report.settings_path, report.expected_fail_closed, report.observed_fail_closed
         ),
     }
 
@@ -806,7 +818,7 @@ fn cmd_verify(_agent: &str) -> i32 {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0),
         payload: HookConfigDriftReport {
-            agent: AiTool::ClaudeCode, // slice 1
+            agent: aitool,
             drift_kind: report.kind,
             settings_path: report.settings_path.clone(),
             expected_command_hash: report.expected_command_hash.clone(),
