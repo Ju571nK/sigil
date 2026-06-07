@@ -383,6 +383,7 @@ fn print_ai_guard_live(rep: &crate::control::DoctorAiGuardReport) {
                 sigil_core::event::AiTool::Gemini => "gemini",
                 sigil_core::event::AiTool::Cursor => "cursor",
                 sigil_core::event::AiTool::Antigravity => "antigravity",
+                sigil_core::event::AiTool::Grok => "grok",
                 sigil_core::event::AiTool::Other => "other",
             };
             let scope_str = match &r.scope {
@@ -428,6 +429,7 @@ fn format_parsers_summary(parsers: &[crate::control::ParserInfo]) -> String {
             sigil_core::event::AiTool::Gemini => "gemini",
             sigil_core::event::AiTool::Cursor => "cursor",
             sigil_core::event::AiTool::Antigravity => "antigravity",
+            sigil_core::event::AiTool::Grok => "grok",
             sigil_core::event::AiTool::Other => "other",
         };
         *counts.entry(key.to_string()).or_insert(0) += 1;

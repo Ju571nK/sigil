@@ -577,9 +577,10 @@ fn show_risk(tool: Option<String>, pretty: bool) -> anyhow::Result<i32> {
         Some("codex") => Some(sigil_core::event::AiTool::Codex),
         Some("gemini") => Some(sigil_core::event::AiTool::Gemini),
         Some("cursor") => Some(sigil_core::event::AiTool::Cursor),
+        Some("grok") => Some(sigil_core::event::AiTool::Grok),
         Some("other") => Some(sigil_core::event::AiTool::Other),
         Some(other) => {
-            eprintln!("sigil show risk: unknown --tool '{other}' (expected: claude-code, codex, gemini, cursor)");
+            eprintln!("sigil show risk: unknown --tool '{other}' (expected: claude-code, codex, gemini, cursor, grok)");
             return Ok(2);
         }
     };
@@ -634,6 +635,7 @@ fn write_risk_pretty(w: &mut impl Write, p: &RiskPayload) -> io::Result<()> {
             sigil_core::event::AiTool::Gemini => "gemini",
             sigil_core::event::AiTool::Cursor => "cursor",
             sigil_core::event::AiTool::Antigravity => "antigravity",
+            sigil_core::event::AiTool::Grok => "grok",
             sigil_core::event::AiTool::Other => "other",
         };
         // Use the serde wire string (snake_case) rather than Debug. Robust

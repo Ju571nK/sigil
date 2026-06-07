@@ -118,6 +118,8 @@ pub enum AiTool {
     /// Antigravity (Google) — successor to Gemini CLI (Gemini CLI sunset
     /// 2026-06-18). Config reuses the `~/.gemini/` tree. Wire string: "antigravity".
     Antigravity,
+    /// Grok Build (xAI) terminal coding agent. Wire string: "grok".
+    Grok,
     /// Phase 3b.7.5 — an operator-defined tool with no built-in parser. Wire
     /// string: "other". The human name rides `tool_label` (rule pack + event),
     /// never inside the enum, so AiTool stays Copy + a bare-string wire value.
@@ -877,6 +879,13 @@ mod tests {
             serde_json::from_str::<AiTool>(r#""other""#).unwrap(),
             AiTool::Other
         );
+    }
+
+    #[test]
+    fn aitool_grok_wire_string_roundtrips() {
+        assert_eq!(serde_json::to_string(&AiTool::Grok).unwrap(), "\"grok\"");
+        let back: AiTool = serde_json::from_str("\"grok\"").unwrap();
+        assert_eq!(back, AiTool::Grok);
     }
 
     #[test]
