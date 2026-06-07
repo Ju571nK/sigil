@@ -3,6 +3,7 @@ mod decide;
 mod emit;
 mod install;
 mod install_antigravity;
+mod install_grok;
 mod redact;
 mod verify;
 
@@ -186,12 +187,25 @@ enum Cmd {
         capture: CaptureArg,
     },
 
+    /// Grok Build PreToolUse entrypoint: observe (emit, exit 0), or --enforce (deny-decision path).
+    Grok {
+        #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
+        capture: CaptureArg,
+        /// Stage 2: run the synchronous deny-decision path instead of observe.
+        #[arg(long)]
+        enforce: bool,
+        /// Behavior when no verdict is obtainable. Default open (fail-open).
+        #[arg(long, value_enum, default_value_t = OnFailureArg::Open)]
+        on_failure: OnFailureArg,
+    },
+
     /// Print (or write) the sigil-hook registration for an agent.
     ///
     /// claude-code | codex | cursor merge into a settings JSON file; antigravity
-    /// is registered as an `agy` plugin bundle (`agy plugin install`).
+    /// is registered as an `agy` plugin bundle (`agy plugin install`); grok
+    /// writes a dedicated ~/.grok/hooks/sigil-hook.json file.
     Install {
-        /// Agent to register with: claude-code | codex | cursor | antigravity.
+        /// Agent to register with: claude-code | codex | cursor | antigravity | grok.
         #[arg(long, default_value = INSTALL_AGENT_DEFAULT)]
         agent: String,
         /// Apply the change to the settings file (default: print only).
@@ -350,6 +364,17 @@ fn main() {
         }
         Cmd::Cursor { capture } => run_hook("cursor", capture.into()),
         Cmd::Antigravity { capture } => run_hook("antigravity", capture.into()),
+        Cmd::Grok {
+            capture,
+            enforce,
+            on_failure,
+        } => {
+            if enforce {
+                run_enforce("grok", capture.into(), on_failure)
+            } else {
+                run_hook("grok", capture.into())
+            }
+        }
         Cmd::Install {
             agent,
             write,
@@ -394,6 +419,12 @@ fn cmd_install(
         return cmd_install_antigravity(&exe, write, capture_str);
     }
 
+    // Grok is not a settings-merge agent: it writes a dedicated
+    // ~/.grok/hooks/sigil-hook.json file. Route before settings_path.
+    if agent == "grok" {
+        return cmd_install_grok(&exe, write, capture_str, enforce, on_failure_str);
+    }
+
     if !write {
         if enforce {
             print!(
@@ -411,9 +442,9 @@ fn cmd_install(
     // guard explicitly so we never write a misleading settings file or print a
     // confusing "already installed (no change)" message. (antigravity is routed
     // to its own plugin path before this point.)
-    if enforce && !matches!(agent, "claude-code" | "codex") {
+    if enforce && !matches!(agent, "claude-code" | "codex" | "grok") {
         eprintln!(
-            "error: enforce-mode install is only supported for claude-code/codex in this slice (agent '{agent}' not registered)"
+            "error: enforce-mode install is only supported for claude-code/codex/grok in this slice (agent '{agent}' not registered)"
         );
         std::process::exit(1);
     }
@@ -496,6 +527,10 @@ fn cmd_uninstall(agent: &str, write: bool) {
         return cmd_uninstall_antigravity(write);
     }
 
+    if agent == "grok" {
+        return cmd_uninstall_grok(write);
+    }
+
     let sp = match install::settings_path(agent) {
         Some(p) => p,
         None => {
@@ -557,6 +592,51 @@ fn cmd_uninstall(agent: &str, write: bool) {
         "sigil-hook: removed {count} entry/entries for {agent} from {}",
         sp.display()
     );
+}
+
+/// Grok install: write ~/.grok/hooks/sigil-hook.json (Grok's always-trusted
+/// native hook dir). Without `--write`, print the JSON + target path.
+fn cmd_install_grok(exe: &str, write: bool, capture: &str, enforce: bool, on_failure: &str) {
+    let v = install_grok::hook_json(exe, capture, enforce, on_failure);
+    let Some(path) = install_grok::hook_file() else {
+        eprintln!("cannot resolve home dir");
+        std::process::exit(1);
+    };
+    if !write {
+        println!(
+            "// Write this to {}:\n{}",
+            path.display(),
+            serde_json::to_string_pretty(&v).unwrap()
+        );
+        return;
+    }
+    match install_grok::write_file_at(&path, &v) {
+        Ok(()) => println!("installed grok hook → {}", path.display()),
+        Err(e) => {
+            eprintln!("write failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Grok uninstall: remove ~/.grok/hooks/sigil-hook.json.
+/// Without `--write`, print what would be removed.
+fn cmd_uninstall_grok(write: bool) {
+    let Some(path) = install_grok::hook_file() else {
+        eprintln!("cannot resolve home dir");
+        std::process::exit(1);
+    };
+    if !write {
+        println!("// Would remove {}", path.display());
+        return;
+    }
+    match install_grok::remove_file_at(&path) {
+        Ok(()) => println!("removed {}", path.display()),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Antigravity install: materialize the plugin bundle, then register it with
