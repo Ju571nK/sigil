@@ -1,11 +1,11 @@
-//! CLI e2e (#100): `sigil-hook install --agent cursor --enforce --write` must
+//! CLI e2e (#100, #120): `sigil-hook install --agent cursor --enforce --write` must
 //! actually write both Cursor gate events with the enforce command (+failClosed
-//! when closed), and must NOT write an install baseline for cursor (spec D6).
+//! when closed), and must write a per-agent baseline (hook-registration-cursor.json).
 #![cfg(unix)]
 use std::process::Command;
 
 #[test]
-fn cursor_enforce_install_writes_both_events_and_no_baseline() {
+fn cursor_enforce_install_writes_both_events_and_writes_baseline() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     let state = home.join("state");
@@ -46,9 +46,19 @@ fn cursor_enforce_install_writes_both_events_and_no_baseline() {
         );
     }
 
-    // D6: no baseline written for cursor.
+    // #120: cursor now writes a per-agent baseline (the #119 D6 gate is removed).
+    let baseline = state.join("sigil/hook-registration-cursor.json");
     assert!(
-        !state.join("sigil/hook-registration.json").exists(),
-        "cursor install must not write a verify baseline"
+        baseline.exists(),
+        "cursor install must write its per-agent baseline"
+    );
+    let b: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&baseline).unwrap()).unwrap();
+    assert_eq!(b["agent"], "cursor");
+    // installed with --on-failure closed
+    assert_eq!(
+        b["fail_closed"],
+        serde_json::json!(true),
+        "baseline must record fail_closed=true when installed with --on-failure closed"
     );
 }

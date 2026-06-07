@@ -529,13 +529,12 @@ fn cmd_install(
         std::process::exit(1);
     }
 
-    // Write baseline / update discovery index. Only for agents whose `verify`
-    // path is implemented (claude-code/codex). Cursor's settings use
-    // beforeShellExecution/beforeMCPExecution, which slice-1 verify can't check,
-    // and the baseline is a single global file — a cursor baseline would both
-    // false-positive `verify` and clobber the claude one (spec D6). (grok and
-    // antigravity never reach here; they return to their own install fns above.)
-    if matches!(agent, "claude-code" | "codex") {
+    // Write baseline / update discovery index. For agents whose `verify`
+    // path is implemented. Cursor gained format-aware verify in #120 (per-agent
+    // baseline file hook-registration-cursor.json), so the #119 D6 exclusion
+    // is removed. (grok and antigravity never reach here; they return to their
+    // own install fns above.)
+    if matches!(agent, "claude-code" | "codex" | "cursor") {
         if let Err(e) = install::write_baseline(
             agent,
             &sp,
@@ -760,14 +759,26 @@ fn drift_exit_code(kind: DriftKind) -> i32 {
     use sigil_core::hook_proto::DriftKind::*;
     match kind {
         BaselineAbsent => 3,
-        EntryMissing | CommandDrift | MatcherDrift => 2,
+        EntryMissing | CommandDrift | MatcherDrift | FailModeDrift => 2,
     }
 }
 
-fn cmd_verify(_agent: &str) -> i32 {
+fn cmd_verify(agent: &str) -> i32 {
     use sigil_core::event::AiTool;
 
-    let Some(report) = verify::check() else {
+    // TODO(#120 follow-on): consolidate this agent→AiTool table with install::agent_format
+    // when more agents (grok/antigravity) gain verify support — keep the two in sync until then.
+    let aitool = match agent {
+        "claude-code" => AiTool::ClaudeCode,
+        "codex" => AiTool::Codex,
+        "cursor" => AiTool::Cursor,
+        other => {
+            eprintln!("sigil-hook verify: unsupported --agent '{other}' (expected: claude-code, codex, cursor)");
+            return 1; // usage error — distinct from drift (2) / baseline_absent (3) / clean (0)
+        }
+    };
+
+    let Some(report) = verify::check(agent) else {
         println!("[OK]    hook registration matches baseline");
         return 0;
     };
@@ -790,6 +801,10 @@ fn cmd_verify(_agent: &str) -> i32 {
             report.expected_matcher.as_deref().unwrap_or("?"),
             report.observed_matcher.as_deref().unwrap_or("?"),
         ),
+        DriftKind::FailModeDrift => println!(
+            "[DRIFT] fail-mode changed in {}: failClosed {:?} -> {:?} (fail_mode_drift)",
+            report.settings_path, report.expected_fail_closed, report.observed_fail_closed
+        ),
     }
 
     // Best-effort emit over hook.sock (agent-down -> still printed + exits).
@@ -802,7 +817,7 @@ fn cmd_verify(_agent: &str) -> i32 {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0),
         payload: HookConfigDriftReport {
-            agent: AiTool::ClaudeCode, // slice 1
+            agent: aitool,
             drift_kind: report.kind,
             settings_path: report.settings_path.clone(),
             expected_command_hash: report.expected_command_hash.clone(),
@@ -828,5 +843,6 @@ mod tests {
         assert_eq!(drift_exit_code(EntryMissing), 2);
         assert_eq!(drift_exit_code(CommandDrift), 2);
         assert_eq!(drift_exit_code(MatcherDrift), 2);
+        assert_eq!(drift_exit_code(FailModeDrift), 2);
     }
 }

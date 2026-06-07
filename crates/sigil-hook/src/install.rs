@@ -20,15 +20,15 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Copy, PartialEq)]
-enum HookFormat {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookFormat {
     /// `root.hooks.PreToolUse[]` — Claude Code, Codex.
     NestedPreToolUse,
     /// `root.version` + `root.hooks.{beforeShellExecution,beforeMCPExecution}[]`.
     Cursor,
 }
 
-fn agent_format(agent: &str) -> Option<HookFormat> {
+pub(crate) fn agent_format(agent: &str) -> Option<HookFormat> {
     match agent {
         "claude-code" | "codex" => Some(HookFormat::NestedPreToolUse),
         "cursor" => Some(HookFormat::Cursor),
@@ -36,7 +36,7 @@ fn agent_format(agent: &str) -> Option<HookFormat> {
     }
 }
 
-const CURSOR_EVENTS: [&str; 2] = ["beforeShellExecution", "beforeMCPExecution"];
+pub(crate) const CURSOR_EVENTS: [&str; 2] = ["beforeShellExecution", "beforeMCPExecution"];
 
 fn command_string(exe: &str, agent: &str, capture: &str) -> String {
     format!("{exe} {agent} --capture {capture}")
@@ -119,11 +119,24 @@ fn merge_claude(arr: &mut Vec<Value>, exe: &str, cmd: &str) -> bool {
 
 // --- Cursor helpers ---
 
-fn cursor_entry_is_ours(entry: &Value, exe: &str) -> bool {
+pub(crate) fn cursor_entry_is_ours(entry: &Value, exe: &str) -> bool {
     entry
         .get("command")
         .and_then(|c| c.as_str())
         .map(|c| first_token(c) == exe)
+        .unwrap_or(false)
+}
+
+/// The `command` string of a Cursor settings entry, if present.
+pub(crate) fn cursor_entry_command(entry: &Value) -> Option<&str> {
+    entry.get("command").and_then(|c| c.as_str())
+}
+
+/// Effective `failClosed` of a Cursor entry — absent means false (Cursor default).
+pub(crate) fn cursor_entry_fail_closed(entry: &Value) -> bool {
+    entry
+        .get("failClosed")
+        .and_then(|v| v.as_bool())
         .unwrap_or(false)
 }
 
@@ -340,6 +353,17 @@ pub fn state_dir() -> PathBuf {
     }
 }
 
+/// Per-agent baseline path, only for agents with a known hook format (so a raw
+/// `--agent` string can never be interpolated into a traversal path).
+pub(crate) fn baseline_path_in(dir: &std::path::Path, agent: &str) -> Option<PathBuf> {
+    agent_format(agent)?; // validate: known slug only
+    Some(dir.join(format!("hook-registration-{agent}.json")))
+}
+
+pub(crate) fn baseline_path(agent: &str) -> Option<PathBuf> {
+    baseline_path_in(&state_dir(), agent)
+}
+
 /// Map agent name → absolute path to its hook config file.
 pub fn settings_path(agent: &str) -> Option<PathBuf> {
     let home = home_dir()?;
@@ -378,7 +402,7 @@ pub fn write_baseline(
 }
 
 /// Directory-injectable core of [`write_baseline`]: writes
-/// `dir/hook-registration.json` + appends to `dir/hook-index.json`. Kept
+/// `dir/hook-registration-<agent>.json` + appends to `dir/hook-index.json`. Kept
 /// separate so tests can supply a temp dir without touching the process-global
 /// `XDG_STATE_HOME` env var (which would race other tests).
 #[allow(clippy::too_many_arguments)]
@@ -408,6 +432,9 @@ fn write_baseline_in(
 
     let settings_path_str = settings_path.to_string_lossy().to_string();
 
+    let fail_closed: Option<bool> = (agent_format(agent) == Some(HookFormat::Cursor))
+        .then(|| enforce && on_failure == "closed");
+
     let baseline = json!({
         "agent": agent,
         "settings_path": settings_path_str,
@@ -415,10 +442,12 @@ fn write_baseline_in(
         "capture": capture,
         "matcher": matcher,
         "block_hash": block_hash,
+        "fail_closed": fail_closed,        // null for claude/codex; bool for cursor
         "written_at_unix": written_at_unix,
     });
 
-    let reg_path = dir.join("hook-registration.json");
+    let reg_path = baseline_path_in(dir, agent)
+        .ok_or_else(|| io::Error::other(format!("unknown agent for baseline: {agent}")))?;
     let pretty = serde_json::to_string_pretty(&baseline).map_err(io::Error::other)?;
     std::fs::write(&reg_path, pretty.as_bytes())?;
 
@@ -647,6 +676,20 @@ mod tests {
     }
 
     #[test]
+    fn cursor_entry_accessors() {
+        let e = json!({ "command": "/x/sigil-hook cursor --enforce", "failClosed": true });
+        assert_eq!(
+            cursor_entry_command(&e),
+            Some("/x/sigil-hook cursor --enforce")
+        );
+        assert!(cursor_entry_fail_closed(&e));
+        let no_fc = json!({ "command": "/x/sigil-hook cursor" });
+        assert!(!cursor_entry_fail_closed(&no_fc)); // absent = false (Cursor default)
+        assert_eq!(cursor_entry_command(&json!({})), None); // command absent → None
+        assert!(!cursor_entry_fail_closed(&json!({ "failClosed": "yes" }))); // non-bool → false
+    }
+
+    #[test]
     fn cursor_enforce_to_observe_strips_enforce() {
         let mut v = json!({});
         merge_into_enforce(&mut v, "/abs/sigil-hook", "cursor", "redacted", "closed");
@@ -700,7 +743,7 @@ mod tests {
             on_failure,
         )
         .unwrap();
-        let raw = std::fs::read(dir.join("hook-registration.json")).unwrap();
+        let raw = std::fs::read(baseline_path_in(dir, "claude-code").unwrap()).unwrap();
         serde_json::from_slice(&raw).unwrap()
     }
 
@@ -750,5 +793,61 @@ mod tests {
             cmd.contains("--capture redacted"),
             "non-enforce baseline must contain --capture, got: {cmd}"
         );
+    }
+
+    #[test]
+    fn baseline_path_is_per_agent_and_validated() {
+        let dir = std::path::Path::new("/state");
+        assert_eq!(
+            baseline_path_in(dir, "cursor").unwrap(),
+            dir.join("hook-registration-cursor.json")
+        );
+        assert!(baseline_path_in(dir, "../evil").is_none()); // unknown slug → no path
+    }
+
+    #[test]
+    fn write_baseline_per_agent_no_clobber_and_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        // claude (observe) then cursor (enforce closed) → two distinct files
+        write_baseline_in(
+            dir.path(),
+            "claude-code",
+            std::path::Path::new("/h/.claude/settings.json"),
+            "/x/sigil-hook",
+            "claude-code",
+            "redacted",
+            "*",
+            false,
+            "open",
+        )
+        .unwrap();
+        write_baseline_in(
+            dir.path(),
+            "cursor",
+            std::path::Path::new("/h/.cursor/hooks.json"),
+            "/x/sigil-hook",
+            "cursor",
+            "redacted",
+            "*",
+            true,
+            "closed",
+        )
+        .unwrap();
+
+        let claude: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("hook-registration-claude-code.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claude["agent"], "claude-code");
+        assert!(claude["matcher"].is_string());
+        assert!(claude["fail_closed"].is_null()); // claude → no fail_closed
+
+        let cursor: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("hook-registration-cursor.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cursor["agent"], "cursor");
+        assert_eq!(cursor["fail_closed"], serde_json::json!(true)); // enforce + closed
+        assert!(cursor["matcher"].is_string()); // matcher kept for wire continuity
     }
 }
