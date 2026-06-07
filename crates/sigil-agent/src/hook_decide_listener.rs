@@ -1,7 +1,6 @@
 //! Stage 2 (#100): hook-decide.sock request/response listener. Distinct from
 //! the one-way `hook_listener` — here the agent MUST answer, and a deny is
 //! recorded reliably (awaited) before the verdict is returned.
-use crate::hook_deny::DenyEvaluator;
 use crate::hook_listener::to_event;
 use crate::state_task::CommittableEvent;
 use sigil_core::event::{
@@ -26,7 +25,7 @@ pub async fn serve(
     socket: PathBuf,
     tx: mpsc::Sender<CommittableEvent>,
     host_id: String,
-    evaluator: Arc<DenyEvaluator>,
+    evaluator: crate::hook_deny::SharedEvaluator,
     activity_map: crate::hook_silence::ActivityMap,
 ) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -111,7 +110,9 @@ pub async fn serve(
             });
 
             // 2) Decide.
-            let verdict = match evaluator.evaluate(&action) {
+            // Snapshot the evaluator Arc without holding the read-guard across any await.
+            let ev = { std::sync::Arc::clone(&*evaluator.read()) };
+            let verdict = match ev.evaluate(&action) {
                 Some((rule_id, reason)) => {
                     // Record HookDecision(deny) RELIABLY before responding.
                     let ev = decision_event(
@@ -219,6 +220,7 @@ fn decision_event(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::hook_deny::DenyEvaluator;
     use sigil_core::hook_proto::{CaptureLevel, CaptureStatus, HookInvocation};
     use sigil_core::policy::{DenyRule, HookActionMatch, Matcher};
     use std::time::Duration;
@@ -263,17 +265,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("hook-decide.sock");
         let (tx, mut rx) = mpsc::channel(16);
-        let ev = Arc::new(
-            DenyEvaluator::new(&[DenyRule {
-                id: "no-rm".into(),
-                match_: HookActionMatch::Bash {
-                    command: Matcher::Regex {
-                        pattern: r"rm\s+-rf".into(),
+        let ev: crate::hook_deny::SharedEvaluator =
+            std::sync::Arc::new(parking_lot::RwLock::new(std::sync::Arc::new(
+                DenyEvaluator::new(&[DenyRule {
+                    id: "no-rm".into(),
+                    match_: HookActionMatch::Bash {
+                        command: Matcher::Regex {
+                            pattern: r"rm\s+-rf".into(),
+                        },
                     },
-                },
-            }])
-            .unwrap(),
-        );
+                }])
+                .unwrap(),
+            )));
         let sock2 = socket.clone();
         tokio::spawn(async move {
             let _ = serve(

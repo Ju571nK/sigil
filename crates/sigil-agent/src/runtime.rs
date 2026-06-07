@@ -532,6 +532,20 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         }),
     );
 
+    // #115 — shared, hot-swappable deny evaluator.  Built once from the
+    // effective policy at startup; policy_reload_task rebuilds+swaps on each
+    // reload; hook_decide_listener snapshots per-request (no guard across await).
+    let shared_evaluator: crate::hook_deny::SharedEvaluator = {
+        let initial = match crate::hook_deny::DenyEvaluator::new(&effective.hook_deny_rules) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = ?e, "hook deny rules failed to compile; enforcement disabled (fail-open)");
+                crate::hook_deny::DenyEvaluator::new(&[]).unwrap()
+            }
+        };
+        Arc::new(parking_lot::RwLock::new(Arc::new(initial)))
+    };
+
     // Live policy reload: on a successful `apply_policy`, re-derive watch
     // targets/roots from the new policy.yaml and apply them to the running
     // pipeline + watcher (no restart). Owns the watcher handle + targets sender.
@@ -552,6 +566,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 ai_guard_state: ai_guard_state.clone(),
                 ext_scripts: ext_scripts_registry.clone(),
                 rubric: rubric_handle.clone(),
+                shared_evaluator: shared_evaluator.clone(),
             },
         )),
     );
@@ -796,24 +811,15 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Hook decide listener (sigil-hook Stage 2): bidirectional socket at
     // `hook-decide.sock`. Agents write HookDecideRequest JSON; server
-    // evaluates deny rules and replies with HookDecideResponse. Built from
-    // the loaded policy's hook_deny_rules at startup (no hot-reload in slice 1).
+    // evaluates deny rules and replies with HookDecideResponse. The evaluator
+    // is hot-reloadable via shared_evaluator (rebuilt on policy reload, #115).
     #[cfg(unix)]
     {
         let decide_sock = cfg.control_socket.with_file_name("hook-decide.sock");
         let tx_decide = tx_sink.clone();
         let host_id_decide = host_id.clone();
-        // Build the evaluator from policy deny rules; a malformed regex disables
-        // enforcement (empty evaluator) rather than crashing — fail-open.
-        let evaluator = match crate::hook_deny::DenyEvaluator::new(&effective.hook_deny_rules) {
-            Ok(e) => Arc::new(e),
-            Err(e) => {
-                tracing::warn!(error = ?e, "hook deny rules failed to compile; enforcement disabled (fail-open)");
-                // safe: empty rules compile infallibly (no regex to compile)
-                Arc::new(crate::hook_deny::DenyEvaluator::new(&[]).unwrap())
-            }
-        };
         let decide_activity_map = activity_map.clone();
+        let se = shared_evaluator.clone();
         sup.track(
             "hook_decide_listener",
             tokio::spawn(async move {
@@ -821,7 +827,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                     decide_sock.clone(),
                     tx_decide,
                     host_id_decide,
-                    evaluator,
+                    se,
                     decide_activity_map,
                 )
                 .await
