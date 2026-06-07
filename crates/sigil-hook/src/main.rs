@@ -274,7 +274,10 @@ enum OnFailureArg {
 const DECISION_DEADLINE: Duration = Duration::from_millis(250);
 
 /// Per-agent enforce entrypoint. Panic-safe; never hangs past the watchdog.
-/// On Deny → emit the agent's deny output; on Allow → nothing.
+/// On Deny → emit the agent's deny output; on a deliberate Allow → emit the
+/// agent's allow output (empty for agents where silence==allow). A
+/// panic/watchdog exits silently (empty stdout), which Cursor's failClosed
+/// converts to a block in closed mode.
 /// No verdict (daemon down / timeout / malformed) → apply on_failure.
 fn run_enforce(agent: &str, capture: CaptureLevel, on_failure: OnFailureArg) -> ! {
     std::panic::set_hook(Box::new(|_| std::process::exit(0)));
@@ -318,10 +321,10 @@ fn run_enforce(agent: &str, capture: CaptureLevel, on_failure: OnFailureArg) -> 
                 emit_deny(&*adapter, &rule_id, &reason);
             }
             // Allow, or a Deny down-shifted to Observe → do not block.
-            _ => std::process::exit(0),
+            _ => emit_allow(&*adapter),
         },
         None => match on_failure {
-            OnFailureArg::Open => std::process::exit(0),
+            OnFailureArg::Open => emit_allow(&*adapter),
             OnFailureArg::Closed => {
                 emit_deny(
                     &*adapter,
@@ -331,6 +334,16 @@ fn run_enforce(agent: &str, capture: CaptureLevel, on_failure: OnFailureArg) -> 
             }
         },
     }
+}
+
+/// Emit the adapter's explicit allow output (if any) and exit 0. Used on every
+/// DELIBERATE-allow branch so the only empty-stdout exit is a panic/watchdog
+/// failure — which Cursor's failClosed converts to a block in closed mode.
+fn emit_allow(adapter: &dyn adapters::HookAdapter) -> ! {
+    if let Some(s) = adapter.allow_output() {
+        println!("{s}");
+    }
+    std::process::exit(0);
 }
 
 /// Print the adapter's deny output (if any) and exit with its code.

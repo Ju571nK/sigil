@@ -85,7 +85,7 @@ fn cursor_deny_emits_permission_deny_json() {
 }
 
 #[test]
-fn cursor_allow_is_silent() {
+fn cursor_allow_emits_permission_allow() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("hook-decide.sock");
     spawn_stub(socket.clone(), false);
@@ -93,8 +93,12 @@ fn cursor_allow_is_silent() {
     let (stdout, code) = run_cursor_enforce(&socket, "open", &shell_stdin("ls -la"));
     assert_eq!(code, 0);
     assert!(
-        stdout.trim().is_empty(),
-        "allow must print nothing, got: {stdout}"
+        stdout.contains("\"permission\":\"allow\""),
+        "allow must be explicit, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("\"permission\":\"deny\""),
+        "allow must not deny, got: {stdout}"
     );
 }
 
@@ -104,7 +108,10 @@ fn cursor_missing_socket_open_fails_open() {
     let socket = dir.path().join("absent.sock"); // never bound
     let (stdout, code) = run_cursor_enforce(&socket, "open", &shell_stdin("rm -rf /"));
     assert_eq!(code, 0);
-    assert!(stdout.trim().is_empty(), "fail-open → allow, no output");
+    assert!(
+        stdout.contains("\"permission\":\"allow\""),
+        "fail-open now emits explicit allow, got: {stdout}"
+    );
 }
 
 #[test]

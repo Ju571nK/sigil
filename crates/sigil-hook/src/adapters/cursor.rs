@@ -97,6 +97,12 @@ impl HookAdapter for Cursor {
     fn deny_output(&self, rule_id: &str, reason: &str) -> DenyOutput {
         permission_deny(rule_id, reason)
     }
+
+    /// Cursor blocks empty-stdout allows under `failClosed`, so emit an explicit
+    /// allow. (See `allow_output` on the trait.)
+    fn allow_output(&self) -> Option<String> {
+        Some(serde_json::json!({ "permission": "allow" }).to_string())
+    }
 }
 
 #[cfg(test)]
@@ -170,5 +176,12 @@ mod tests {
         );
         // NOT the default Claude PreToolUse shape
         assert!(v.get("hookSpecificOutput").is_none());
+    }
+
+    #[test]
+    fn allow_output_is_permission_allow() {
+        let s = Cursor.allow_output().expect("cursor emits explicit allow");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["permission"], "allow");
     }
 }

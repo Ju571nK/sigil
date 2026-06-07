@@ -79,6 +79,16 @@ pub trait HookAdapter {
     fn deny_output(&self, rule_id: &str, reason: &str) -> DenyOutput {
         pretooluse_deny(rule_id, reason)
     }
+
+    /// Explicit allow output for a deliberate allow, if the agent needs one.
+    /// Default `None` = stay silent (claude-code/codex/grok: silence == allow).
+    /// Cursor overrides: under `failClosed:true` Cursor treats empty stdout as a
+    /// hook failure and BLOCKS, so a Cursor allow must be an explicit
+    /// `{"permission":"allow"}` (hardware-verified). Keeping this `None` for the
+    /// other agents means an empty-stdout exit there still means allow.
+    fn allow_output(&self) -> Option<String> {
+        None
+    }
 }
 
 pub fn for_agent(name: &str) -> Option<Box<dyn HookAdapter>> {
@@ -118,6 +128,12 @@ mod tests {
             a.deny_output("no-rm", "destructive").stdout,
             pretooluse_deny("no-rm", "destructive").stdout
         );
+    }
+
+    #[test]
+    fn adapter_default_allow_output_is_none() {
+        // claude-code uses the default trait impl => silent allow (None).
+        assert!(claude_code::ClaudeCode.allow_output().is_none());
     }
 
     #[test]
