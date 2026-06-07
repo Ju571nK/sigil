@@ -199,6 +199,9 @@ pub struct ReloadCtx {
     /// Phase 3b.5 — shared rubric handle. reload() rebuilds from
     /// EffectivePolicy.rubric_overrides and atomic-swaps via write lock.
     pub rubric: crate::ai_guard::RubricHandle,
+    /// #115 — shared deny evaluator. reload() rebuilds from
+    /// EffectivePolicy.hook_deny_rules and swaps; keep-previous on Err.
+    pub shared_evaluator: crate::hook_deny::SharedEvaluator,
 }
 
 pub async fn run(mut ctx: ReloadCtx) {
@@ -269,6 +272,16 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
             return;
         }
     };
+
+    // #115 — rebuild the shared deny evaluator from the freshly-merged policy.
+    // Keep-previous on regex compile failure (fail-open is the previous state).
+    match crate::hook_deny::DenyEvaluator::new(&effective.hook_deny_rules) {
+        Ok(e) => {
+            *ctx.shared_evaluator.write() = std::sync::Arc::new(e);
+        }
+        Err(e) => tracing::warn!(error = ?e,
+            "hook deny rules failed to compile on reload; keeping previous evaluator"),
+    }
 
     // Phase 3b.6.2 — re-discover all 5 tools and reconcile each via the
     // generic reconcile_per_repo helper. State map entries for removed
@@ -620,6 +633,9 @@ mod tests {
                 ),
                 ext_scripts: crate::ai_guard::empty_ext_script_registry(),
                 rubric: crate::ai_guard::default_rubric_handle(),
+                shared_evaluator: Arc::new(parking_lot::RwLock::new(Arc::new(
+                    crate::hook_deny::DenyEvaluator::new(&[]).unwrap(),
+                ))),
             },
             plat,
             targets_rx,
@@ -680,6 +696,9 @@ mod tests {
                 ai_guard_state: state.clone(),
                 ext_scripts: crate::ai_guard::empty_ext_script_registry(),
                 rubric: crate::ai_guard::default_rubric_handle(),
+                shared_evaluator: Arc::new(parking_lot::RwLock::new(Arc::new(
+                    crate::hook_deny::DenyEvaluator::new(&[]).unwrap(),
+                ))),
             },
             plat,
             targets_rx,

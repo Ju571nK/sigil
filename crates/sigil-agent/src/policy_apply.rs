@@ -164,6 +164,27 @@ pub async fn apply_rule_packs(ctx: &ApplyContext, response: &SignedPolicyRespons
         }
     };
 
+    // D5 (#115): validate the bundle's hook_deny_rules BEFORE persisting, so a
+    // bad distributed rule can never be written/watermarked (and thus can never
+    // fail-open on the next restart). Reuses ParseFailed as the "bundle content
+    // failed validation" reason (no new wire-string variant).
+    // `verified.policy` is already the parsed PolicyDocument from verify_envelope
+    // check 5; re-use it directly rather than re-parsing policy_bytes.
+    let deny_validation: Result<(), String> =
+        sigil_core::policy::validate_deny_rule_ids(&verified.policy.hook_deny_rules)
+            .map_err(|e| e.to_string())
+            .and_then(|()| {
+                crate::hook_deny::DenyEvaluator::new(&verified.policy.hook_deny_rules)
+                    .map(|_| ())
+                    .map_err(|e| format!("hook deny rule regex failed to compile: {e}"))
+            });
+    if let Err(detail) = deny_validation {
+        tracing::warn!(%detail, "bundle hook_deny_rules rejected at apply (#115)");
+        let reason = PolicySignatureInvalidReason::ParseFailed;
+        emit_invalid(ctx, &reason, response, last_applied).await;
+        return ApplyOutcome::Rejected { reason };
+    }
+
     // `verified.policy_bytes` is the bundle YAML (a PolicyDocument with only
     // `rule_packs` meaningfully set). Write it verbatim to rule-packs.yaml; the
     // reload (Task 5) reads only its `.rule_packs` (merge ignores the rest).
@@ -579,6 +600,125 @@ mod tests {
         match ev.event.evidence {
             Evidence::PolicySignatureInvalid { reason, .. } => {
                 assert_eq!(reason, PolicySignatureInvalidReason::SignatureInvalid);
+            }
+            other => panic!("expected PolicySignatureInvalid, got {other:?}"),
+        }
+    }
+
+    // --- D5 (#115): apply-time gate for bundle hook_deny_rules ---
+
+    /// Build a `SignedPolicyResponse` whose bundle YAML encodes a `PolicyDocument`
+    /// with the given `hook_deny_rules`. Uses the harness's signing key so the
+    /// envelope passes signature / version / expiry checks (version = 1, last = 0).
+    fn rule_packs_envelope_with_deny(
+        deny_rules: Vec<sigil_core::policy::deny_rule::DenyRule>,
+        version: i64,
+        now: OffsetDateTime,
+    ) -> SignedEnvelope {
+        let doc = sigil_core::policy::PolicyDocument {
+            version: 1,
+            host_id_strategy: sigil_core::policy::HostIdStrategy::MachineId,
+            overrides: vec![],
+            targets: vec![],
+            continue_workspaces: vec![],
+            claude_code_workspaces: vec![],
+            codex_workspaces: vec![],
+            gemini_workspaces: vec![],
+            cursor_workspaces: vec![],
+            antigravity_workspaces: vec![],
+            rule_packs: vec![],
+            rubric_overrides: std::collections::HashMap::new(),
+            hook_deny_rules: deny_rules,
+            on_failure: sigil_core::policy::deny_rule::FailMode::Open,
+            hook_silence: sigil_core::policy::HookSilenceCfg::default(),
+        };
+        let yaml = serde_yaml::to_string(&doc).unwrap();
+        SignedEnvelope {
+            policy_version: version,
+            policy_bytes_b64: data_encoding::BASE64.encode(yaml.as_bytes()),
+            valid_until: now + time::Duration::hours(24),
+            issued_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_rule_packs_rejects_bundle_with_bad_deny_regex_touches_nothing() {
+        let now = OffsetDateTime::now_utc();
+        let mut h = build_harness_with_rule_packs(now, 0, 0);
+
+        // A deny rule whose regex pattern is uncompilable.
+        let bad_rule = sigil_core::policy::deny_rule::DenyRule {
+            id: "x".into(),
+            match_: sigil_core::policy::deny_rule::HookActionMatch::Bash {
+                command: sigil_core::policy::Matcher::Regex {
+                    pattern: "(".into(), // uncompilable regex
+                },
+            },
+        };
+        let envelope = rule_packs_envelope_with_deny(vec![bad_rule], 1, now);
+        let resp = sign(&h.sk, envelope, now);
+
+        let outcome = apply_rule_packs(&h.ctx, &resp).await;
+        assert!(
+            matches!(outcome, ApplyOutcome::Rejected { .. }),
+            "expected Rejected, got {outcome:?}"
+        );
+
+        // Nothing written; neither watermark moved.
+        assert!(!h.ctx.rule_packs_yaml_path.exists());
+        assert!(!h.ctx.policy_yaml_path.exists());
+        let meta = h.ctx.cache.lock().host_meta_get().unwrap();
+        assert_eq!(meta.last_applied_rule_packs_version, 0);
+        assert_eq!(meta.last_applied_policy_version, 0);
+
+        // The invalid event is emitted (reused PolicySignatureInvalid /
+        // ParseFailed). Guards against an accidental removal of emit_invalid.
+        let ev = h.rx_event.recv().await.unwrap();
+        match ev.event.evidence {
+            Evidence::PolicySignatureInvalid { reason, .. } => {
+                assert_eq!(reason, PolicySignatureInvalidReason::ParseFailed);
+            }
+            other => panic!("expected PolicySignatureInvalid, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_rule_packs_rejects_bundle_with_duplicate_deny_ids_touches_nothing() {
+        let now = OffsetDateTime::now_utc();
+        let mut h = build_harness_with_rule_packs(now, 0, 0);
+
+        // Two deny rules with the same id (valid regex ".*", duplicate id).
+        let dup_rule = |id: &str| sigil_core::policy::deny_rule::DenyRule {
+            id: id.into(),
+            match_: sigil_core::policy::deny_rule::HookActionMatch::Bash {
+                command: sigil_core::policy::Matcher::Regex {
+                    pattern: ".*".into(),
+                },
+            },
+        };
+        let envelope =
+            rule_packs_envelope_with_deny(vec![dup_rule("dup"), dup_rule("dup")], 1, now);
+        let resp = sign(&h.sk, envelope, now);
+
+        let outcome = apply_rule_packs(&h.ctx, &resp).await;
+        assert!(
+            matches!(outcome, ApplyOutcome::Rejected { .. }),
+            "expected Rejected, got {outcome:?}"
+        );
+
+        // Nothing written; neither watermark moved.
+        assert!(!h.ctx.rule_packs_yaml_path.exists());
+        assert!(!h.ctx.policy_yaml_path.exists());
+        let meta = h.ctx.cache.lock().host_meta_get().unwrap();
+        assert_eq!(meta.last_applied_rule_packs_version, 0);
+        assert_eq!(meta.last_applied_policy_version, 0);
+
+        // The invalid event is emitted (reused PolicySignatureInvalid /
+        // ParseFailed). Guards against an accidental removal of emit_invalid.
+        let ev = h.rx_event.recv().await.unwrap();
+        match ev.event.evidence {
+            Evidence::PolicySignatureInvalid { reason, .. } => {
+                assert_eq!(reason, PolicySignatureInvalidReason::ParseFailed);
             }
             other => panic!("expected PolicySignatureInvalid, got {other:?}"),
         }

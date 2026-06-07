@@ -297,6 +297,8 @@ pub enum PolicyError {
     DoubleStarUnsupported(String, String),
     #[error("targets list is empty after merge")]
     EmptyTargets,
+    #[error("duplicate hook deny rule id: {0}")]
+    DuplicateDenyRuleId(String),
 }
 
 /// Parse a YAML document into a `PolicyDocument`. Validates schema version.
@@ -315,7 +317,20 @@ pub fn parse(yaml: &str) -> Result<PolicyDocument, PolicyError> {
             }
         }
     }
+    validate_deny_rule_ids(&doc.hook_deny_rules)?;
     Ok(doc)
+}
+
+/// Reject duplicate ids in a deny-rule set. DenyEvaluator is first-match-wins, so
+/// duplicate ids make replace-by-id (the merge fold) ill-defined; forbid them.
+pub fn validate_deny_rule_ids(rules: &[deny_rule::DenyRule]) -> Result<(), PolicyError> {
+    let mut seen = std::collections::HashSet::new();
+    for r in rules {
+        if !seen.insert(r.id.as_str()) {
+            return Err(PolicyError::DuplicateDenyRuleId(r.id.clone()));
+        }
+    }
+    Ok(())
 }
 
 /// Current host's platform (set at compile time).
@@ -457,10 +472,24 @@ pub fn merge(
         .map(|u| u.rubric_overrides.clone())
         .unwrap_or_default();
 
-    let hook_deny_rules = user
-        .as_ref()
-        .map(|u| u.hook_deny_rules.clone())
-        .unwrap_or_default();
+    let hook_deny_rules: Vec<deny_rule::DenyRule> = {
+        let mut rules = user
+            .as_ref()
+            .map(|u| u.hook_deny_rules.clone())
+            .unwrap_or_default();
+        // Distributed bundle replaces a local rule by id, or appends a new id.
+        // (id uniqueness per document is enforced separately by a later task, so
+        // position() finds at most one match.) Mirrors the rule_packs fold above.
+        if let Some(ref b) = bundle {
+            for br in &b.hook_deny_rules {
+                match rules.iter().position(|r| r.id == br.id) {
+                    Some(i) => rules[i] = br.clone(),
+                    None => rules.push(br.clone()),
+                }
+            }
+        }
+        rules
+    };
 
     let hook_silence = user
         .as_ref()
@@ -1260,5 +1289,106 @@ host_id_strategy: hostname
         assert_eq!(eff.hook_silence.window_secs, 60);
         // a field absent from the user's partial block still takes the documented default
         assert_eq!(eff.hook_silence.horizon_secs, 604_800);
+    }
+
+    // --- #115: bundle.hook_deny_rules id-keyed fold ---
+
+    fn deny(id: &str) -> deny_rule::DenyRule {
+        deny_rule::DenyRule {
+            id: id.into(),
+            match_: deny_rule::HookActionMatch::Bash {
+                command: Matcher::Regex {
+                    pattern: ".*".into(),
+                },
+            },
+        }
+    }
+
+    fn ids(rules: &[deny_rule::DenyRule]) -> Vec<String> {
+        rules.iter().map(|r| r.id.clone()).collect()
+    }
+
+    fn doc_with_deny(d: Vec<deny_rule::DenyRule>) -> PolicyDocument {
+        // Use empty targets so the id-collision check on target merge does not
+        // fire when this is passed as `user` or `bundle` alongside defaults_doc().
+        // Mirrors the pattern in merge_bundle_packs_win_over_policy_and_defaults.
+        let mut doc = defaults_doc();
+        doc.targets = vec![];
+        doc.hook_deny_rules = d;
+        doc
+    }
+
+    #[test]
+    fn merge_no_bundle_keeps_user_deny_rules() {
+        let eff = merge(
+            defaults_doc(),
+            Some(doc_with_deny(vec![deny("a"), deny("b")])),
+            None,
+            Platform::Macos,
+        )
+        .unwrap();
+        assert_eq!(ids(&eff.hook_deny_rules), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn merge_bundle_new_id_is_appended() {
+        let eff = merge(
+            defaults_doc(),
+            Some(doc_with_deny(vec![deny("a")])),
+            Some(doc_with_deny(vec![deny("c")])),
+            Platform::Macos,
+        )
+        .unwrap();
+        assert_eq!(ids(&eff.hook_deny_rules), vec!["a", "c"]);
+    }
+
+    #[test]
+    fn merge_bundle_colliding_id_replaces_in_place() {
+        let eff = merge(
+            defaults_doc(),
+            Some(doc_with_deny(vec![deny("a"), deny("b")])),
+            Some(doc_with_deny(vec![deny("b")])),
+            Platform::Macos,
+        )
+        .unwrap();
+        // replaced in place, order kept
+        assert_eq!(ids(&eff.hook_deny_rules), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn merge_empty_bundle_clears_distributed_keeps_user() {
+        let eff = merge(
+            defaults_doc(),
+            Some(doc_with_deny(vec![deny("a")])),
+            Some(doc_with_deny(vec![])),
+            Platform::Macos,
+        )
+        .unwrap();
+        assert_eq!(ids(&eff.hook_deny_rules), vec!["a"]);
+    }
+
+    // --- #115 Task 2: id-uniqueness validation ---
+
+    #[test]
+    fn validate_accepts_unique_deny_ids() {
+        assert!(validate_deny_rule_ids(&[deny("a"), deny("b")]).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_deny_ids() {
+        let err = validate_deny_rule_ids(&[deny("dup"), deny("dup")]).unwrap_err();
+        assert!(matches!(err, PolicyError::DuplicateDenyRuleId(ref s) if s == "dup"));
+    }
+
+    #[test]
+    fn parse_rejects_policy_with_duplicate_hook_deny_rule_ids() {
+        // Build a PolicyDocument with duplicate deny ids, serialize to YAML, then
+        // confirm parse() rejects it with DuplicateDenyRuleId.
+        let doc = doc_with_deny(vec![deny("dup"), deny("dup")]);
+        // We need version: 1 and at least one target to pass other validations, but
+        // doc_with_deny already sets version via defaults_doc(). Use serde_yaml directly.
+        let yaml = serde_yaml::to_string(&doc).expect("serialise");
+        let err = parse(&yaml).unwrap_err();
+        assert!(matches!(err, PolicyError::DuplicateDenyRuleId(_)));
     }
 }

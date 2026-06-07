@@ -3,6 +3,9 @@
 use sigil_core::hook_proto::HookAction;
 use sigil_core::policy::{DenyRule, HookActionMatch, Matcher};
 
+/// Shared, hot-swappable evaluator: snapshotted per decide request, rebuilt+swapped on policy reload (#115).
+pub type SharedEvaluator = std::sync::Arc<parking_lot::RwLock<std::sync::Arc<DenyEvaluator>>>;
+
 pub struct DenyEvaluator {
     rules: Vec<CompiledRule>,
 }
@@ -243,5 +246,59 @@ mod tests {
         assert!(ev.evaluate(&bash(Some("safe"))).is_none());
         // No preview → fail-open (allow).
         assert!(ev.evaluate(&bash(None)).is_none());
+    }
+
+    #[test]
+    fn shared_evaluator_swaps_and_bad_regex_keeps_previous() {
+        use parking_lot::RwLock;
+        use std::sync::Arc;
+
+        // A rule set that DENIES bash commands matching "rm".
+        let deny_rule = DenyRule {
+            id: "no-rm".into(),
+            match_: HookActionMatch::Bash {
+                command: Matcher::Regex {
+                    pattern: "rm".into(),
+                },
+            },
+        };
+        let action_a = bash(Some("rm -rf /"));
+
+        let denies = DenyEvaluator::new(&[deny_rule]).unwrap();
+        let shared: SharedEvaluator = Arc::new(RwLock::new(Arc::new(denies)));
+
+        // Snapshot → denies action_a.
+        let ev = { Arc::clone(&*shared.read()) };
+        assert!(
+            ev.evaluate(&action_a).is_some(),
+            "initial evaluator should deny rm"
+        );
+
+        // Swap to empty (allow-all) → now allowed.
+        *shared.write() = Arc::new(DenyEvaluator::new(&[]).unwrap());
+        let ev = { Arc::clone(&*shared.read()) };
+        assert!(
+            ev.evaluate(&action_a).is_none(),
+            "empty evaluator should allow rm"
+        );
+
+        // Emulate reload keep-previous: a bad-regex rebuild fails → do NOT swap.
+        let bad_rule = DenyRule {
+            id: "bad".into(),
+            match_: HookActionMatch::Bash {
+                command: Matcher::Regex {
+                    pattern: "(".into(), // invalid regex
+                },
+            },
+        };
+        match DenyEvaluator::new(&[bad_rule]) {
+            Ok(e) => *shared.write() = Arc::new(e),
+            Err(_) => { /* keep previous */ }
+        }
+        let ev = { Arc::clone(&*shared.read()) };
+        assert!(
+            ev.evaluate(&action_a).is_none(),
+            "previous (empty) evaluator should still allow rm after failed rebuild"
+        );
     }
 }
