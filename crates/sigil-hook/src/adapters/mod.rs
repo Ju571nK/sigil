@@ -4,6 +4,7 @@ pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod cursor;
+pub mod grok;
 
 /// What a deny verdict renders to for a given agent: the text to print (the
 /// deny response, if any) and the process exit code. claude-code/codex/
@@ -34,7 +35,6 @@ pub(crate) fn pretooluse_deny(rule_id: &str, reason: &str) -> DenyOutput {
 /// Cursor/Grok-shaped deny: `{"decision":"deny","reason":"…"}` on stdout, exit 0.
 /// Grok honors the deny decision regardless of exit code. Reusable by a future
 /// cursor enforce.
-#[allow(dead_code)] // wired by a later task (Grok adapter override)
 pub(crate) fn decision_deny(rule_id: &str, reason: &str) -> DenyOutput {
     let v = serde_json::json!({
         "decision": "deny",
@@ -70,6 +70,7 @@ pub fn for_agent(name: &str) -> Option<Box<dyn HookAdapter>> {
         "codex" => Some(Box::new(codex::Codex)),
         "cursor" => Some(Box::new(cursor::Cursor)),
         "antigravity" => Some(Box::new(antigravity::Antigravity)),
+        "grok" => Some(Box::new(grok::Grok)),
         _ => None,
     }
 }
