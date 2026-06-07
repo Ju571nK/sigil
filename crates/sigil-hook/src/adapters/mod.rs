@@ -31,6 +31,21 @@ pub(crate) fn pretooluse_deny(rule_id: &str, reason: &str) -> DenyOutput {
     }
 }
 
+/// Cursor/Grok-shaped deny: `{"decision":"deny","reason":"…"}` on stdout, exit 0.
+/// Grok honors the deny decision regardless of exit code. Reusable by a future
+/// cursor enforce.
+#[allow(dead_code)] // wired by a later task (Grok adapter override)
+pub(crate) fn decision_deny(rule_id: &str, reason: &str) -> DenyOutput {
+    let v = serde_json::json!({
+        "decision": "deny",
+        "reason": format!("Blocked by Sigil rule {rule_id}: {reason}"),
+    });
+    DenyOutput {
+        stdout: Some(v.to_string()),
+        exit_code: 0,
+    }
+}
+
 /// One impl per agent. Turns a vendor stdin payload into a normalized
 /// HookInvocation. (Shape mirrors ai_guard/parser, but is a distinct trait —
 /// that one assesses on-disk config, this one normalizes runtime stdin.)
@@ -85,5 +100,15 @@ mod tests {
             a.deny_output("no-rm", "destructive").stdout,
             pretooluse_deny("no-rm", "destructive").stdout
         );
+    }
+
+    #[test]
+    fn decision_deny_exact_json_and_exit0() {
+        let out = decision_deny("no-rm", "destructive");
+        assert_eq!(out.exit_code, 0);
+        let s = out.stdout.expect("deny prints stdout");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["decision"], "deny");
+        assert_eq!(v["reason"], "Blocked by Sigil rule no-rm: destructive");
     }
 }
