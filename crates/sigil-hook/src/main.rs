@@ -175,10 +175,16 @@ enum Cmd {
         on_failure: OnFailureArg,
     },
 
-    /// Cursor before{Shell,MCP}Execution entrypoint: read stdin, emit, exit 0.
+    /// Cursor before{Shell,MCP}Execution entrypoint: observe (emit, exit 0), or --enforce (deny-decision path).
     Cursor {
         #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
         capture: CaptureArg,
+        /// Stage 2: run the synchronous deny-decision path instead of observe.
+        #[arg(long)]
+        enforce: bool,
+        /// Behavior when no verdict is obtainable. Default open (fail-open).
+        #[arg(long, value_enum, default_value_t = OnFailureArg::Open)]
+        on_failure: OnFailureArg,
     },
 
     /// Antigravity PreToolUse entrypoint: read stdin, emit, exit 0.
@@ -268,7 +274,10 @@ enum OnFailureArg {
 const DECISION_DEADLINE: Duration = Duration::from_millis(250);
 
 /// Per-agent enforce entrypoint. Panic-safe; never hangs past the watchdog.
-/// On Deny → emit the agent's deny output; on Allow → nothing.
+/// On Deny → emit the agent's deny output; on a deliberate Allow → emit the
+/// agent's allow output (empty for agents where silence==allow). A
+/// panic/watchdog exits silently (empty stdout), which Cursor's failClosed
+/// converts to a block in closed mode.
 /// No verdict (daemon down / timeout / malformed) → apply on_failure.
 fn run_enforce(agent: &str, capture: CaptureLevel, on_failure: OnFailureArg) -> ! {
     std::panic::set_hook(Box::new(|_| std::process::exit(0)));
@@ -312,10 +321,10 @@ fn run_enforce(agent: &str, capture: CaptureLevel, on_failure: OnFailureArg) -> 
                 emit_deny(&*adapter, &rule_id, &reason);
             }
             // Allow, or a Deny down-shifted to Observe → do not block.
-            _ => std::process::exit(0),
+            _ => emit_allow(&*adapter),
         },
         None => match on_failure {
-            OnFailureArg::Open => std::process::exit(0),
+            OnFailureArg::Open => emit_allow(&*adapter),
             OnFailureArg::Closed => {
                 emit_deny(
                     &*adapter,
@@ -325,6 +334,16 @@ fn run_enforce(agent: &str, capture: CaptureLevel, on_failure: OnFailureArg) -> 
             }
         },
     }
+}
+
+/// Emit the adapter's explicit allow output (if any) and exit 0. Used on every
+/// DELIBERATE-allow branch so the only empty-stdout exit is a panic/watchdog
+/// failure — which Cursor's failClosed converts to a block in closed mode.
+fn emit_allow(adapter: &dyn adapters::HookAdapter) -> ! {
+    if let Some(s) = adapter.allow_output() {
+        println!("{s}");
+    }
+    std::process::exit(0);
 }
 
 /// Print the adapter's deny output (if any) and exit with its code.
@@ -362,7 +381,17 @@ fn main() {
                 run_hook("codex", capture.into())
             }
         }
-        Cmd::Cursor { capture } => run_hook("cursor", capture.into()),
+        Cmd::Cursor {
+            capture,
+            enforce,
+            on_failure,
+        } => {
+            if enforce {
+                run_enforce("cursor", capture.into(), on_failure)
+            } else {
+                run_hook("cursor", capture.into())
+            }
+        }
         Cmd::Antigravity { capture } => run_hook("antigravity", capture.into()),
         Cmd::Grok {
             capture,
@@ -438,13 +467,14 @@ fn cmd_install(
     }
 
     // Enforce-mode --write is supported for the NestedPreToolUse agents
-    // (claude-code, codex) in this slice. For any other agent (cursor, unknown),
-    // guard explicitly so we never write a misleading settings file or print a
-    // confusing "already installed (no change)" message. (antigravity is routed
-    // to its own plugin path before this point.)
-    if enforce && !matches!(agent, "claude-code" | "codex" | "grok") {
+    // (claude-code, codex), for cursor (beforeShellExecution/beforeMCPExecution),
+    // and for grok (native ~/.grok/hooks). Guard any other agent so we never
+    // write a misleading settings file. (antigravity routes to its own plugin
+    // path above; grok routes to cmd_install_grok above — so by here the only
+    // enforce-capable agents reaching the generic path are claude-code/codex/cursor.)
+    if enforce && !matches!(agent, "claude-code" | "codex" | "grok" | "cursor") {
         eprintln!(
-            "error: enforce-mode install is only supported for claude-code/codex/grok in this slice (agent '{agent}' not registered)"
+            "error: enforce-mode install is only supported for claude-code/codex/grok/cursor in this slice (agent '{agent}' not registered)"
         );
         std::process::exit(1);
     }
@@ -499,18 +529,25 @@ fn cmd_install(
         std::process::exit(1);
     }
 
-    // Write baseline / update discovery index.
-    if let Err(e) = install::write_baseline(
-        agent,
-        &sp,
-        &exe,
-        agent,
-        capture_str,
-        "*",
-        enforce,
-        on_failure_str,
-    ) {
-        eprintln!("warning: could not write baseline: {e}");
+    // Write baseline / update discovery index. Only for agents whose `verify`
+    // path is implemented (claude-code/codex). Cursor's settings use
+    // beforeShellExecution/beforeMCPExecution, which slice-1 verify can't check,
+    // and the baseline is a single global file — a cursor baseline would both
+    // false-positive `verify` and clobber the claude one (spec D6). (grok and
+    // antigravity never reach here; they return to their own install fns above.)
+    if matches!(agent, "claude-code" | "codex") {
+        if let Err(e) = install::write_baseline(
+            agent,
+            &sp,
+            &exe,
+            agent,
+            capture_str,
+            "*",
+            enforce,
+            on_failure_str,
+        ) {
+            eprintln!("warning: could not write baseline: {e}");
+        }
     }
 
     if changed {

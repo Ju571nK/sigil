@@ -7,7 +7,7 @@ use sigil_core::hook_proto::*;
 /// `hookEventName:"pre_tool_use"`). Only the verified shell tool
 /// (`toolName == "run_terminal_command"`; command read from `toolInput.command`)
 /// maps to `Bash`; every other tool is `Other` until its payload is
-/// hardware-verified. Deny is Cursor-style `{"decision":"deny"}`.
+/// hardware-verified. Deny is Grok-style `{"decision":"deny"}`.
 pub struct Grok;
 
 impl HookAdapter for Grok {
