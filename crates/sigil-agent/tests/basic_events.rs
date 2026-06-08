@@ -11,9 +11,22 @@ async fn it_emits_modified_event() {
     let policy = policy_for_paths(&[p.to_str().unwrap()], "standard");
     let agent = TestAgentBuilder::new().policy(&policy).start().await;
 
-    std::fs::write(&p, b"first").unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    std::fs::write(&p, b"second").unwrap();
+    // Drive the file continuously instead of writing twice with a fixed sleep.
+    // OS watchers (FSEvents, inotify) deliver from "now" and never replay, so a
+    // write that lands in the watcher's startup gap is lost forever — under
+    // heavy parallel load that gap can swallow both fixed writes, hard-failing
+    // regardless of the wait budget (#108). A background writer keeps modifying
+    // the file until the assertion observes a change, guaranteeing a write the
+    // live stream can catch; it's aborted as soon as the event arrives.
+    let writer_path = p.clone();
+    let writer = tokio::spawn(async move {
+        let mut n: u64 = 0;
+        loop {
+            n += 1;
+            let _ = std::fs::write(&writer_path, format!("change-{n}").as_bytes());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
 
     let event = agent
         .wait_for_event(
@@ -24,8 +37,10 @@ async fn it_emits_modified_event() {
             },
             common::fs_event_timeout(),
         )
-        .await
-        .expect("expected file_change event");
+        .await;
+
+    writer.abort();
+    let event = event.expect("expected file_change event");
 
     assert_eq!(event["schema_version"], 1);
     agent.join.abort();
