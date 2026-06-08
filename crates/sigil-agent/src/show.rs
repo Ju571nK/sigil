@@ -569,20 +569,70 @@ fn format_pretty(line: &str) -> String {
     format!("{ts}\t{severity}\t{subject}\t{kind}\t{summary}")
 }
 
+/// Canonical hyphenated CLI label for an `AiTool`. Single source of truth shared
+/// by `--tool` parsing, the unknown-tool error message, and the pretty table, so
+/// the accepted set can never drift from the enum. The exhaustive match means a
+/// new `AiTool` variant fails to compile here until a label is added.
+#[cfg(feature = "operator-cli")]
+fn tool_cli_label(t: sigil_core::event::AiTool) -> &'static str {
+    use sigil_core::event::AiTool::*;
+    match t {
+        ClaudeCode => "claude-code",
+        Codex => "codex",
+        ClaudeDesktop => "claude-desktop",
+        ContinueDev => "continue-dev",
+        Gemini => "gemini",
+        Cursor => "cursor",
+        Antigravity => "antigravity",
+        Grok => "grok",
+        Other => "other",
+    }
+}
+
+/// Every `AiTool`, in display order — drives `--tool` parsing and the error
+/// message so the accepted set tracks the enum.
+#[cfg(feature = "operator-cli")]
+const ALL_TOOLS: &[sigil_core::event::AiTool] = {
+    use sigil_core::event::AiTool::*;
+    &[
+        ClaudeCode,
+        Codex,
+        ClaudeDesktop,
+        ContinueDev,
+        Gemini,
+        Cursor,
+        Antigravity,
+        Grok,
+        Other,
+    ]
+};
+
+/// Parse a `--tool` value to an `AiTool`. Accepts the canonical hyphenated label
+/// for every variant, plus the legacy `claude_code` underscore alias.
+#[cfg(feature = "operator-cli")]
+fn parse_tool(s: &str) -> Option<sigil_core::event::AiTool> {
+    if s == "claude_code" {
+        return Some(sigil_core::event::AiTool::ClaudeCode);
+    }
+    ALL_TOOLS.iter().copied().find(|t| tool_cli_label(*t) == s)
+}
+
 #[cfg(feature = "operator-cli")]
 fn show_risk(tool: Option<String>, pretty: bool) -> anyhow::Result<i32> {
     let parsed = match tool.as_deref() {
         None => None,
-        Some("claude-code") | Some("claude_code") => Some(sigil_core::event::AiTool::ClaudeCode),
-        Some("codex") => Some(sigil_core::event::AiTool::Codex),
-        Some("gemini") => Some(sigil_core::event::AiTool::Gemini),
-        Some("cursor") => Some(sigil_core::event::AiTool::Cursor),
-        Some("grok") => Some(sigil_core::event::AiTool::Grok),
-        Some("other") => Some(sigil_core::event::AiTool::Other),
-        Some(other) => {
-            eprintln!("sigil show risk: unknown --tool '{other}' (expected: claude-code, codex, gemini, cursor, grok)");
-            return Ok(2);
-        }
+        Some(s) => match parse_tool(s) {
+            Some(t) => Some(t),
+            None => {
+                let accepted = ALL_TOOLS
+                    .iter()
+                    .map(|t| tool_cli_label(*t))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                eprintln!("sigil show risk: unknown --tool '{s}' (expected: {accepted})");
+                return Ok(2);
+            }
+        },
     };
     match crate::control_client::query(&crate::control::Request::Risk { tool: parsed }) {
         Ok(resp) => match resp.risk {
@@ -627,17 +677,7 @@ fn write_risk_pretty(w: &mut impl Write, p: &RiskPayload) -> io::Result<()> {
                 format!("application:{app}")
             }
         };
-        let tool_str = match s.tool {
-            sigil_core::event::AiTool::ClaudeCode => "claude-code",
-            sigil_core::event::AiTool::Codex => "codex",
-            sigil_core::event::AiTool::ClaudeDesktop => "claude-desktop",
-            sigil_core::event::AiTool::ContinueDev => "continue-dev",
-            sigil_core::event::AiTool::Gemini => "gemini",
-            sigil_core::event::AiTool::Cursor => "cursor",
-            sigil_core::event::AiTool::Antigravity => "antigravity",
-            sigil_core::event::AiTool::Grok => "grok",
-            sigil_core::event::AiTool::Other => "other",
-        };
+        let tool_str = tool_cli_label(s.tool);
         // Use the serde wire string (snake_case) rather than Debug. Robust
         // against future multi-word AiGuardBucket variants (e.g., "very_high")
         // where Debug would emit "Veryhigh" but the SIEM filter expects
@@ -1020,6 +1060,62 @@ mod tests {
         assert!(
             out.contains("codex\tproject:/Users/alice/repo/.claude\t8.0\tcritical\t5\t"),
             "got: {out}"
+        );
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn parse_tool_accepts_every_variant_via_its_label() {
+        // Each AiTool must parse from its canonical CLI label and round-trip.
+        for &t in ALL_TOOLS {
+            let label = tool_cli_label(t);
+            assert_eq!(
+                parse_tool(label),
+                Some(t),
+                "label {label:?} should parse back to its variant"
+            );
+        }
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn parse_tool_covers_previously_omitted_tools() {
+        use sigil_core::event::AiTool;
+        // Regression for #121: these were missing from the `--tool` match.
+        assert_eq!(parse_tool("antigravity"), Some(AiTool::Antigravity));
+        assert_eq!(parse_tool("claude-desktop"), Some(AiTool::ClaudeDesktop));
+        assert_eq!(parse_tool("continue-dev"), Some(AiTool::ContinueDev));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn parse_tool_accepts_legacy_underscore_alias() {
+        use sigil_core::event::AiTool;
+        assert_eq!(parse_tool("claude_code"), Some(AiTool::ClaudeCode));
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn parse_tool_rejects_unknown() {
+        assert_eq!(parse_tool("nope"), None);
+        assert_eq!(parse_tool(""), None);
+        // snake_case wire form is not a CLI label (except the claude_code alias).
+        assert_eq!(parse_tool("claude_desktop"), None);
+    }
+
+    #[cfg(feature = "operator-cli")]
+    #[test]
+    fn unknown_tool_error_lists_the_full_accepted_set() {
+        // The error message is built from ALL_TOOLS, so antigravity (and the
+        // other formerly-omitted tools) must appear in the enumerated set.
+        let accepted = ALL_TOOLS
+            .iter()
+            .map(|t| tool_cli_label(*t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert_eq!(
+            accepted,
+            "claude-code, codex, claude-desktop, continue-dev, gemini, cursor, antigravity, grok, other"
         );
     }
 }
