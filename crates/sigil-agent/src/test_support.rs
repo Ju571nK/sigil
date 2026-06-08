@@ -76,14 +76,27 @@ impl TestAgentBuilder {
         });
         // Wait until the control IPC is listening: the runtime registers every
         // watch root *before* opening the control listener, so the socket file
-        // appearing means all watchers are live. (On Windows the IPC is a named
-        // pipe with no socket file, so this just runs out the deadline — fine,
-        // ReadDirectoryChangesW registration is synchronous and fast.)
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while !control_socket.exists() && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // appearing means all watchers are live. Under the heavy parallel load
+        // of `cargo test --workspace`, the runtime can take several seconds to
+        // bind — a too-short deadline lets `start()` return before the socket
+        // exists, so a later `control()`/`apply_policy()` connect fails (#108).
+        // Budget generously (override via `SIGIL_TEST_IPC_TIMEOUT_SECS`); the
+        // loop returns as soon as the socket appears, so headroom is free.
+        #[cfg(unix)]
+        {
+            let secs = std::env::var("SIGIL_TEST_IPC_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(20);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+            while !control_socket.exists() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
         }
         // Small settle window for the OS watcher to start delivering events.
+        // (On Windows the control IPC is a named pipe with no socket file, so we
+        // skip the readiness poll above — ReadDirectoryChangesW registration is
+        // synchronous and fast — and rely on this settle window.)
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         TestAgent {
             td,

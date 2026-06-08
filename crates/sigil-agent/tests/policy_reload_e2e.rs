@@ -45,15 +45,29 @@ async fn apply_policy_reloads_live_watch_targets() {
         .start()
         .await;
 
-    // Sanity: writing X produces a file_change under policy A.
-    std::fs::write(&file_x, b"x1").unwrap();
-    let ev = agent
-        .wait_for_event(
-            |v| v["evidence"]["kind"] == "file_change",
-            common::fs_event_timeout(),
-        )
-        .await
-        .expect("policy A: file_change for X");
+    // Sanity: writing X produces a file_change under policy A. Re-write X until
+    // one lands — a single write can fall in the watcher's startup gap (FSEvents
+    // delivers from "now", no replay) and be lost under parallel load (#108),
+    // mirroring the live-reload retry loop used for Y below.
+    let is_x_change = |v: &serde_json::Value| {
+        v["evidence"]["kind"] == "file_change"
+            && v["subject"]["value"]
+                .as_str()
+                .map(|p| p.ends_with("x.json"))
+                .unwrap_or(false)
+    };
+    let mut ev_x = None;
+    for i in 0..60 {
+        std::fs::write(&file_x, format!("x{i}").as_bytes()).unwrap();
+        if let Some(ev) = agent
+            .wait_for_event(&is_x_change, Duration::from_millis(250))
+            .await
+        {
+            ev_x = Some(ev);
+            break;
+        }
+    }
+    let ev = ev_x.expect("policy A: file_change for X");
     assert_eq!(ev["schema_version"], 1);
 
     // Apply policy B (watch file Y instead) over the real control IPC. The boot
