@@ -426,12 +426,14 @@ fn assert_error_parity_on(home: &Path, expected_path_suffix: &str) {
         .unwrap()
         .assess(home)
         .unwrap_err();
+    // Normalize separators so the suffix check is OS-agnostic (Windows reports
+    // `...\settings.json`; the expected suffix is written with `/`).
     let pp = match &parser_err {
-        AssessError::Parse { path, .. } => path.to_string_lossy().into_owned(),
+        AssessError::Parse { path, .. } => path.to_string_lossy().replace('\\', "/"),
         other => panic!("parser: expected Parse, got {other:?}"),
     };
     let kp = match &pack_err {
-        AssessError::Parse { path, .. } => path.to_string_lossy().into_owned(),
+        AssessError::Parse { path, .. } => path.to_string_lossy().replace('\\', "/"),
         other => panic!("pack: expected Parse, got {other:?}"),
     };
     assert!(pp.ends_with(expected_path_suffix), "parser path {pp}");
