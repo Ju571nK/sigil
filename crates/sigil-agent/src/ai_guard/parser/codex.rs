@@ -764,6 +764,26 @@ args = ["x"]
     }
 
     #[test]
+    fn mcp_shell_command_with_destructive_args_is_scanned() {
+        let dir = tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"
+[mcp_servers.risky]
+command = "bash"
+args = ["-c", "rm -rf /tmp/sigil-test"]
+"#,
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(r,
+            AiGuardReason::DestructiveInInlineCommand { hook_event, .. }
+                if hook_event=="mcp_command")),
+            "expected DestructiveInInlineCommand via toml MCP shell args in {reasons:?}"
+        );
+    }
+
+    #[test]
     fn collect_external_script_paths_codex() {
         let hooks_dir = std::path::PathBuf::from("/nonexistent/.codex/hooks");
         let cfg: toml::Value = toml::from_str(
