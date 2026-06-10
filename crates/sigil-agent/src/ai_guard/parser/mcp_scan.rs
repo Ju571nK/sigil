@@ -6,7 +6,7 @@
 
 use crate::ai_guard::rubric;
 use serde_json::Value;
-use sigil_core::event::AiGuardReason;
+use sigil_core::event::{AiGuardReason, LauncherShape};
 
 /// Walk `settings.mcpServers` (object keyed by server name) and push reasons.
 pub fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
@@ -46,16 +46,60 @@ pub(crate) fn emit_one_server(name: &str, def: &Value, out: &mut Vec<AiGuardReas
         out.push(AiGuardReason::NoSandbox {
             executor: "mcp_command".into(),
         });
-        if is_shell(command) {
-            if let Some(args) = def.get("args").and_then(Value::as_array) {
-                if let Some(snippet) = first_destructive_after_shell_flag(args) {
-                    if let Some(pat) = rubric::first_destructive_pattern(&snippet) {
-                        out.push(AiGuardReason::DestructiveInInlineCommand {
-                            pattern: pat.to_string(),
-                            hook_event: "mcp_command".into(),
-                            snippet: snippet.chars().take(80).collect(),
-                        });
-                    }
+        let args: &[Value] = def
+            .get("args")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        // #127 — attack-shape scoring. Both shapes evaluated independently;
+        // a launcher can emit both (e.g. `/tmp/.x/bash -c y`).
+        let (eff_cmd, eff_args) = effective_shell_target(command, args);
+        if is_shell(eff_cmd) {
+            if let Some(flag) = eff_args
+                .iter()
+                .filter_map(Value::as_str)
+                .find(|s| is_inline_exec_flag(s))
+            {
+                out.push(AiGuardReason::McpServerSuspiciousLauncher {
+                    server_name: name.to_string(),
+                    command: command.to_string(),
+                    shape: LauncherShape::Shell,
+                    evidence: format!(
+                        "{} {}",
+                        launcher_basename(eff_cmd),
+                        flag.to_ascii_lowercase()
+                    ),
+                });
+            }
+        }
+        // TransientPath — the raw `command` field itself plus every non-flag string arg
+        // (interpreter evasion: `node /tmp/payload.js`). `-flag=/tmp/x`
+        // forms are operator convention, skipped by design.
+        if let Some(hit) = std::iter::once(command)
+            .chain(
+                args.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|s| !s.starts_with('-')),
+            )
+            .find(|s| is_transient_path(s))
+        {
+            out.push(AiGuardReason::McpServerSuspiciousLauncher {
+                server_name: name.to_string(),
+                command: command.to_string(),
+                shape: LauncherShape::TransientPath,
+                evidence: hit.to_string(),
+            });
+        }
+        // Destructive inline-arg scan — env-unwrapped so `env bash -c "rm…"`
+        // is assessed like `bash -c "rm…"` (shares is_shell hardening).
+        if is_shell(eff_cmd) {
+            if let Some(snippet) = first_destructive_after_shell_flag(eff_args) {
+                if let Some(pat) = rubric::first_destructive_pattern(&snippet) {
+                    out.push(AiGuardReason::DestructiveInInlineCommand {
+                        pattern: pat.to_string(),
+                        hook_event: "mcp_command".into(),
+                        snippet: snippet.chars().take(80).collect(),
+                    });
                 }
             }
         }
@@ -85,17 +129,18 @@ fn launcher_basename(cmd: &str) -> String {
     }
 }
 
+/// csh/tcsh quoting semantics differ from sh -c, but structurally `-c` still
+/// executes an inline body — same attack shape.
 fn is_shell(cmd: &str) -> bool {
     matches!(
         launcher_basename(cmd).as_str(),
-        "sh" | "bash" | "zsh" | "dash" | "cmd" | "powershell" | "pwsh"
+        "sh" | "bash" | "zsh" | "dash" | "ksh" | "csh" | "tcsh" | "fish" | "cmd" | "powershell" | "pwsh"
     )
 }
 
 /// #127 — inline-exec flags that make a shell launcher "config-as-code".
 /// `-EncodedCommand`/`-enc` payloads can't be content-scanned; the Shell
 /// shape itself is the structural answer to encoding evasion.
-#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
 fn is_inline_exec_flag(arg: &str) -> bool {
     matches!(
         arg.to_ascii_lowercase().as_str(),
@@ -106,7 +151,6 @@ fn is_inline_exec_flag(arg: &str) -> bool {
 /// #127 — `env`-wrapper unwrap: `/usr/bin/env bash -c …` is assessed as
 /// `bash -c …`. Skips `-flags` and `VAR=val` assignments after `env`;
 /// returns (effective command, args after it). Non-env passes through.
-#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
 fn effective_shell_target<'a>(command: &'a str, args: &'a [Value]) -> (&'a str, &'a [Value]) {
     if launcher_basename(command) != "env" {
         return (command, args);
@@ -122,7 +166,6 @@ fn effective_shell_target<'a>(command: &'a str, args: &'a [Value]) -> (&'a str, 
 }
 
 /// `FOO=bar`-shaped env assignment (POSIX env var name).
-#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
 fn is_env_assignment(s: &str) -> bool {
     let Some(eq) = s.find('=') else { return false };
     let name = &s[..eq];
@@ -138,7 +181,6 @@ fn is_env_assignment(s: &str) -> bool {
 /// (temp, cache, runtime-dir) — general dotdirs (`~/.cargo/bin` …), relative
 /// paths and bare names deliberately do NOT match (false-positive budget).
 /// Case-insensitive segment comparison defeats `/TMP/x`.
-#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
 fn is_transient_path(s: &str) -> bool {
     let segs: Vec<String> = s
         .split(['/', '\\'])
@@ -158,6 +200,7 @@ fn is_transient_path(s: &str) -> bool {
             &["private", "var", "tmp"],
             &["dev", "shm"],
             &["var", "folders"],
+            &["private", "var", "folders"],
             &["run", "user"],
             &["var", "run", "user"],
         ];
@@ -182,6 +225,7 @@ fn is_transient_path(s: &str) -> bool {
         &["windows", "temp"],
         &["appdata", "local", "temp"],
         &["%localappdata%", "temp"],
+        &["$env:localappdata", "temp"],
         &["library", "caches"],
     ];
     if SEQS.iter().any(|q| contains_seq(&segs, q)) {
@@ -197,12 +241,10 @@ fn is_transient_path(s: &str) -> bool {
 }
 
 /// segs strictly longer than prefix (something must follow the marker dir).
-#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
 fn starts_with_seq(segs: &[String], prefix: &[&str]) -> bool {
     segs.len() > prefix.len() && segs.iter().zip(prefix.iter()).all(|(a, b)| a == b)
 }
 
-#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
 fn contains_seq(segs: &[String], needle: &[&str]) -> bool {
     segs.len() >= needle.len()
         && segs
@@ -210,13 +252,15 @@ fn contains_seq(segs: &[String], needle: &[&str]) -> bool {
             .any(|w| w.iter().zip(needle.iter()).all(|(a, b)| a == b))
 }
 
-/// Returns the argument following a shell command flag (`-c`, `/c`, `/C`,
-/// `-Command`) — the inline script body.
+/// Returns the argument following a shell command flag (`-c`, `/c`, `-command`)
+/// — the inline script body. Flag match is case-insensitive (`-C`, `/C`,
+/// `-COMMAND` all match). Does NOT cover `-enc`/`-file` by design: the Shell
+/// shape handles those structurally; this scan only reads inline bodies.
 fn first_destructive_after_shell_flag(args: &[Value]) -> Option<String> {
     let mut iter = args.iter();
     while let Some(a) = iter.next() {
         let Some(s) = a.as_str() else { continue };
-        if matches!(s, "-c" | "/c" | "/C" | "-Command") {
+        if matches!(s.to_ascii_lowercase().as_str(), "-c" | "/c" | "-command") {
             if let Some(next) = iter.next().and_then(Value::as_str) {
                 return Some(next.to_string());
             }
@@ -319,10 +363,11 @@ mod tests {
         for s in [
             "bash", "BASH.EXE", "PwSh", "pwsh.exe", "/bin/zsh",
             r"C:\Windows\System32\cmd.exe", "PowerShell.EXE", "sh", "dash",
+            "ksh", "fish",
         ] {
             assert!(is_shell(s), "{s} should be a shell");
         }
-        for s in ["node", "npx", "python3.12", "bun", "uv", "bashful", "env", "fish"] {
+        for s in ["node", "npx", "python3.12", "bun", "uv", "bashful", "env"] {
             assert!(!is_shell(s), "{s} must NOT be a shell");
         }
     }
@@ -369,6 +414,8 @@ mod tests {
             r"$env:TEMP\x", r"%LOCALAPPDATA%\Temp\x",
             "~/.cache/x/payload", "/Users/u/.cache/x",
             "/Users/u/Library/Caches/x", "~/Library/Caches/x",
+            "/private/var/folders/ab/x",
+            r"$env:LOCALAPPDATA\Temp\x",
         ] {
             assert!(is_transient_path(s), "{s} should be transient");
         }
@@ -411,5 +458,150 @@ mod tests {
         assert!(out
             .iter()
             .any(|x| matches!(x, AiGuardReason::McpServerLocalCommand { .. })));
+    }
+
+    // ---- #127 emission -------------------------------------------------
+
+    fn suspicious(out: &[AiGuardReason]) -> Vec<(&LauncherShape, &str)> {
+        out.iter()
+            .filter_map(|r| match r {
+                AiGuardReason::McpServerSuspiciousLauncher { shape, evidence, .. } => {
+                    Some((shape, evidence.as_str()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shell_with_exec_flag_emits_shell_shape() {
+        let mut out = Vec::new();
+        emit_one_server("a", &json!({"command":"bash","args":["-c","npx x"]}), &mut out);
+        let s = suspicious(&out);
+        assert_eq!(s.len(), 1);
+        assert_eq!(*s[0].0, LauncherShape::Shell);
+        assert_eq!(s[0].1, "bash -c");
+    }
+
+    #[test]
+    fn shell_without_exec_flag_stays_baseline() {
+        let mut out = Vec::new();
+        emit_one_server("a", &json!({"command":"bash","args":["server.sh"]}), &mut out);
+        assert!(suspicious(&out).is_empty());
+        // baseline still present
+        assert!(out.iter().any(|x| matches!(x, AiGuardReason::McpServerLocalCommand { .. })));
+    }
+
+    #[test]
+    fn env_wrapped_shell_detected() {
+        let mut out = Vec::new();
+        emit_one_server(
+            "a",
+            &json!({"command":"/usr/bin/env","args":["FOO=1","bash","-c","x"]}),
+            &mut out,
+        );
+        let s = suspicious(&out);
+        assert_eq!(s.len(), 1);
+        assert_eq!(*s[0].0, LauncherShape::Shell);
+        assert_eq!(s[0].1, "bash -c");
+    }
+
+    #[test]
+    fn encoded_command_flags_shell_shape() {
+        let mut out = Vec::new();
+        emit_one_server(
+            "a",
+            &json!({"command":"PwSh","args":["-EncodedCommand","cABhAHkA"]}),
+            &mut out,
+        );
+        let s = suspicious(&out);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].1, "pwsh -encodedcommand");
+    }
+
+    #[test]
+    fn transient_command_emits_transient_shape() {
+        let mut out = Vec::new();
+        emit_one_server("a", &json!({"command":"/tmp/.x/payload"}), &mut out);
+        let s = suspicious(&out);
+        assert_eq!(s.len(), 1);
+        assert_eq!(*s[0].0, LauncherShape::TransientPath);
+        assert_eq!(s[0].1, "/tmp/.x/payload");
+    }
+
+    #[test]
+    fn transient_via_interpreter_arg_detected() {
+        let mut out = Vec::new();
+        emit_one_server(
+            "a",
+            &json!({"command":"node","args":["/tmp/payload.js"]}),
+            &mut out,
+        );
+        let s = suspicious(&out);
+        assert_eq!(s.len(), 1);
+        assert_eq!(*s[0].0, LauncherShape::TransientPath);
+        assert_eq!(s[0].1, "/tmp/payload.js");
+    }
+
+    #[test]
+    fn flag_embedded_path_arg_not_scanned() {
+        let mut out = Vec::new();
+        emit_one_server(
+            "a",
+            &json!({"command":"npx","args":["--cache-dir=/tmp/x","server"]}),
+            &mut out,
+        );
+        assert!(suspicious(&out).is_empty());
+    }
+
+    #[test]
+    fn dual_shape_emits_two_reasons() {
+        let mut out = Vec::new();
+        emit_one_server(
+            "a",
+            &json!({"command":"/tmp/.x/bash","args":["-c","y"]}),
+            &mut out,
+        );
+        let s = suspicious(&out);
+        assert_eq!(s.len(), 2);
+        assert!(s.iter().any(|(sh, ev)| **sh == LauncherShape::Shell && *ev == "bash -c"));
+        assert!(s.iter().any(|(sh, ev)| **sh == LauncherShape::TransientPath && *ev == "/tmp/.x/bash"));
+    }
+
+    #[test]
+    fn benign_stdio_unchanged() {
+        let mut out = Vec::new();
+        emit_one_server(
+            "a",
+            &json!({"command":"npx","args":["@modelcontextprotocol/server-foo"]}),
+            &mut out,
+        );
+        assert!(suspicious(&out).is_empty());
+        assert_eq!(out.len(), 2); // McpServerLocalCommand + NoSandbox only — update if the baseline grows
+    }
+
+    #[test]
+    fn destructive_flag_now_case_insensitive() {
+        let mut out = Vec::new();
+        emit_one_server(
+            "a",
+            &json!({"command":"BASH.EXE","args":["-C","rm -rf /tmp/sigil-test"]}),
+            &mut out,
+        );
+        assert!(out.iter().any(|x| matches!(
+            x,
+            AiGuardReason::DestructiveInInlineCommand { hook_event, .. } if hook_event == "mcp_command"
+        )));
+    }
+
+    #[test]
+    fn env_wrapped_destructive_detected() {
+        let mut out = Vec::new();
+        emit_one_server(
+            "a",
+            &json!({"command":"/usr/bin/env","args":["bash","-c","rm -rf /tmp/sigil-test"]}),
+            &mut out,
+        );
+        assert!(out.iter().any(|x| matches!(x, AiGuardReason::DestructiveInInlineCommand { .. })));
     }
 }
