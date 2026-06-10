@@ -68,6 +68,10 @@ impl AiGuardParser for ClaudeDesktopParser {
         let mut text: Option<(PathBuf, String)> = None;
         for path in candidates {
             match std::fs::read_to_string(&path) {
+                // Empty/whitespace stub → not configured; fall through to the
+                // next candidate rather than short-circuiting (another platform
+                // path may hold the real config). #131.
+                Ok(s) if s.trim().is_empty() => continue,
                 Ok(s) => {
                     text = Some((path, s));
                     break;
@@ -125,6 +129,44 @@ mod tests {
         let p = dir.join("claude_desktop_config.json");
         std::fs::write(&p, contents).unwrap();
         p
+    }
+
+    #[test]
+    fn empty_config_is_clean() {
+        let dir = tempdir().unwrap();
+        write_config_macos(dir.path(), "");
+        let p = ClaudeDesktopParser;
+        assert!(p.assess(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn whitespace_config_is_clean() {
+        let dir = tempdir().unwrap();
+        write_config_macos(dir.path(), "  \n\t ");
+        let p = ClaudeDesktopParser;
+        assert!(p.assess(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn empty_macos_stub_falls_through_to_linux() {
+        // An empty macOS-path stub must NOT short-circuit assessment: the
+        // candidate loop should fall through to the Linux path, which holds
+        // the real config. Regression guard for #131.
+        let dir = tempdir().unwrap();
+        write_config_macos(dir.path(), "");
+        write_config_linux(
+            dir.path(),
+            r#"{"mcpServers": {"remote": {"url": "https://mcp.example.com"}}}"#,
+        );
+        let p = ClaudeDesktopParser;
+        let reasons = p.assess(dir.path()).unwrap();
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::McpServerRemote { .. })),
+            "empty macOS stub must fall through to the non-empty Linux config, \
+             got {reasons:?}"
+        );
     }
 
     #[test]

@@ -34,10 +34,7 @@ impl AiGuardParser for ContinueDevParser {
     fn collect_external_script_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
         let cd = home_dir.join(".continue");
         let config_path = cd.join("config.json");
-        let Ok(s) = std::fs::read_to_string(&config_path) else {
-            return Vec::new();
-        };
-        let Ok(val) = serde_json::from_str::<Value>(&s) else {
+        let Some(val) = super::read_json_optional(&config_path).ok().flatten() else {
             return Vec::new();
         };
         let hooks_dir = cd.join("hooks");
@@ -46,15 +43,9 @@ impl AiGuardParser for ContinueDevParser {
 
     fn assess(&self, home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
         let path = home_dir.join(".continue").join("config.json");
-        let text = match std::fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(source) => return Err(AssessError::Io { path, source }),
+        let Some(val) = super::read_json_optional(&path)? else {
+            return Ok(Vec::new());
         };
-        let val: Value = serde_json::from_str(&text).map_err(|e| AssessError::Parse {
-            path: path.clone(),
-            message: e.to_string(),
-        })?;
         let hooks_dir = home_dir.join(".continue").join("hooks");
         let mut out = Vec::new();
         emit_mcp_reasons(&val, &mut out);
@@ -245,10 +236,7 @@ impl AiGuardParser for ContinueDevProjectParser {
     fn collect_external_script_paths(&self, _home_dir: &Path) -> Vec<PathBuf> {
         let cd = self.repo_root.join(".continue");
         let config_path = cd.join("config.json");
-        let Ok(s) = std::fs::read_to_string(&config_path) else {
-            return Vec::new();
-        };
-        let Ok(val) = serde_json::from_str::<Value>(&s) else {
+        let Some(val) = super::read_json_optional(&config_path).ok().flatten() else {
             return Vec::new();
         };
         let hooks_dir = cd.join("hooks");
@@ -257,15 +245,9 @@ impl AiGuardParser for ContinueDevProjectParser {
 
     fn assess(&self, _home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
         let path = self.repo_root.join(".continue").join("config.json");
-        let text = match std::fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(source) => return Err(AssessError::Io { path, source }),
+        let Some(val) = super::read_json_optional(&path)? else {
+            return Ok(Vec::new());
         };
-        let val: Value = serde_json::from_str(&text).map_err(|e| AssessError::Parse {
-            path: path.clone(),
-            message: e.to_string(),
-        })?;
         let hooks_dir = self.repo_root.join(".continue").join("hooks");
         let mut out = Vec::new();
         emit_mcp_reasons(&val, &mut out);
@@ -286,6 +268,22 @@ mod tests {
         let p = dir.join("config.json");
         std::fs::write(&p, contents).unwrap();
         p
+    }
+
+    #[test]
+    fn empty_config_is_clean() {
+        let dir = tempdir().unwrap();
+        write_config(dir.path(), "");
+        let p = ContinueDevParser;
+        assert!(p.assess(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn whitespace_config_is_clean() {
+        let dir = tempdir().unwrap();
+        write_config(dir.path(), "  \n\t ");
+        let p = ContinueDevParser;
+        assert!(p.assess(dir.path()).unwrap().is_empty());
     }
 
     #[test]

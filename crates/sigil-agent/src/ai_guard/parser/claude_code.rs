@@ -29,10 +29,10 @@ impl AiGuardParser for ClaudeCodeParser {
 
     fn collect_external_script_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
         let claude = home_dir.join(".claude");
-        let base = read_json_optional(&claude.join("settings.json"))
+        let base = super::read_json_optional(&claude.join("settings.json"))
             .ok()
             .flatten();
-        let local = read_json_optional(&claude.join("settings.local.json"))
+        let local = super::read_json_optional(&claude.join("settings.local.json"))
             .ok()
             .flatten();
         if base.is_none() && local.is_none() {
@@ -51,8 +51,8 @@ impl AiGuardParser for ClaudeCodeParser {
         let base_path = claude.join("settings.json");
         let local_path = claude.join("settings.local.json");
 
-        let base = read_json_optional(&base_path)?;
-        let local = read_json_optional(&local_path)?;
+        let base = super::read_json_optional(&base_path)?;
+        let local = super::read_json_optional(&local_path)?;
 
         // Missing primary file with no overlay → operator hasn't enabled tool.
         if base.is_none() && local.is_none() {
@@ -67,23 +67,6 @@ impl AiGuardParser for ClaudeCodeParser {
         emit_permission_reasons(&merged, &mut out);
         emit_mcp_reasons(&merged, &mut out);
         Ok(out)
-    }
-}
-
-/// Read + parse a JSON file, treating `NotFound` as `Ok(None)`.
-pub(crate) fn read_json_optional(path: &Path) -> Result<Option<Value>, AssessError> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => serde_json::from_str(&s)
-            .map(Some)
-            .map_err(|e| AssessError::Parse {
-                path: path.to_path_buf(),
-                message: e.to_string(),
-            }),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(AssessError::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
     }
 }
 
@@ -359,10 +342,10 @@ impl AiGuardParser for ClaudeCodeProjectParser {
 
     fn collect_external_script_paths(&self, _home_dir: &Path) -> Vec<PathBuf> {
         let claude = self.repo_root.join(".claude");
-        let base = read_json_optional(&claude.join("settings.json"))
+        let base = super::read_json_optional(&claude.join("settings.json"))
             .ok()
             .flatten();
-        let local = read_json_optional(&claude.join("settings.local.json"))
+        let local = super::read_json_optional(&claude.join("settings.local.json"))
             .ok()
             .flatten();
         if base.is_none() && local.is_none() {
@@ -378,8 +361,8 @@ impl AiGuardParser for ClaudeCodeProjectParser {
 
     fn assess(&self, _home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
         let cd = self.repo_root.join(".claude");
-        let base = read_json_optional(&cd.join("settings.json"))?;
-        let local = read_json_optional(&cd.join("settings.local.json"))?;
+        let base = super::read_json_optional(&cd.join("settings.json"))?;
+        let local = super::read_json_optional(&cd.join("settings.local.json"))?;
         if base.is_none() && local.is_none() {
             return Ok(Vec::new());
         }
@@ -403,6 +386,22 @@ mod tests {
         let claude = home.join(".claude");
         std::fs::create_dir_all(&claude).unwrap();
         std::fs::write(claude.join("settings.json"), contents).unwrap();
+    }
+
+    #[test]
+    fn empty_config_is_clean() {
+        let dir = tempdir().unwrap();
+        write_settings(dir.path(), "");
+        let p = ClaudeCodeParser;
+        assert!(p.assess(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn whitespace_config_is_clean() {
+        let dir = tempdir().unwrap();
+        write_settings(dir.path(), "  \n\t ");
+        let p = ClaudeCodeParser;
+        assert!(p.assess(dir.path()).unwrap().is_empty());
     }
 
     #[test]

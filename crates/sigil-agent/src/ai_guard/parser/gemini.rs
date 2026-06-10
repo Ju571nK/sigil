@@ -13,15 +13,9 @@ use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
 use std::path::{Path, PathBuf};
 
 fn assess_path(path: PathBuf) -> Result<Vec<AiGuardReason>, AssessError> {
-    let text = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => return Err(AssessError::Io { path, source }),
+    let Some(val) = super::read_json_optional(&path)? else {
+        return Ok(Vec::new());
     };
-    let val: Value = serde_json::from_str(&text).map_err(|e| AssessError::Parse {
-        path: path.clone(),
-        message: e.to_string(),
-    })?;
     let mut out = Vec::new();
     emit_sandbox(&val, &mut out);
     emit_mcp_reasons(&val, &mut out);
@@ -165,6 +159,18 @@ mod tests {
         GeminiParser.assess(home).unwrap()
     }
 
+    #[test]
+    fn empty_config_is_clean() {
+        let d = tempdir().unwrap();
+        write(d.path(), "");
+        assert!(assess(d.path()).is_empty());
+    }
+    #[test]
+    fn whitespace_config_is_clean() {
+        let d = tempdir().unwrap();
+        write(d.path(), "  \n\t ");
+        assert!(assess(d.path()).is_empty());
+    }
     #[test]
     fn missing_returns_empty() {
         let d = tempdir().unwrap();
