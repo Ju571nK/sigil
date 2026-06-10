@@ -5,7 +5,6 @@
 //! desktop config; only `mcpServers` is meaningful here.
 
 use crate::ai_guard::parser::{AiGuardParser, AssessError};
-use crate::ai_guard::rubric;
 use serde_json::Value;
 use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
 use std::path::{Path, PathBuf};
@@ -90,79 +89,15 @@ impl AiGuardParser for ClaudeDesktopParser {
     }
 }
 
-/// Walk `mcpServers` object. For each entry:
-/// - `url` ⇒ McpServerRemote
-/// - `command` + args ⇒ NoSandbox{executor:"mcp_command"}
-/// - `command` is a shell + args contains shell flag + destructive pattern
-///   ⇒ also DestructiveInInlineCommand
+/// Walk `mcpServers` object and delegate each entry to the shared
+/// `mcp_scan::emit_one_server` assessor.
 fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
     let Some(servers) = settings.get("mcpServers").and_then(Value::as_object) else {
         return;
     };
     for (name, def) in servers {
-        // Remote (HTTP) MCP transport.
-        if let Some(url) = def.get("url").and_then(Value::as_str) {
-            if url.starts_with("http://") || url.starts_with("https://") {
-                out.push(AiGuardReason::McpServerRemote {
-                    server_name: name.clone(),
-                    url: url.to_string(),
-                });
-            }
-            // url-mode servers don't also have a command — skip command branch.
-            continue;
-        }
-        // Local stdio MCP: command + args. Always counts as host-shell exec.
-        let Some(command) = def.get("command").and_then(Value::as_str) else {
-            continue;
-        };
-        out.push(AiGuardReason::NoSandbox {
-            executor: "mcp_command".into(),
-        });
-        // Shell-wrapper detection: command is a known shell AND args contains
-        // a shell flag with a destructive pattern in the next arg.
-        if is_shell(command) {
-            if let Some(args) = def.get("args").and_then(Value::as_array) {
-                if let Some(snippet) = first_destructive_after_shell_flag(args) {
-                    if let Some(pat) = rubric::first_destructive_pattern(&snippet) {
-                        out.push(AiGuardReason::DestructiveInInlineCommand {
-                            pattern: pat.to_string(),
-                            hook_event: "mcp_command".into(),
-                            snippet: snippet.chars().take(80).collect(),
-                        });
-                    }
-                }
-            }
-        }
+        crate::ai_guard::parser::mcp_scan::emit_one_server(name, def, out);
     }
-}
-
-fn is_shell(cmd: &str) -> bool {
-    matches!(
-        cmd.rsplit(['/', '\\']).next().unwrap_or(cmd),
-        "sh" | "bash"
-            | "zsh"
-            | "dash"
-            | "cmd"
-            | "cmd.exe"
-            | "powershell"
-            | "powershell.exe"
-            | "pwsh"
-    )
-}
-
-/// Given an args array like `["-c", "rm -rf /tmp"]`, return the string
-/// following the first shell-execution flag, or None.
-fn first_destructive_after_shell_flag(args: &[Value]) -> Option<String> {
-    let mut iter = args.iter();
-    while let Some(a) = iter.next() {
-        let Some(s) = a.as_str() else { continue };
-        if matches!(s, "-c" | "/c" | "/C" | "-Command") {
-            if let Some(next) = iter.next().and_then(Value::as_str) {
-                return Some(next.to_string());
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -222,6 +157,12 @@ mod tests {
                 AiGuardReason::NoSandbox { executor } if executor == "mcp_command"
             )),
             "expected NoSandbox{{executor:\"mcp_command\"}} in {reasons:?}"
+        );
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::McpServerLocalCommand { .. })),
+            "#125: expected McpServerLocalCommand in {reasons:?}"
         );
     }
 
@@ -312,5 +253,36 @@ mod tests {
     fn tool_is_claude_desktop() {
         let p = ClaudeDesktopParser;
         assert_eq!(p.tool(), AiTool::ClaudeDesktop);
+    }
+
+    #[test]
+    fn local_command_mcp_emits_local_command_reason() {
+        let dir = tempdir().unwrap();
+        write_config_macos(
+            dir.path(),
+            r#"{"mcpServers": {"local": {"command": "/tmp/x", "args": ["a"]}}}"#,
+        );
+        let reasons = ClaudeDesktopParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(r,
+            AiGuardReason::McpServerLocalCommand { server_name, .. } if server_name=="local")),
+            "expected McpServerLocalCommand in {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn server_with_both_url_and_command_emits_both() {
+        let dir = tempdir().unwrap();
+        write_config_macos(
+            dir.path(),
+            r#"{"mcpServers": {"both": {"url": "https://x", "command": "node"}}}"#,
+        );
+        let reasons = ClaudeDesktopParser.assess(dir.path()).unwrap();
+        assert!(reasons
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::McpServerRemote { .. })));
+        assert!(reasons
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::McpServerLocalCommand { .. })));
     }
 }

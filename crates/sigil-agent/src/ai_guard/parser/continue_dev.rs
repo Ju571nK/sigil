@@ -86,34 +86,7 @@ pub(crate) fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
 }
 
 fn emit_one_mcp(name: &str, def: &Value, out: &mut Vec<AiGuardReason>) {
-    if let Some(url) = def.get("url").and_then(Value::as_str) {
-        if super::mcp_scan::scheme_is_http(url) {
-            out.push(AiGuardReason::McpServerRemote {
-                server_name: name.to_string(),
-                url: url.to_string(),
-            });
-        }
-        return;
-    }
-    let Some(command) = def.get("command").and_then(Value::as_str) else {
-        return;
-    };
-    out.push(AiGuardReason::NoSandbox {
-        executor: "mcp_command".into(),
-    });
-    if is_shell(command) {
-        if let Some(args) = def.get("args").and_then(Value::as_array) {
-            if let Some(snippet) = first_destructive_after_shell_flag(args) {
-                if let Some(pat) = rubric::first_destructive_pattern(&snippet) {
-                    out.push(AiGuardReason::DestructiveInInlineCommand {
-                        pattern: pat.to_string(),
-                        hook_event: "mcp_command".into(),
-                        snippet: snippet.chars().take(80).collect(),
-                    });
-                }
-            }
-        }
-    }
+    super::mcp_scan::emit_one_server(name, def, out);
 }
 
 /// slashCommands entries: {name, description, step?, run?, prompt?}.
@@ -247,33 +220,6 @@ fn path_is_inside(candidate: &Path, root: &Path) -> bool {
     c.starts_with(&r)
 }
 
-fn is_shell(cmd: &str) -> bool {
-    matches!(
-        cmd.rsplit(['/', '\\']).next().unwrap_or(cmd),
-        "sh" | "bash"
-            | "zsh"
-            | "dash"
-            | "cmd"
-            | "cmd.exe"
-            | "powershell"
-            | "powershell.exe"
-            | "pwsh"
-    )
-}
-
-fn first_destructive_after_shell_flag(args: &[Value]) -> Option<String> {
-    let mut iter = args.iter();
-    while let Some(a) = iter.next() {
-        let Some(s) = a.as_str() else { continue };
-        if matches!(s, "-c" | "/c" | "/C" | "-Command") {
-            if let Some(next) = iter.next().and_then(Value::as_str) {
-                return Some(next.to_string());
-            }
-        }
-    }
-    None
-}
-
 /// Phase 3b.6.1 — per-repo Continue.dev parser. Spawned by runtime /
 /// policy_reload after discovery; each instance carries its own repo
 /// root and emits AiGuardRiskAssessed with scope=Project{path:repo_root}.
@@ -379,6 +325,12 @@ mod tests {
             r,
             AiGuardReason::NoSandbox { executor } if executor == "mcp_command"
         )));
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::McpServerLocalCommand { .. })),
+            "#125: expected McpServerLocalCommand in {reasons:?}"
+        );
     }
 
     #[test]
@@ -394,6 +346,12 @@ mod tests {
             r,
             AiGuardReason::NoSandbox { executor } if executor == "mcp_command"
         )));
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::McpServerLocalCommand { .. })),
+            "#125: expected McpServerLocalCommand in {reasons:?}"
+        );
     }
 
     #[test]
@@ -627,6 +585,33 @@ mod tests {
         paths.sort();
         let expected = vec![std::path::PathBuf::from("/opt/sigil-tools/lint.sh")];
         assert_eq!(paths, expected);
+    }
+
+    #[test]
+    fn mcp_object_form_emits_local_command_reason() {
+        let dir = tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"{"mcpServers": {"fs": {"command": "/tmp/x", "args": ["m.js"]}}}"#,
+        );
+        let reasons = ContinueDevParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(r,
+            AiGuardReason::McpServerLocalCommand { server_name, .. } if server_name=="fs")),
+            "expected McpServerLocalCommand in {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn mcp_array_form_emits_local_command_reason() {
+        let dir = tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"{"mcpServers": [{"name": "fs", "command": "/tmp/x", "args": ["m.js"]}]}"#,
+        );
+        let reasons = ContinueDevParser.assess(dir.path()).unwrap();
+        assert!(reasons.iter().any(|r| matches!(r,
+            AiGuardReason::McpServerLocalCommand { server_name, .. } if server_name=="fs")));
     }
 
     #[test]

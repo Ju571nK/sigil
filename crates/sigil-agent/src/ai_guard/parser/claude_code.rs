@@ -324,15 +324,7 @@ pub(crate) fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
         return;
     };
     for (name, def) in servers {
-        let Some(url) = def.get("url").and_then(Value::as_str) else {
-            continue;
-        };
-        if url.starts_with("http://") || url.starts_with("https://") {
-            out.push(AiGuardReason::McpServerRemote {
-                server_name: name.clone(),
-                url: url.to_string(),
-            });
-        }
+        super::mcp_scan::emit_one_server(name, def, out);
     }
 }
 
@@ -575,6 +567,13 @@ mod tests {
         assert!(!reasons
             .iter()
             .any(|r| matches!(r, AiGuardReason::McpServerRemote { .. })));
+        // #125: it must ALSO now emit the local-command baseline.
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::McpServerLocalCommand { .. })),
+            "expected McpServerLocalCommand in {reasons:?}"
+        );
     }
 
     #[test]
@@ -916,6 +915,44 @@ mod tests {
             out.iter()
                 .any(|r| matches!(r, AiGuardReason::ExternalScriptUnscanned { .. })),
             "expected ExternalScriptUnscanned for missing external script, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn mcp_local_command_emits_local_and_nosandbox() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"mcpServers": {"local": {"command": "/tmp/payload", "args": ["x"]}}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(r,
+            AiGuardReason::McpServerLocalCommand { server_name, command }
+                if server_name=="local" && command=="/tmp/payload")),
+            "expected McpServerLocalCommand in {reasons:?}"
+        );
+        assert!(reasons.iter().any(|r| matches!(r,
+            AiGuardReason::NoSandbox { executor } if executor=="mcp_command")));
+    }
+
+    #[test]
+    fn mcp_url_normalization_uppercase_and_leading_space() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"mcpServers": {"a": {"url": "HTTP://x"}, "b": {"url": "  https://y"}}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(r,
+                AiGuardReason::McpServerRemote { server_name, .. } if server_name == "a")),
+            "uppercase-scheme server \"a\" should emit remote: {reasons:?}"
+        );
+        assert!(
+            reasons.iter().any(|r| matches!(r,
+                AiGuardReason::McpServerRemote { server_name, .. } if server_name == "b")),
+            "leading-space server \"b\" should emit remote: {reasons:?}"
         );
     }
 

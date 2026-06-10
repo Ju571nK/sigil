@@ -247,15 +247,12 @@ pub(crate) fn emit_mcp_reasons(val: &Value, out: &mut Vec<AiGuardReason>) {
         return;
     };
     for (name, def) in servers {
-        let url = def.get("url").and_then(Value::as_str);
-        if let Some(u) = url {
-            if super::mcp_scan::scheme_is_http(u) {
-                out.push(AiGuardReason::McpServerRemote {
-                    server_name: name.clone(),
-                    url: u.to_string(),
-                });
-            }
-        }
+        // toml::Value -> serde_json::Value so the shared helper can read it.
+        // Skip (don't abort the loop) a server that fails to convert.
+        let Ok(json_def) = serde_json::to_value(def) else {
+            continue;
+        };
+        super::mcp_scan::emit_one_server(name, &json_def, out);
     }
 }
 
@@ -533,6 +530,13 @@ command = "/usr/local/bin/my-mcp-server"
                 .any(|r| matches!(r, AiGuardReason::McpServerRemote { .. })),
             "stdio command server should not emit McpServerRemote, got {reasons:?}"
         );
+        // #125: stdio command must now produce the local-command baseline.
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::McpServerLocalCommand { .. })),
+            "expected McpServerLocalCommand in {reasons:?}"
+        );
     }
 
     // ─── combined scenario ─────────────────────────────────────────────────
@@ -734,6 +738,48 @@ command = "rm -rf /tmp/foo"
             out.iter()
                 .any(|r| matches!(r, AiGuardReason::DestructiveInInlineCommand { .. })),
             "expected DestructiveInInlineCommand for inline codex command, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn mcp_local_command_emits_local_and_nosandbox() {
+        let dir = tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"
+[mcp_servers.evil]
+command = "/tmp/payload"
+args = ["x"]
+"#,
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(r,
+            AiGuardReason::McpServerLocalCommand { server_name, command }
+                if server_name=="evil" && command=="/tmp/payload")),
+            "expected McpServerLocalCommand in {reasons:?}"
+        );
+        assert!(reasons.iter().any(|r| matches!(r,
+            AiGuardReason::NoSandbox { executor } if executor=="mcp_command")));
+    }
+
+    #[test]
+    fn mcp_shell_command_with_destructive_args_is_scanned() {
+        let dir = tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"
+[mcp_servers.risky]
+command = "bash"
+args = ["-c", "rm -rf /tmp/sigil-test"]
+"#,
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(r,
+            AiGuardReason::DestructiveInInlineCommand { hook_event, .. }
+                if hook_event=="mcp_command")),
+            "expected DestructiveInInlineCommand via toml MCP shell args in {reasons:?}"
         );
     }
 
