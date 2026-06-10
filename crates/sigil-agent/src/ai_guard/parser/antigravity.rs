@@ -28,35 +28,14 @@ fn mcp_config_path(home: &Path) -> PathBuf {
     home.join(".gemini").join("config").join("mcp_config.json")
 }
 
-/// Read + parse a JSON file. Missing file -> `Ok(None)` (not an error); IO/parse
-/// failures surface as `AssessError`.
-fn read_json(path: &Path) -> Result<Option<Value>, AssessError> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => {
-            return Err(AssessError::Io {
-                path: path.to_path_buf(),
-                source,
-            })
-        }
-    };
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|e| AssessError::Parse {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        })
-}
-
 fn assess_user(home: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
     let mut out = Vec::new();
-    if let Some(settings) = read_json(&settings_path(home))? {
+    if let Some(settings) = super::read_json_optional(&settings_path(home))? {
         emit_sandbox(&settings, &mut out);
         emit_approval(&settings, &mut out);
     }
     // MCP lives in a separate file (shared across Antigravity IDE/CLI).
-    if let Some(mcp) = read_json(&mcp_config_path(home))? {
+    if let Some(mcp) = super::read_json_optional(&mcp_config_path(home))? {
         emit_mcp_reasons(&mcp, &mut out);
     }
     Ok(out)
@@ -140,7 +119,7 @@ impl AiGuardParser for AntigravityProjectParser {
     }
     fn assess(&self, _home: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
         let mut out = Vec::new();
-        if let Some(settings) = read_json(&self.settings())? {
+        if let Some(settings) = super::read_json_optional(&self.settings())? {
             emit_sandbox(&settings, &mut out);
             emit_approval(&settings, &mut out);
         }
@@ -257,6 +236,30 @@ mod tests {
             AntigravityParser.assess(d.path()).unwrap_err(),
             AssessError::Parse { .. }
         ));
+    }
+    #[test]
+    fn empty_config_is_clean() {
+        let d = tempdir().unwrap();
+        write_settings(d.path(), "");
+        assert!(assess(d.path()).is_empty());
+    }
+    #[test]
+    fn whitespace_config_is_clean() {
+        let d = tempdir().unwrap();
+        write_settings(d.path(), "  \n\t ");
+        assert!(assess(d.path()).is_empty());
+    }
+    #[test]
+    fn empty_mcp_config_is_clean() {
+        let d = tempdir().unwrap();
+        write_mcp(d.path(), "");
+        assert!(assess(d.path()).is_empty());
+    }
+    #[test]
+    fn whitespace_mcp_config_is_clean() {
+        let d = tempdir().unwrap();
+        write_mcp(d.path(), "  \n\t ");
+        assert!(assess(d.path()).is_empty());
     }
     #[test]
     fn tool_and_scope() {

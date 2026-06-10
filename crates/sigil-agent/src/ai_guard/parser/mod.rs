@@ -10,6 +10,7 @@ pub mod cursor;
 pub mod gemini;
 pub mod mcp_scan;
 
+use serde_json::Value;
 use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -73,6 +74,34 @@ pub trait AiGuardParser: Send + Sync {
     }
 }
 
+/// Read + parse a JSON config file with the AI Guard's "absent = clean"
+/// convention. A missing file AND an empty / whitespace-only file both map to
+/// `Ok(None)` — the operator hasn't configured anything, which is not a
+/// finding. Non-empty malformed JSON is a real `Parse` error; I/O failures are
+/// `Io`. Single source of truth so every JSON parser treats a 0-byte config
+/// alike (#131).
+pub(crate) fn read_json_optional(path: &Path) -> Result<Option<Value>, AssessError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(AssessError::Io {
+                path: path.to_path_buf(),
+                source,
+            })
+        }
+    };
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| AssessError::Parse {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AssessError {
     #[error("read {path}: {source}")]
@@ -83,4 +112,53 @@ pub enum AssessError {
     },
     #[error("parse {path}: {message}")]
     Parse { path: PathBuf, message: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn read_json_optional_missing_file_returns_none() {
+        let d = tempdir().unwrap();
+        let result = read_json_optional(&d.path().join("nonexistent.json"));
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn read_json_optional_empty_file_returns_none() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("empty.json");
+        std::fs::write(&p, "").unwrap();
+        assert!(read_json_optional(&p).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_json_optional_whitespace_only_returns_none() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("ws.json");
+        std::fs::write(&p, "  \n\t ").unwrap();
+        assert!(read_json_optional(&p).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_json_optional_valid_json_returns_some() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("valid.json");
+        std::fs::write(&p, r#"{"key": "value"}"#).unwrap();
+        let val = read_json_optional(&p).unwrap().unwrap();
+        assert_eq!(val.get("key").and_then(Value::as_str), Some("value"));
+    }
+
+    #[test]
+    fn read_json_optional_nonempty_malformed_returns_parse_error() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("bad.json");
+        std::fs::write(&p, "{bad").unwrap();
+        assert!(matches!(
+            read_json_optional(&p).unwrap_err(),
+            AssessError::Parse { .. }
+        ));
+    }
 }
