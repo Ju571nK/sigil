@@ -70,18 +70,144 @@ pub(crate) fn scheme_is_http(u: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
+/// Lowercased basename with a single trailing `.exe` stripped — normalized
+/// launcher name. Defeats `BASH.EXE` / `PwSh` / `bash.exe` case+extension
+/// evasion (macOS/Windows default filesystems are case-insensitive).
+fn launcher_basename(cmd: &str) -> String {
+    let base = cmd
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(cmd)
+        .to_ascii_lowercase();
+    match base.strip_suffix(".exe") {
+        Some(stripped) => stripped.to_string(),
+        None => base,
+    }
+}
+
 fn is_shell(cmd: &str) -> bool {
     matches!(
-        cmd.rsplit(['/', '\\']).next().unwrap_or(cmd),
-        "sh" | "bash"
-            | "zsh"
-            | "dash"
-            | "cmd"
-            | "cmd.exe"
-            | "powershell"
-            | "powershell.exe"
-            | "pwsh"
+        launcher_basename(cmd).as_str(),
+        "sh" | "bash" | "zsh" | "dash" | "cmd" | "powershell" | "pwsh"
     )
+}
+
+/// #127 — inline-exec flags that make a shell launcher "config-as-code".
+/// `-EncodedCommand`/`-enc` payloads can't be content-scanned; the Shell
+/// shape itself is the structural answer to encoding evasion.
+#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
+fn is_inline_exec_flag(arg: &str) -> bool {
+    matches!(
+        arg.to_ascii_lowercase().as_str(),
+        "-c" | "/c" | "/k" | "-command" | "-encodedcommand" | "-enc" | "-file"
+    )
+}
+
+/// #127 — `env`-wrapper unwrap: `/usr/bin/env bash -c …` is assessed as
+/// `bash -c …`. Skips `-flags` and `VAR=val` assignments after `env`;
+/// returns (effective command, args after it). Non-env passes through.
+#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
+fn effective_shell_target<'a>(command: &'a str, args: &'a [Value]) -> (&'a str, &'a [Value]) {
+    if launcher_basename(command) != "env" {
+        return (command, args);
+    }
+    for (i, a) in args.iter().enumerate() {
+        let Some(s) = a.as_str() else { continue };
+        if s.starts_with('-') || is_env_assignment(s) {
+            continue;
+        }
+        return (s, &args[i + 1..]);
+    }
+    (command, args)
+}
+
+/// `FOO=bar`-shaped env assignment (POSIX env var name).
+#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
+fn is_env_assignment(s: &str) -> bool {
+    let Some(eq) = s.find('=') else { return false };
+    let name = &s[..eq];
+    !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// #127 — transient/attacker-writable launch location. Narrow positive list
+/// (temp, cache, runtime-dir) — general dotdirs (`~/.cargo/bin` …), relative
+/// paths and bare names deliberately do NOT match (false-positive budget).
+/// Case-insensitive segment comparison defeats `/TMP/x`.
+#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
+fn is_transient_path(s: &str) -> bool {
+    let segs: Vec<String> = s
+        .split(['/', '\\'])
+        .filter(|p| !p.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    // A launcher needs at least <marker>/<file>.
+    if segs.len() < 2 {
+        return false;
+    }
+    // POSIX temp/runtime roots — absolute paths only.
+    if s.starts_with('/') {
+        const ROOTS: &[&[&str]] = &[
+            &["tmp"],
+            &["private", "tmp"],
+            &["var", "tmp"],
+            &["private", "var", "tmp"],
+            &["dev", "shm"],
+            &["var", "folders"],
+            &["run", "user"],
+            &["var", "run", "user"],
+        ];
+        if ROOTS.iter().any(|r| starts_with_seq(&segs, r)) {
+            return true;
+        }
+    }
+    // Windows drive-root temp: C:\Temp\x, D:\tmp\x.
+    if segs.len() > 2
+        && segs[0].len() == 2
+        && segs[0].ends_with(':')
+        && segs[0]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+        && matches!(segs[1].as_str(), "temp" | "tmp")
+    {
+        return true;
+    }
+    // Marker sequences anywhere in the path.
+    const SEQS: &[&[&str]] = &[
+        &["windows", "temp"],
+        &["appdata", "local", "temp"],
+        &["%localappdata%", "temp"],
+        &["library", "caches"],
+    ];
+    if SEQS.iter().any(|q| contains_seq(&segs, q)) {
+        return true;
+    }
+    // Single-segment markers (cache dir, unexpanded env temp references).
+    segs.iter().any(|p| {
+        matches!(
+            p.as_str(),
+            ".cache" | "%temp%" | "%tmp%" | "$tmpdir" | "${tmpdir}" | "$env:temp" | "$env:tmp"
+        )
+    })
+}
+
+/// segs strictly longer than prefix (something must follow the marker dir).
+#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
+fn starts_with_seq(segs: &[String], prefix: &[&str]) -> bool {
+    segs.len() > prefix.len() && segs.iter().zip(prefix.iter()).all(|(a, b)| a == b)
+}
+
+#[allow(dead_code)] // #127 Task 3 wires these into emit_one_server
+fn contains_seq(segs: &[String], needle: &[&str]) -> bool {
+    segs.len() >= needle.len()
+        && segs
+            .windows(needle.len())
+            .any(|w| w.iter().zip(needle.iter()).all(|(a, b)| a == b))
 }
 
 /// Returns the argument following a shell command flag (`-c`, `/c`, `/C`,
@@ -184,6 +310,85 @@ mod tests {
         assert!(!r
             .iter()
             .any(|x| matches!(x, AiGuardReason::DestructiveInInlineCommand { .. })));
+    }
+
+    // ---- #127 helpers --------------------------------------------------
+
+    #[test]
+    fn is_shell_normalizes_case_and_exe_suffix() {
+        for s in [
+            "bash", "BASH.EXE", "PwSh", "pwsh.exe", "/bin/zsh",
+            r"C:\Windows\System32\cmd.exe", "PowerShell.EXE", "sh", "dash",
+        ] {
+            assert!(is_shell(s), "{s} should be a shell");
+        }
+        for s in ["node", "npx", "python3.12", "bun", "uv", "bashful", "env", "fish"] {
+            assert!(!is_shell(s), "{s} must NOT be a shell");
+        }
+    }
+
+    #[test]
+    fn inline_exec_flags_case_insensitive() {
+        for s in ["-c", "/c", "/K", "-Command", "-EncodedCommand", "-enc", "-File"] {
+            assert!(is_inline_exec_flag(s), "{s}");
+        }
+        for s in ["-l", "--login", "server.sh", "-e", "/x"] {
+            assert!(!is_inline_exec_flag(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn env_wrapper_unwraps_to_real_target() {
+        let args = vec![json!("-S"), json!("FOO=1"), json!("bash"), json!("-c"), json!("x")];
+        let (cmd, rest) = effective_shell_target("/usr/bin/env", &args);
+        assert_eq!(cmd, "bash");
+        assert_eq!(rest.len(), 2); // ["-c", "x"]
+
+        // non-env passes through untouched
+        let args2 = vec![json!("-c")];
+        let (cmd2, rest2) = effective_shell_target("bash", &args2);
+        assert_eq!(cmd2, "bash");
+        assert_eq!(rest2.len(), 1);
+
+        // env with nothing usable falls back to itself
+        let args3 = vec![json!("-i")];
+        let (cmd3, _) = effective_shell_target("env", &args3);
+        assert_eq!(cmd3, "env");
+    }
+
+    #[test]
+    fn transient_path_positive_list() {
+        for s in [
+            "/tmp/payload", "/tmp/python3", "/TMP/x", "/tmp/.x/bash",
+            "/private/tmp/a", "/var/tmp/a", "/private/var/tmp/a",
+            "/dev/shm/a", "/var/folders/ab/x", "/run/user/1000/x",
+            "/var/run/user/1000/x",
+            r"C:\Users\u\AppData\Local\Temp\x.exe", r"C:\Windows\Temp\x.exe",
+            r"C:\Temp\x.exe", r"D:\tmp\x.exe",
+            r"%TEMP%\x.exe", r"%TMP%\x", "$TMPDIR/x", "${TMPDIR}/x",
+            r"$env:TEMP\x", r"%LOCALAPPDATA%\Temp\x",
+            "~/.cache/x/payload", "/Users/u/.cache/x",
+            "/Users/u/Library/Caches/x", "~/Library/Caches/x",
+        ] {
+            assert!(is_transient_path(s), "{s} should be transient");
+        }
+    }
+
+    #[test]
+    fn transient_path_negative_list() {
+        for s in [
+            "npx", "bun", "uv", "node", "python3.12",          // bare names
+            "/usr/bin/env", "/usr/local/bin/node",             // normal abs
+            "~/.cargo/bin/my-tool", "~/.local/bin/uvx",        // toolchain dotdirs
+            "~/.nvm/versions/node/v22/bin/node",
+            "./target/debug/my-mcp-server", "a/b",             // relative
+            "node_modules/.bin/server",                        // .bin != .cache
+            "~/tmp/x",                                         // non-standard personal temp
+            "/tmp",                                            // dir itself, no file
+            "/tmpfoo/x",                                       // segment mismatch
+        ] {
+            assert!(!is_transient_path(s), "{s} must NOT be transient");
+        }
     }
 
     #[test]
