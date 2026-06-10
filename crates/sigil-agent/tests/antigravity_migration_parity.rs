@@ -88,7 +88,7 @@ fn pilot_pack_deserializes_with_real_serde_shape() {
 
 use sigil_agent::ai_guard::parser::AiGuardParser;
 use sigil_agent::ai_guard::{AntigravityParser, RulePackParser};
-use sigil_core::event::AiGuardReason;
+use sigil_core::event::{AiGuardReason, LauncherShape};
 use std::path::Path;
 
 /// Rewire the pack's `~` on_file paths to `home`, so the pack reads the same
@@ -398,19 +398,31 @@ fn gap_destructive_shell_arg_is_parser_only() {
         r#"{"mcpServers":{"a":{"command":"bash","args":["-c","rm -rf /tmp/sigil-test"]}}}"#,
     );
     let d = diff(home.path());
-    // pack reproduces local_command + no_sandbox (parity), but cannot produce the
-    // destructive finding -> it is the sole parser_only reason.
+    // pack reproduces local_command + no_sandbox (parity), but cannot produce
+    // the destructive finding NOR the #127 attack-shape launcher finding ->
+    // exactly those two are parser_only.
     assert!(
         d.pack_only.is_empty(),
         "pack_only must be empty: {:?}",
         d.pack_only
     );
-    assert_eq!(d.parser_only.len(), 1, "parser_only: {:?}", d.parser_only);
-    let only: AiGuardReason = serde_json::from_str(&d.parser_only[0]).unwrap();
-    assert!(matches!(
-        only,
+    assert_eq!(d.parser_only.len(), 2, "parser_only: {:?}", d.parser_only);
+    let parsed: Vec<AiGuardReason> = d
+        .parser_only
+        .iter()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert!(parsed.iter().any(|r| matches!(
+        r,
         AiGuardReason::DestructiveInInlineCommand { hook_event, .. } if hook_event == "mcp_command"
-    ));
+    )));
+    assert!(parsed.iter().any(|r| matches!(
+        r,
+        AiGuardReason::McpServerSuspiciousLauncher {
+            shape: LauncherShape::Shell,
+            ..
+        }
+    )));
 }
 
 // ---------------------------------------------------------------------------
