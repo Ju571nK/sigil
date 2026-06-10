@@ -7,6 +7,71 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-10
+
+### Added
+
+- **`sigil-hook` Stage 2 — in-domain enforcement (block)** (#100). The same
+  `PreToolUse` hook that observed tool calls in Stage 1 can now also *decide* and
+  **deny** a disallowed call at the agent tool boundary. Delivered per-agent: a
+  generalized `deny_output` trait with **Claude Code** (#106), **Codex** (#111),
+  **Cursor** (#119), and **Grok Build (xAI)** (#118) adapters. Each agent's deny
+  contract is honored exactly (Cursor `permission`, Grok `decision`), including
+  Cursor's explicit-allow seam so `--on-failure closed` is genuinely fail-closed.
+  Enforcement stays advisory-at-root and open-source/in-tree, never claiming
+  tamper-resistant runtime command security.
+- **Tamper-evidence — hook config-drift detection** (#109, #120). A new
+  `sigil-hook verify` compares the live agent settings against a per-agent
+  recorded baseline (`hook-registration-<agent>.json`) and reports drift:
+  missing hook, repointed binary, narrowed matcher, or a flipped fail-mode
+  (`DriftKind::FailModeDrift`). Format-aware verify with per-agent baselines so
+  enforce and tamper-evidence stay symmetric.
+- **Hook-activity silence detection** (#107). First-class detection of a hook
+  that has gone quiet (absence/silence), closing the gap where a disabled or
+  bypassed hook would otherwise look identical to an idle one.
+- **Signed distribution of hook deny rules** (#115). Hook deny policy now rides
+  the existing signed-bundle pipeline, so enforce rules are distributed with the
+  same provenance guarantees as rule packs.
+- **AI Guard — MCP stdio launcher attack-shape scoring** (#127). A new
+  `McpServerSuspiciousLauncher` reason scores a stdio MCP launcher that is a
+  shell with an inline-exec flag (`bash -c`, including POSIX bundled forms like
+  `-lc`) or that resolves into a transient/writable path (`/tmp`, `/dev/shm`,
+  `/run/user`, Windows `Temp`, `~/.cache`, …) — lifting the attacker-injected
+  launcher shape (the 2026 zero-click MCP incident class) above the benign
+  stdio baseline. Two independently operator-tunable rubric keys.
+
+### Changed
+
+- **Uniform local stdio MCP command detection across all parsers** (#125, #126).
+  Every per-agent parser now routes its per-server MCP definition through one
+  shared `emit_one_server`, closing the divergence where Codex and Claude Code
+  never read a local `command` at all and others only partially scored it.
+- **`show risk --tool` accepts every known tool** (#121, #124). The flag is
+  driven from a single source of truth, so Antigravity, Claude Desktop, and
+  Continue are accepted alongside the others (no more `exit 2` on a valid tool),
+  with a legacy `claude_code` alias preserved.
+
+### Fixed
+
+- **FS-watch e2e tests hardened against parallel-load flake** (#108). Watcher
+  tests that dropped a single startup-window write now use continuous writers or
+  retry loops, and the control-IPC connect budget is configurable — eliminating
+  a class of load-dependent failures rather than a single flake.
+
+### Security
+
+- Stopped tracking a local `.codex/` Codex CLI config that had leaked a test
+  bearer token and an internal server address into the public repo; the token
+  was rotated.
+
+### Internal
+
+- Measurement pilot quantifying the hardcoded-parser → rule-pack migration
+  (#102): a 26-case Antigravity parity harness proving the migration is
+  net-negative today (DSL is type-blind and cannot express the destructive
+  inline-command scan), with no runtime change. Documents the decision to keep
+  the imperative parser kernel.
+
 ## [0.3.0] - 2026-06-04
 
 ### Added
