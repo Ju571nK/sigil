@@ -34,10 +34,12 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
         AiGuardReason::TrustedMcpServer { .. } => "trusted_mcp_server",
         AiGuardReason::AutoApprovalEnabled { .. } => "auto_approval_enabled",
         AiGuardReason::McpServerSuspiciousLauncher {
-            shape: LauncherShape::Shell, ..
+            shape: LauncherShape::Shell,
+            ..
         } => "mcp_launcher_shell",
         AiGuardReason::McpServerSuspiciousLauncher {
-            shape: LauncherShape::TransientPath, ..
+            shape: LauncherShape::TransientPath,
+            ..
         } => "mcp_launcher_transient_path",
     }
 }
