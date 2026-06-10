@@ -211,6 +211,29 @@ pub enum AiGuardReason {
     /// Phase 3b.8 — the agent's default approval mode auto-approves a class
     /// of tool calls without prompting (e.g. Gemini `defaultApprovalMode: "auto_edit"`).
     AutoApprovalEnabled { mode: String },
+    /// #127 — stdio MCP launcher matches an attack shape (shell + inline-exec
+    /// flag, or a transient/writable path in command or args). Emitted in
+    /// ADDITION to the `McpServerLocalCommand` baseline.
+    McpServerSuspiciousLauncher {
+        server_name: String,
+        /// The config's `command` string, verbatim.
+        command: String,
+        shape: LauncherShape,
+        /// Token that triggered the verdict — `"bash -c"`-style for shell,
+        /// the matched path string (command itself or one arg) for
+        /// transient_path.
+        evidence: String,
+    },
+}
+
+/// #127 — classification of a suspicious stdio MCP launcher. Stable wire
+/// strings ("shell" / "transient_path") — SIEM filter keys, renames are
+/// breaking changes.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LauncherShape {
+    Shell,
+    TransientPath,
 }
 
 /// Persisted form of a hook observation (#64). Distinct from the IPC
@@ -1312,5 +1335,28 @@ mod tests {
         assert!(s.contains("\"decision\":\"deny\""));
         let back: Evidence = serde_json::from_str(&s).unwrap();
         assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn mcp_suspicious_launcher_wire_strings_pinned() {
+        let r = AiGuardReason::McpServerSuspiciousLauncher {
+            server_name: "a".into(),
+            command: "bash".into(),
+            shape: LauncherShape::Shell,
+            evidence: "bash -c".into(),
+        };
+        let j = serde_json::to_value(&r).unwrap();
+        assert_eq!(j["kind"], "mcp_server_suspicious_launcher");
+        assert_eq!(j["shape"], "shell");
+        let back: AiGuardReason = serde_json::from_value(j).unwrap();
+        assert_eq!(back, r);
+
+        let t = AiGuardReason::McpServerSuspiciousLauncher {
+            server_name: "a".into(),
+            command: "node".into(),
+            shape: LauncherShape::TransientPath,
+            evidence: "/tmp/payload.js".into(),
+        };
+        assert_eq!(serde_json::to_value(&t).unwrap()["shape"], "transient_path");
     }
 }

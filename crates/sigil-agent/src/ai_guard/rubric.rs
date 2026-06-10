@@ -4,7 +4,7 @@
 //! delegates to `Rubric::defaults().score()` so existing callers (tests,
 //! doctor static-fallback path) keep working unchanged.
 
-use sigil_core::event::{AiGuardBucket, AiGuardReason};
+use sigil_core::event::{AiGuardBucket, AiGuardReason, LauncherShape};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -33,6 +33,12 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
         AiGuardReason::McpServerLocalCommand { .. } => "mcp_server_local_command",
         AiGuardReason::TrustedMcpServer { .. } => "trusted_mcp_server",
         AiGuardReason::AutoApprovalEnabled { .. } => "auto_approval_enabled",
+        AiGuardReason::McpServerSuspiciousLauncher {
+            shape: LauncherShape::Shell, ..
+        } => "mcp_launcher_shell",
+        AiGuardReason::McpServerSuspiciousLauncher {
+            shape: LauncherShape::TransientPath, ..
+        } => "mcp_launcher_transient_path",
     }
 }
 
@@ -42,7 +48,7 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct Rubric {
     /// kind_key → weight. Keys are static strings owned by the rubric
-    /// module (returned by `kind_key()`). Defaults populate all 13 known
+    /// module (returned by `kind_key()`). Defaults populate all 15 known
     /// kinds; with_overrides() may replace values but never adds keys.
     pub weights: HashMap<&'static str, f32>,
     /// Subset of `weights` whose value came from an operator override
@@ -57,7 +63,7 @@ pub struct Rubric {
 impl Rubric {
     /// Build the canonical hardcoded weights — single source of truth for
     /// defaults. Must match the historical `weight_for()` match arms for
-    /// all 13 kinds.
+    /// all 15 kinds.
     pub fn defaults() -> Self {
         let mut w: HashMap<&'static str, f32> = HashMap::new();
         w.insert("destructive_in_inline_command", 4.0);
@@ -71,6 +77,8 @@ impl Rubric {
         w.insert("permissions_deny_empty", 1.0);
         w.insert("mcp_server_remote", 1.0);
         w.insert("mcp_server_local_command", 0.5);
+        w.insert("mcp_launcher_shell", 3.0);
+        w.insert("mcp_launcher_transient_path", 3.0);
         w.insert("trusted_mcp_server", 1.5);
         w.insert("auto_approval_enabled", 2.0);
         Rubric {
@@ -234,7 +242,8 @@ pub fn canonical_hash(reasons: &[AiGuardReason]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sigil_core::event::AiGuardReason;
+    use sigil_core::event::{AiGuardReason, LauncherShape};
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[test]
@@ -409,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn rubric_defaults_produces_eleven_known_weights() {
+    fn rubric_defaults_all_15_kinds_present() {
         let r = Rubric::defaults();
         assert_eq!(r.weights.get("destructive_in_inline_command"), Some(&4.0));
         assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&4.0));
@@ -424,7 +433,9 @@ mod tests {
         assert_eq!(r.weights.get("mcp_server_local_command"), Some(&0.5));
         assert_eq!(r.weights.get("trusted_mcp_server"), Some(&1.5));
         assert_eq!(r.weights.get("auto_approval_enabled"), Some(&2.0));
-        assert_eq!(r.weights.len(), 13);
+        assert_eq!(r.weights.get("mcp_launcher_shell"), Some(&3.0));
+        assert_eq!(r.weights.get("mcp_launcher_transient_path"), Some(&3.0));
+        assert_eq!(r.weights.len(), 15);
     }
 
     #[test]
@@ -537,5 +548,68 @@ mod tests {
                 // Debug build: debug_assert! panicked. That's expected behavior.
             }
         }
+    }
+
+    fn launcher(shape: LauncherShape) -> AiGuardReason {
+        AiGuardReason::McpServerSuspiciousLauncher {
+            server_name: "a".into(),
+            command: "x".into(),
+            shape,
+            evidence: "e".into(),
+        }
+    }
+
+    /// #127 spec §6 — bucket boundaries for the attack-shape launcher.
+    #[test]
+    fn suspicious_launcher_buckets_match_spec_127() {
+        let base = vec![
+            AiGuardReason::McpServerLocalCommand {
+                server_name: "a".into(),
+                command: "npx".into(),
+            },
+            AiGuardReason::NoSandbox {
+                executor: "mcp_command".into(),
+            },
+        ];
+        assert_eq!(score(&base), 2.5);
+        assert_eq!(bucket(score(&base)), AiGuardBucket::Medium);
+
+        let mut high = base.clone();
+        high.push(launcher(LauncherShape::Shell));
+        assert_eq!(score(&high), 5.5);
+        assert_eq!(bucket(score(&high)), AiGuardBucket::High);
+
+        let mut crit = high.clone();
+        crit.push(AiGuardReason::TrustedMcpServer {
+            server_name: "a".into(),
+        });
+        assert_eq!(score(&crit), 7.0);
+        assert_eq!(bucket(score(&crit)), AiGuardBucket::Critical);
+
+        let mut both = high.clone();
+        both.push(launcher(LauncherShape::TransientPath));
+        assert_eq!(score(&both), 8.5);
+        assert_eq!(bucket(score(&both)), AiGuardBucket::Critical);
+
+        let mut shell_destructive = high.clone();
+        shell_destructive.push(AiGuardReason::DestructiveInInlineCommand {
+            pattern: "p".into(),
+            hook_event: "mcp_command".into(),
+            snippet: "rm -rf /".into(),
+        });
+        assert_eq!(score(&shell_destructive), 9.5);
+        assert_eq!(bucket(score(&shell_destructive)), AiGuardBucket::Critical);
+    }
+
+    /// #127 — the two shapes are independently tunable kind_keys.
+    #[test]
+    fn launcher_kind_keys_override_independently() {
+        let mut o = HashMap::new();
+        o.insert("mcp_launcher_shell".to_string(), 0.5_f32);
+        let r = Rubric::defaults().with_overrides(&o);
+        assert_eq!(r.weights.get("mcp_launcher_shell"), Some(&0.5));
+        assert_eq!(r.weights.get("mcp_launcher_transient_path"), Some(&3.0));
+        assert!(r.overridden.contains("mcp_launcher_shell"));
+        assert!(r.unknown_override_keys.is_empty());
     }
 }
