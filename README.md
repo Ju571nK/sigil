@@ -189,8 +189,9 @@ Each event is one JSON object on its own line:
 }
 ```
 
-And — shipped in Phase 3b.1 (Claude Code + Codex; Gemini + Cursor coming
-in 3b.2) — a richer evidence variant for AI guard surfaces:
+And — a richer evidence variant for AI guard surfaces (Claude Code + Codex
+shipped in Phase 3b.1; Claude Desktop + Continue.dev in 3b.6; Gemini + Cursor
+in 3b.8):
 
 ```json
 {
@@ -429,9 +430,10 @@ flowchart LR
 
 ## Status
 
-- **0.1.x — alpha.** The event schema and CLI surface can break between minor
-  releases until 0.2. `schema_version` in every event lets downstream
-  consumers detect this.
+- **0.x — alpha.** Pre-1.0: the CLI surface and config can still change between
+  minor releases. The event **`schema_version`** is the stable contract — it is
+  versioned independently of the crate version (still `1`), so downstream
+  consumers detect wire changes regardless of the release.
 - **Platforms.** macOS, Windows, and Linux at runtime. The Linux runtime
   landed as a minimal foundation (Phase 3a) and is exercised in CI; some
   refinements are marked `TODO(community)` in `platform/linux.rs` — see
@@ -487,9 +489,11 @@ not a requirement.
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
 ```
 
-Installs the six binaries (`sigil`, `sigil-sender`, `sigil-server`,
-`sigil-sign`, `sigil-mcp`, `sigil-hook`) to `~/.local/bin`. Pin a release with `SIGIL_VERSION`, or change
-the location with `SIGIL_INSTALL_DIR`. Every release ships a `SHA256SUMS` file
+Installs the **personal** profile by default (`sigil`, `sigil-mcp`,
+`sigil-hook`) to `~/.local/bin` — local self-assessment, no server. Add the
+server components with `SIGIL_PROFILE=fleet` (see [Install profiles](#install-profiles)
+below). Pin a release with `SIGIL_VERSION`, or change the location with
+`SIGIL_INSTALL_DIR`. Every release ships a `SHA256SUMS` file
 (the installer verifies it) plus a build-provenance attestation you can check:
 
 ```sh
@@ -532,10 +536,12 @@ cargo build
 
 ### Linux packages (`.deb` / `.rpm`)
 
-All four binaries (agent, sender, server, signer) are packaged for
-Debian/Ubuntu and RHEL/Rocky/Fedora. Daemons install a (disabled-by-default)
-systemd unit + `/etc/sigil/<binary>.yaml.example`; `sigil-signer` is an
-operator CLI so it ships just the `/usr/bin/sigil-sign` binary.
+Four packages (agent, sender, server, signer) are built for Debian/Ubuntu and
+RHEL/Rocky/Fedora. The **agent** package (`sigil`) bundles `sigil-mcp` and
+`sigil-hook` too, so installing it is the **personal** profile. Daemons install
+a (disabled-by-default) systemd unit + `/etc/sigil/<binary>.yaml.example`;
+`sigil-signer` is an operator CLI so it ships just the `/usr/bin/sigil-sign`
+binary.
 
 ```sh
 cargo install cargo-deb cargo-generate-rpm   # one-time
@@ -543,21 +549,21 @@ packaging/build.sh                            # all 4 packages, both formats
 packaging/build.sh sender rpm                 # or: just one package, one format
 
 # Agent (host daemon).
-sudo dnf install ./target/generate-rpm/sigil-0.1.0-1.x86_64.rpm
+sudo dnf install ./target/generate-rpm/sigil-0.5.0-1.x86_64.rpm
 sudo systemctl enable --now sigil
 
 # Sender (uploads the JSONL event log to a sigil-server over mTLS).
-sudo dnf install ./target/generate-rpm/sigil-sender-0.1.0-1.x86_64.rpm
+sudo dnf install ./target/generate-rpm/sigil-sender-0.5.0-1.x86_64.rpm
 sudo cp /etc/sigil/sender.yaml.example /etc/sigil/sender.yaml && sudo $EDITOR /etc/sigil/sender.yaml
 sudo systemctl enable --now sigil-sender
 
 # Server (OSS reference: receives events, serves signed policy).
-sudo dnf install ./target/generate-rpm/sigil-server-0.1.0-1.x86_64.rpm
+sudo dnf install ./target/generate-rpm/sigil-server-0.5.0-1.x86_64.rpm
 sudo cp /etc/sigil/server.yaml.example /etc/sigil/server.yaml && sudo $EDITOR /etc/sigil/server.yaml
 sudo systemctl enable --now sigil-server
 
 # Signer (operator CLI: keygen / sign / verify / inspect).
-sudo dnf install ./target/generate-rpm/sigil-signer-0.1.0-1.x86_64.rpm
+sudo dnf install ./target/generate-rpm/sigil-signer-0.5.0-1.x86_64.rpm
 sigil-sign --help
 ```
 
