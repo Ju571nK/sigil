@@ -7,6 +7,52 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-11
+
+### Added
+
+- **Personal / Fleet install profiles** (#134). Sigil now installs as one of two
+  profiles from a single release. `install.sh` takes `SIGIL_PROFILE=personal|fleet`
+  (default `personal`): **personal** installs `sigil` + `sigil-mcp` + `sigil-hook`
+  for local self-assessment with no server; **fleet** adds `sigil-sender`,
+  `sigil-server`, and `sigil-sign` for the signed server-push path. The `sigil`
+  `.deb`/`.rpm` package now bundles `sigil-mcp` and `sigil-hook` (so installing the
+  `sigil` package is the personal profile). See
+  [docs/install-personal.md](docs/install-personal.md).
+- **Local rule-pack hot-reload** (#134). A dedicated filesystem watcher on
+  `rule-packs.yaml` (beside `policy.yaml`) hot-reloads locally-distributed rule
+  packs — e.g. pulled from a git repository — without a server, honoring `--poll`.
+  Corrupt edits retain the last-good bundle (a broken `git pull` will not drop your
+  active packs); a deliberately removed file clears the bundle layer. The local
+  reload path validates deny-rule IDs and compiles regexes with keep-previous
+  semantics, matching the signed-bundle path minus the signature. Local rule packs
+  are unsigned — their trust boundary is the git repository they come from, and
+  they carry `hook_deny_rules` enforcement authority, so use only trusted sources.
+
+### Changed
+
+- **`install.sh` default now installs three binaries, not six** (#134). A plain
+  `curl … | sh` installs the `personal` set (`sigil`, `sigil-mcp`, `sigil-hook`).
+  Existing users who need the server components must install with
+  `SIGIL_PROFILE=fleet`. Personal is Unix-first (`sigil-mcp` local mode and
+  `sigil-hook` enforce are Unix-only; Windows has partial support via the tarball).
+
+### Fixed
+
+- **Empty / whitespace AI-tool config is treated as clean, not a parse error**
+  (#131). A zero-byte or whitespace-only tool config file (e.g. an empty
+  `~/.gemini/config/mcp_config.json`) no longer drops that tool from assessment
+  with an EOF parse error — closing a silent coverage hole found via two-machine
+  dogfooding. Shared `read_json_optional` helper across the JSON config parsers.
+
+### CI
+
+- **Build-provenance attestation is non-blocking** (#130). A transient Sigstore
+  Rekor outage during the release attestation step no longer blocks publishing
+  already-built, already-signed artifacts; re-run the job to (re-)attach
+  attestations. The enforced trust root remains the ed25519 build-manifest
+  signature.
+
 ## [0.4.0] - 2026-06-10
 
 ### Added
