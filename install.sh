@@ -7,6 +7,9 @@
 # Environment overrides:
 #   SIGIL_VERSION       pin a release tag (default: latest), e.g. v0.1.0
 #   SIGIL_INSTALL_DIR   install directory (default: $HOME/.local/bin)
+#   SIGIL_PROFILE       personal (default) | fleet
+#                       personal = sigil + sigil-mcp + sigil-hook (local self-assessment)
+#                       fleet    = + sigil-sender + sigil-server + sigil-sign
 #
 # Provenance: every release archive also carries a GitHub build-provenance
 # attestation. To verify it (optional, needs the gh CLI):
@@ -14,11 +17,24 @@
 set -eu
 
 REPO="Ju571nK/sigil"
-BINARIES="sigil sigil-sender sigil-server sigil-sign sigil-mcp sigil-hook"
 INSTALL_DIR="${SIGIL_INSTALL_DIR:-$HOME/.local/bin}"
 
 say() { printf 'sigil-install: %s\n' "$1" >&2; }
 err() { printf 'sigil-install: error: %s\n' "$1" >&2; exit 1; }
+
+PROFILE="${SIGIL_PROFILE:-personal}"
+case "$PROFILE" in
+  personal) BINARIES="sigil sigil-mcp sigil-hook" ;;
+  fleet)    BINARIES="sigil sigil-mcp sigil-hook sigil-sender sigil-server sigil-sign" ;;
+  *) err "unknown SIGIL_PROFILE '$PROFILE' (expected: personal | fleet)" ;;
+esac
+
+# dry-run hook: print the resolved binary set and exit before any network I/O.
+# Used by tests/install_profile_test.sh to verify profile->binaries mapping.
+if [ "${SIGIL_PROFILE_DRYRUN:-}" = "1" ]; then
+  printf '%s\n' "$BINARIES"
+  exit 0
+fi
 
 # --- tooling ---------------------------------------------------------------
 command -v uname >/dev/null 2>&1 || err "missing required tool: uname"
@@ -94,6 +110,7 @@ for b in $BINARIES; do
 done
 
 say "installed into $INSTALL_DIR: $BINARIES"
+say "profile: $PROFILE — start the agent with 'sigil run' (sigil-mcp/sigil-hook need the running daemon)"
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *) say "note: add $INSTALL_DIR to your PATH to run 'sigil' directly" ;;
