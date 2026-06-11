@@ -5,6 +5,12 @@
 /usr/bin/sigil          --      gen_context(system_u:object_r:sigil_agent_exec_t,s0)
 /usr/bin/sigil-sender   --      gen_context(system_u:object_r:sigil_sender_exec_t,s0)
 /usr/bin/sigil-server   --      gen_context(system_u:object_r:sigil_server_exec_t,s0)
+# sigil-mcp (local mode) and sigil-hook are short-lived, user/AI-tool-invoked
+# clients, not daemons. They run in the caller's domain (e.g. unconfined_t),
+# so they keep the generic bin_t label rather than a dedicated sigil exec type.
+# Their access to the agent's /run/sigil sockets is handled in sigil.te.
+/usr/bin/sigil-mcp      --      gen_context(system_u:object_r:bin_t,s0)
+/usr/bin/sigil-hook     --      gen_context(system_u:object_r:bin_t,s0)
 
 /etc/sigil(/.*)?                gen_context(system_u:object_r:sigil_conf_t,s0)
 
