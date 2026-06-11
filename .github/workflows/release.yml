@@ -145,7 +145,11 @@ jobs:
 
       - name: Checksums
         working-directory: dist
-        run: sha256sum sigil-* | tee SHA256SUMS
+        # `sigil*` (not `sigil-*`): the agent package is named `sigil`, so its
+        # .deb is `sigil_<ver>-1_<arch>.deb` (underscore). A `sigil-*` glob
+        # matches every other artifact (`sigil-sender_…`, the `sigil-…` rpms,
+        # the `sigil-<ver>-…` tarballs) but silently skips the agent .deb. (#138)
+        run: sha256sum sigil* | tee SHA256SUMS
 
       # Phase 3c (#13): sign a per-arch blake3 build manifest with the dedicated
       # build-signing key. Runs only when the secret is set; the freshly-built
@@ -193,7 +197,9 @@ jobs:
         continue-on-error: true
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: "dist/sigil-*"
+          # `sigil*` so the agent .deb (`sigil_<ver>-1_<arch>.deb`, underscore)
+          # is attested too — `sigil-*` would skip it. (#138)
+          subject-path: "dist/sigil*"
 
       - name: Publish GitHub Release
         env:
@@ -262,4 +268,4 @@ jobs:
             --verify-tag \
             $prerelease \
             --notes-file notes.md \
-            dist/sigil-* dist/SHA256SUMS $manifest
+            dist/sigil* dist/SHA256SUMS $manifest
