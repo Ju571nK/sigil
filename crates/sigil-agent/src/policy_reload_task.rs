@@ -147,19 +147,37 @@ fn reconcile_rule_packs(
     (added, removed)
 }
 
-/// Task 5 — read + parse the optional distributed rule-pack bundle
-/// (`rule-packs.yaml`, written beside `policy.yaml` by `apply_rule_packs`) into
-/// an `Option<PolicyDocument>`. Only its `.rule_packs` are consumed by `merge`
-/// as the 3rd (bundle) layer. Fail-open: a missing file → `None`; a corrupt
-/// file → warn + `None` (never crashes the agent).
-fn read_bundle_doc(path: &std::path::Path) -> Option<sigil_core::policy::PolicyDocument> {
-    let s = std::fs::read_to_string(path).ok()?;
+/// Three states for the rule-pack bundle file. `Absent` = file missing (normal,
+/// no bundle layer); `Present` = parsed OK; `Corrupt` = file exists but failed
+/// to parse (retain the last-good bundle instead of dropping its packs).
+/// PolicyDocument is large (~392 B) so we box it to keep the enum small.
+pub(crate) enum BundleState {
+    Absent,
+    Present(Box<sigil_core::policy::PolicyDocument>),
+    Corrupt,
+}
+
+pub(crate) fn read_bundle_state(path: &std::path::Path) -> BundleState {
+    let s = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return BundleState::Absent,
+        Err(e) => {
+            tracing::warn!(error = ?e, path = %path.display(), "rule-packs.yaml read failed");
+            return BundleState::Corrupt; // 읽기 실패도 보수적으로 corrupt(이전 유지)
+        }
+    };
+    // A zero-byte / whitespace-only file is treated as Absent (not Corrupt) for
+    // atomic-write resilience: a file briefly empty mid-write — or a deliberately
+    // empty config — should leave no bundle layer, not pin a stale last-good one.
+    if s.trim().is_empty() {
+        return BundleState::Absent;
+    }
     match sigil_core::policy::parse(&s) {
-        Ok(d) => Some(d),
+        Ok(d) => BundleState::Present(Box::new(d)),
         Err(e) => {
             tracing::warn!(error = ?e, path = %path.display(),
-                "rule-packs.yaml parse failed; ignoring bundle layer");
-            None
+                "rule-packs.yaml parse failed; retaining last good bundle");
+            BundleState::Corrupt
         }
     }
 }
@@ -202,6 +220,9 @@ pub struct ReloadCtx {
     /// #115 — shared deny evaluator. reload() rebuilds from
     /// EffectivePolicy.hook_deny_rules and swaps; keep-previous on Err.
     pub shared_evaluator: crate::hook_deny::SharedEvaluator,
+    /// #134 — 마지막으로 성공 파스된 번들 doc. corrupt 시 이를 재사용해
+    /// transient 파스 실패가 번들 룰팩을 drop하지 않게 한다.
+    pub last_good_bundle: Option<sigil_core::policy::PolicyDocument>,
 }
 
 pub async fn run(mut ctx: ReloadCtx) {
@@ -257,9 +278,23 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
             return;
         }
     };
-    // Task 5 — read the distributed rule-pack bundle (3rd merge layer:
-    // defaults < policy < bundle). Missing/corrupt → None (fail-open).
-    let bundle = read_bundle_doc(&ctx.rule_packs_yaml_path);
+    // Task 5 / #134 — read the distributed rule-pack bundle (3rd merge layer:
+    // defaults < policy < bundle).
+    // Corrupt(파일 존재+파스 실패) → retain last good (transient git-pull state protected).
+    // Absent(파일 삭제) → clear cache (deliberate rm honored).
+    let bundle: Option<sigil_core::policy::PolicyDocument> =
+        match read_bundle_state(&ctx.rule_packs_yaml_path) {
+            BundleState::Present(d) => {
+                let doc = *d;
+                ctx.last_good_bundle = Some(doc.clone());
+                Some(doc)
+            }
+            BundleState::Corrupt => ctx.last_good_bundle.clone(), // 이전 정상 유지
+            BundleState::Absent => {
+                ctx.last_good_bundle = None; // 의도적 제거 → 캐시 비움
+                None
+            }
+        };
     let mut effective = match sigil_core::policy::merge(
         defaults,
         Some(doc),
@@ -273,14 +308,20 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         }
     };
 
-    // #115 — rebuild the shared deny evaluator from the freshly-merged policy.
-    // Keep-previous on regex compile failure (fail-open is the previous state).
-    match crate::hook_deny::DenyEvaluator::new(&effective.hook_deny_rules) {
-        Ok(e) => {
-            *ctx.shared_evaluator.write() = std::sync::Arc::new(e);
+    // #115 / #134 — rebuild the shared deny evaluator from the freshly-merged
+    // policy. Keep-previous on deny-id validation failure OR regex compile
+    // failure (fail-open is the previous state).
+    if let Err(e) = sigil_core::policy::validate_deny_rule_ids(&effective.hook_deny_rules) {
+        tracing::warn!(error = %e,
+            "merged hook_deny_rules failed id validation on reload; keeping previous evaluator");
+    } else {
+        match crate::hook_deny::DenyEvaluator::new(&effective.hook_deny_rules) {
+            Ok(ev) => {
+                *ctx.shared_evaluator.write() = std::sync::Arc::new(ev);
+            }
+            Err(e) => tracing::warn!(error = ?e,
+                "hook deny rules failed to compile on reload; keeping previous evaluator"),
         }
-        Err(e) => tracing::warn!(error = ?e,
-            "hook deny rules failed to compile on reload; keeping previous evaluator"),
     }
 
     // Phase 3b.6.2 — re-discover all 5 tools and reconcile each via the
@@ -660,6 +701,7 @@ mod tests {
                 shared_evaluator: Arc::new(parking_lot::RwLock::new(Arc::new(
                     crate::hook_deny::DenyEvaluator::new(&[]).unwrap(),
                 ))),
+                last_good_bundle: None,
             },
             plat,
             targets_rx,
@@ -723,6 +765,7 @@ mod tests {
                 shared_evaluator: Arc::new(parking_lot::RwLock::new(Arc::new(
                     crate::hook_deny::DenyEvaluator::new(&[]).unwrap(),
                 ))),
+                last_good_bundle: None,
             },
             plat,
             targets_rx,
@@ -1339,6 +1382,92 @@ mod tests {
             has_bundle,
             "expected bundle-pack from rule-packs.yaml after reload"
         );
+    }
+
+    // #134 review — reload()-level retain test: a corrupt rule-packs.yaml write
+    // arriving AFTER a good bundle was loaded must keep the bundle's pack live
+    // (via ctx.last_good_bundle), not drop it. Exercises the actual Present →
+    // Corrupt arms in reload(), not just the read_bundle_state state machine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_corrupt_bundle_retains_pack_in_live_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\n";
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
+
+        // 1. Valid bundle → pack goes live, cache seeded.
+        let bundle = "version: 1\nrule_packs:\n  - id: retained-pack\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n";
+        std::fs::write(&ctx.rule_packs_yaml_path, bundle).unwrap();
+        reload(&mut ctx, &plat);
+
+        let is_live = |parsers: &Arc<
+            parking_lot::RwLock<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
+        >| {
+            parsers.read().iter().any(|p| {
+                p.as_any()
+                    .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                    .map(|rpp| rpp.pack.id == "retained-pack")
+                    .unwrap_or(false)
+            })
+        };
+        assert!(is_live(&parsers), "pack should be live after valid bundle");
+        assert!(
+            ctx.last_good_bundle.is_some(),
+            "cache should be seeded after valid bundle"
+        );
+
+        // 2. Corrupt the bundle on disk and reload.
+        std::fs::write(&ctx.rule_packs_yaml_path, "}{not yaml").unwrap();
+        reload(&mut ctx, &plat);
+
+        // 3. The pack MUST still be live (retained from last-good), and the
+        //    cache must still hold it.
+        assert!(
+            is_live(&parsers),
+            "pack must stay live after corrupt reload (retained from last-good)"
+        );
+        assert!(
+            ctx.last_good_bundle.is_some(),
+            "cache must persist across a corrupt reload"
+        );
+    }
+
+    // #134 — BundleState 3-way state machine: Absent / Present / Corrupt.
+    #[test]
+    fn bundle_state_distinguishes_missing_valid_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("rule-packs.yaml");
+        assert!(matches!(read_bundle_state(&p), BundleState::Absent));
+        std::fs::write(
+            &p,
+            "version: 1\nhost_id_strategy: machine_id\ntargets: []\n",
+        )
+        .unwrap();
+        assert!(matches!(read_bundle_state(&p), BundleState::Present(_)));
+        std::fs::write(&p, "}{not yaml").unwrap();
+        assert!(matches!(read_bundle_state(&p), BundleState::Corrupt));
+    }
+
+    // #134 — corrupt bundle retains the last successfully parsed bundle doc.
+    #[test]
+    fn corrupt_bundle_retains_last_good() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("rule-packs.yaml");
+        std::fs::write(
+            &p,
+            "version: 1\nhost_id_strategy: machine_id\ntargets: []\n",
+        )
+        .unwrap();
+        let mut cache: Option<sigil_core::policy::PolicyDocument> = None;
+        if let BundleState::Present(d) = read_bundle_state(&p) {
+            cache = Some(*d);
+        }
+        assert!(cache.is_some());
+        std::fs::write(&p, "}{bad").unwrap();
+        let retained = match read_bundle_state(&p) {
+            BundleState::Corrupt => cache.clone(),
+            _ => None,
+        };
+        assert!(retained.is_some(), "corrupt must retain last good");
     }
 
     // Task 5 — when policy.yaml and the distributed bundle both carry a pack

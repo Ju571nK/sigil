@@ -86,6 +86,8 @@ a SIEM. Ships a systemd unit (disabled by default — enable with \
 `systemctl enable --now sigil`)."""
 assets = [
     ["../../target/release/sigil", "usr/bin/", "755"],
+    ["../../target/release/sigil-mcp", "usr/bin/", "755"],
+    ["../../target/release/sigil-hook", "usr/bin/", "755"],
     ["../../config/policy.example.yaml", "etc/sigil/policy.yaml.example", "644"],
     ["../../README.md", "usr/share/doc/sigil/README.md", "644"],
     ["../../LICENSE", "usr/share/doc/sigil/LICENSE", "644"],
@@ -107,6 +109,8 @@ name = "sigil"
 summary = "Watches policy-defined files and emits hash-anchored posture events for your SIEM"
 assets = [
     { source = "../../target/release/sigil", dest = "/usr/bin/sigil", mode = "0755" },
+    { source = "../../target/release/sigil-mcp", dest = "/usr/bin/sigil-mcp", mode = "0755" },
+    { source = "../../target/release/sigil-hook", dest = "/usr/bin/sigil-hook", mode = "0755" },
     { source = "../../packaging/systemd/sigil.service", dest = "/usr/lib/systemd/system/sigil.service", mode = "0644" },
     { source = "../../config/policy.example.yaml", dest = "/etc/sigil/policy.yaml.example", mode = "0644" },
     { source = "../../README.md", dest = "/usr/share/doc/sigil/README.md", mode = "0644", doc = true },

@@ -74,6 +74,16 @@ case "$WHAT" in
     signer) CRATES="sigil-signer" ;;
 esac
 
+# BUILD_PKGS is a superset of CRATES: the sigil package (sigil-agent metadata)
+# now bundles sigil-mcp and sigil-hook binaries, so we must compile them too
+# even though they have no package metadata of their own.
+BUILD_PKGS="$CRATES"
+case "$WHAT" in
+    agent|all) BUILD_PKGS="$BUILD_PKGS sigil-mcp sigil-hook" ;;
+esac
+# shellcheck disable=SC2086
+BUILD_PKGS=$(printf '%s\n' $BUILD_PKGS | sort -u | tr '\n' ' ')
+
 # crate -> binary name (the agent ships `sigil`, the signer ships `sigil-sign`).
 bin_for() {
     case "$1" in
@@ -97,10 +107,11 @@ if [ -n "$TARGET" ]; then
     esac
 fi
 
-# Single release build for everything we'll package.
-echo ">> building release binaries for: $CRATES${TARGET:+ (target: $TARGET)}"
+# Single release build for everything we'll package (including extra binaries
+# bundled into the sigil package: sigil-mcp, sigil-hook).
+echo ">> building release binaries for: $BUILD_PKGS${TARGET:+ (target: $TARGET)}"
 BUILD_ARGS=""
-for c in $CRATES; do
+for c in $BUILD_PKGS; do
     BUILD_ARGS="$BUILD_ARGS -p $c"
 done
 # shellcheck disable=SC2086
@@ -108,12 +119,20 @@ cargo build --release $BUILD_ARGS $TARGET_ARG --manifest-path "$ROOT/Cargo.toml"
 
 # For a cross target, stage each binary into target/release so the crate asset
 # paths (`../../target/release/<bin>`) resolve to the cross-built binary.
+# Stage packaged crates via bin_for(), plus the extra mcp/hook binaries when
+# they were part of the build.
 if [ -n "$TARGET" ]; then
     mkdir -p "$ROOT/target/release"
     for c in $CRATES; do
         b=$(bin_for "$c")
         cp -f "$ROOT/target/$TARGET/release/$b" "$ROOT/target/release/$b"
     done
+    case "$WHAT" in
+        agent|all)
+            cp -f "$ROOT/target/$TARGET/release/sigil-mcp"  "$ROOT/target/release/sigil-mcp"
+            cp -f "$ROOT/target/$TARGET/release/sigil-hook" "$ROOT/target/release/sigil-hook"
+            ;;
+    esac
 fi
 
 mkdir -p "$ROOT/target/generate-rpm"

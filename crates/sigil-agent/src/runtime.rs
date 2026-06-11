@@ -125,6 +125,20 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // it as the 3rd layer (defaults < policy < bundle). MUST stay identical to
     // `ApplyContext.rule_packs_yaml_path` so apply writes where boot/reload read.
     let rule_packs_yaml_path = policy_path_for_apply.with_file_name("rule-packs.yaml");
+    // #134 review — ensure the config dir exists so the dedicated rule-packs
+    // watcher can arm itself on first boot (it watches the parent dir; a missing
+    // dir keeps the watcher permanently dead until restart).  Best-effort: on
+    // error we log a warning and continue — the dir may be unwritable (e.g.
+    // /etc/sigil without root) for packaged installs where it already exists.
+    if let Some(dir) = policy_path_for_apply.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!(
+                error = ?e,
+                path = %dir.display(),
+                "could not create config dir; rule-packs watcher may not arm if dir is absent"
+            );
+        }
+    }
     // Fail-open: missing/corrupt rule-packs.yaml → None (no bundle packs).
     let bundle_doc = std::fs::read_to_string(&rule_packs_yaml_path)
         .ok()
@@ -136,6 +150,11 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 None
             }
         });
+    // #134 review — seed the reload retain cache with the boot-parsed bundle so
+    // a corrupt rule-packs.yaml write arriving BEFORE the first successful reload
+    // (e.g. a fast git-pull right after startup) retains the boot packs instead
+    // of dropping them. Clone before `merge` consumes `bundle_doc`.
+    let bundle_doc_for_ctx = bundle_doc.clone();
     let mut effective = merge(defaults()?, user_doc, bundle_doc, current_platform())?;
     // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
 
@@ -420,6 +439,11 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // `rule_packs_version_tx` into the reload task below so an `apply_rule_packs`
     // bump re-runs the 3-layer merge live.
     let (rule_packs_version_tx, rule_packs_version_rx) = watch::channel(0i64);
+    // #134 — clone before apply_ctx moves rule_packs_version_tx; dedicated FS
+    // watcher uses this clone to trigger reload when rule-packs.yaml changes on
+    // disk (e.g. via git pull), bypassing the main normalizer which would drop
+    // the event because rule-packs.yaml is not a policy target.
+    let rule_packs_version_tx_fs = rule_packs_version_tx.clone();
     let apply_ctx = Arc::new(crate::policy_apply::ApplyContext {
         keystore: keystore.clone(),
         cache: cache.clone(),
@@ -550,6 +574,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // Live policy reload: on a successful `apply_policy`, re-derive watch
     // targets/roots from the new policy.yaml and apply them to the running
     // pipeline + watcher (no restart). Owns the watcher handle + targets sender.
+    // #134 — clone rule_packs_yaml_path before policy_reload moves it;
+    // the dedicated FS watcher task needs the same path.
+    let rule_packs_yaml_path_for_fs = rule_packs_yaml_path.clone();
     sup.track(
         "policy_reload",
         tokio::spawn(crate::policy_reload_task::run(
@@ -568,7 +595,25 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 ext_scripts: ext_scripts_registry.clone(),
                 rubric: rubric_handle.clone(),
                 shared_evaluator: shared_evaluator.clone(),
+                last_good_bundle: bundle_doc_for_ctx,
             },
+        )),
+    );
+
+    // #134 — dedicated fsnotify watcher for rule-packs.yaml hot-reload.
+    // Bypasses the main normalizer (which drops non-target paths) and sends
+    // directly on rule_packs_version_tx so policy_reload_task re-reads the
+    // bundle layer when rule-packs.yaml changes on disk (e.g. via git pull).
+    // Passes the SAME poll_interval as the main watcher so a `--poll` host
+    // (NFS/virtiofs/9p) drives rule-packs hot-reload via polling too, instead
+    // of the native FS events the operator declared unreliable.
+    sup.track(
+        "rule_packs_watch",
+        tokio::spawn(crate::rule_packs_watch::run(
+            rule_packs_yaml_path_for_fs,
+            rule_packs_version_tx_fs,
+            poll_interval,
+            sup.shutdown.clone(),
         )),
     );
 

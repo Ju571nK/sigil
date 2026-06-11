@@ -113,6 +113,18 @@ allow sigil_agent_t var_run_t:sock_file manage_sock_file_perms;
 allow sigil_agent_t self:unix_stream_socket { create bind listen accept getattr getopt setopt };
 
 ########################################
+# Client access to the agent sockets (#134).
+# sigil-mcp (local mode) and sigil-hook connect to the agent's control and
+# hook-decide stream sockets under /run/sigil (var_run_t, owned by
+# sigil_agent_t). They run in the CALLER's domain (unconfined_t on a targeted
+# desktop/CLI, which is already permitted). A site that invokes them from a
+# CONFINED domain <caller_t> must grant, mirroring the sender:
+#     allow <caller_t> var_run_t:sock_file { getattr write };
+#     allow <caller_t> sigil_agent_t:unix_stream_socket connectto;
+# We do NOT hard-code unconfined_t rules here; that is the distro policy's job.
+########################################
+
+########################################
 # Sender — reads the agent spool, connects the control socket, ships over the
 # network (mTLS), writes its own state/dead-letter.
 ########################################

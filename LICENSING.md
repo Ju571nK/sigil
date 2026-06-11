@@ -55,6 +55,12 @@ moat. Closed *content* combined with open *mechanism* is the standard
 split for security tooling (cf. Falco/Sysdig, Snort/Talos, Suricata/Pro
 ETPro).
 
+**Trust boundary by distribution form**: Personal installs use *unsigned* local
+rule packs distributed via git — trust derives from the git repository (the pack
+carries enforcement authority via `hook_deny_rules`; only apply packs from repos
+you trust). Fleet installs use *signed* policy bundles verified by the OSS agent
+via `verify_envelope` before any pack is applied.
+
 ---
 
 ## Decision rule for new modules
