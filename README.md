@@ -500,6 +500,15 @@ Windows: download the `.zip` from the
 [latest release](https://github.com/Ju571nK/sigil/releases/latest). (Intel Macs
 aren't shipped as prebuilt binaries — build from source below.)
 
+### Install profiles
+
+| Profile | Binaries | Use |
+|---------|----------|-----|
+| `personal` (default) | `sigil`, `sigil-mcp`, `sigil-hook` | Local self-assessment, no server |
+| `fleet` | + `sigil-sender`, `sigil-server`, `sigil-sign` | Central server + signed rule-pack push |
+
+`SIGIL_PROFILE=fleet curl … | sh` installs the fleet set. See [docs/install-personal.md](docs/install-personal.md).
+
 ### Build from source
 
 Install the Rust toolchain listed in `rust-toolchain.toml`, then build the
