@@ -7,6 +7,20 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-12
+
+### Fixed
+
+- **The agent `.deb` is published in releases again** (#138). The agent package
+  is named `sigil`, so cargo-deb emits `sigil_<ver>-1_<arch>.deb` (underscore) —
+  and the release job's `sigil-*` (hyphen) artifact globs silently skipped it
+  in the checksums, the provenance attestation, and the release upload, while
+  every other artifact matched. Affected v0.4.0 and v0.5.0 (the agent `.rpm`
+  shipped throughout). The globs are now `sigil*`; this release carries the
+  agent `.deb` for both x86_64 and aarch64, restoring `apt install` of the
+  agent (personal profile: `sigil` + `sigil-mcp` + `sigil-hook`) on
+  Debian/Ubuntu.
+
 ## [0.5.0] - 2026-06-11
 
 ### Added
