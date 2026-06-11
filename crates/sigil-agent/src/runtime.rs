@@ -125,6 +125,20 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // it as the 3rd layer (defaults < policy < bundle). MUST stay identical to
     // `ApplyContext.rule_packs_yaml_path` so apply writes where boot/reload read.
     let rule_packs_yaml_path = policy_path_for_apply.with_file_name("rule-packs.yaml");
+    // #134 review — ensure the config dir exists so the dedicated rule-packs
+    // watcher can arm itself on first boot (it watches the parent dir; a missing
+    // dir keeps the watcher permanently dead until restart).  Best-effort: on
+    // error we log a warning and continue — the dir may be unwritable (e.g.
+    // /etc/sigil without root) for packaged installs where it already exists.
+    if let Some(dir) = policy_path_for_apply.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!(
+                error = ?e,
+                path = %dir.display(),
+                "could not create config dir; rule-packs watcher may not arm if dir is absent"
+            );
+        }
+    }
     // Fail-open: missing/corrupt rule-packs.yaml → None (no bundle packs).
     let bundle_doc = std::fs::read_to_string(&rule_packs_yaml_path)
         .ok()

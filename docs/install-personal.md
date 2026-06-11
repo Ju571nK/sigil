@@ -11,7 +11,7 @@ The **personal profile** installs everything you need to monitor your own machin
 | `sigil` (agent daemon) | Watches AI agent config files, scores risk, evaluates rules |
 | `sigil-mcp` (local mode) | Exposes `my_risk` / `my_guard_detail` MCP tools to an AI client |
 | `sigil-hook` | PreToolUse hook — observe tool calls and optionally enforce deny rules |
-| `sigil-rules-basic` (built-in) | Baseline rule pack compiled into the agent; active with no config needed |
+| `sigil-rules-basic` (built-in) | Built-in parsers that assess AI-tool config files and produce risk scores / posture — active with no config needed. **No built-in `hook_deny_rules`**: enforcement (sigil-hook blocking) requires you to supply a `rule-packs.yaml`. |
 
 Rule evaluation is **daemon-centric**: all rules run inside the `sigil` daemon. `sigil-mcp` and `sigil-hook` are thin clients of the daemon's Unix sockets and do nothing without it.
 
@@ -91,6 +91,13 @@ git -C ~/sigil-rules pull
 cp ~/sigil-rules/rule-packs.yaml ~/.config/sigil/rule-packs.yaml
 ```
 
+For larger packs, prefer an atomic rename so the agent never sees a partially-written file:
+
+```sh
+cp ~/sigil-rules/rule-packs.yaml ~/.config/sigil/.rule-packs.yaml.tmp && \
+  mv ~/.config/sigil/.rule-packs.yaml.tmp ~/.config/sigil/rule-packs.yaml
+```
+
 **Prefer plain `cp` over symlinks.** The watcher monitors the config directory; replacing the file in place is reliably detected. An in-place edit of a symlink target in another directory may not be picked up.
 
 **Fault tolerance:** If you save a corrupt `rule-packs.yaml`, the agent retains the last known-good bundle (your active packs stay loaded). Deliberately removing the file clears the bundle layer.
@@ -98,7 +105,11 @@ cp ~/sigil-rules/rule-packs.yaml ~/.config/sigil/rule-packs.yaml
 For the packaged install, the config directory is `/etc/sigil`:
 
 ```sh
+# simple
 cp ~/sigil-rules/rule-packs.yaml /etc/sigil/rule-packs.yaml
+# atomic (recommended for larger packs)
+cp ~/sigil-rules/rule-packs.yaml /etc/sigil/.rule-packs.yaml.tmp && \
+  mv /etc/sigil/.rule-packs.yaml.tmp /etc/sigil/rule-packs.yaml
 ```
 
 ---
