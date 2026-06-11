@@ -420,6 +420,11 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // `rule_packs_version_tx` into the reload task below so an `apply_rule_packs`
     // bump re-runs the 3-layer merge live.
     let (rule_packs_version_tx, rule_packs_version_rx) = watch::channel(0i64);
+    // #134 — clone before apply_ctx moves rule_packs_version_tx; dedicated FS
+    // watcher uses this clone to trigger reload when rule-packs.yaml changes on
+    // disk (e.g. via git pull), bypassing the main normalizer which would drop
+    // the event because rule-packs.yaml is not a policy target.
+    let rule_packs_version_tx_fs = rule_packs_version_tx.clone();
     let apply_ctx = Arc::new(crate::policy_apply::ApplyContext {
         keystore: keystore.clone(),
         cache: cache.clone(),
@@ -550,6 +555,9 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // Live policy reload: on a successful `apply_policy`, re-derive watch
     // targets/roots from the new policy.yaml and apply them to the running
     // pipeline + watcher (no restart). Owns the watcher handle + targets sender.
+    // #134 — clone rule_packs_yaml_path before policy_reload moves it;
+    // the dedicated FS watcher task needs the same path.
+    let rule_packs_yaml_path_for_fs = rule_packs_yaml_path.clone();
     sup.track(
         "policy_reload",
         tokio::spawn(crate::policy_reload_task::run(
@@ -569,6 +577,19 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 rubric: rubric_handle.clone(),
                 shared_evaluator: shared_evaluator.clone(),
             },
+        )),
+    );
+
+    // #134 — dedicated fsnotify watcher for rule-packs.yaml hot-reload.
+    // Bypasses the main normalizer (which drops non-target paths) and sends
+    // directly on rule_packs_version_tx so policy_reload_task re-reads the
+    // bundle layer when rule-packs.yaml changes on disk (e.g. via git pull).
+    sup.track(
+        "rule_packs_watch",
+        tokio::spawn(crate::rule_packs_watch::run(
+            rule_packs_yaml_path_for_fs,
+            rule_packs_version_tx_fs,
+            sup.shutdown.clone(),
         )),
     );
 
