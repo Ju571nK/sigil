@@ -183,7 +183,14 @@ jobs:
           echo ">> signed build manifest:"
           head -c 600 dist/build-manifest.json; echo
 
+      # Supplementary supply-chain attestation. The enforced trust root is the
+      # ed25519 build-manifest signature produced in the build step above; this
+      # GitHub/Sigstore provenance is a best-effort extra. A transient Sigstore
+      # Rekor outage (network timeout fetching a tlog entry) must NOT block
+      # publishing already-built, already-signed artifacts — so this step is
+      # non-blocking. On an outage, re-run the job to (re-)attach attestations. (#130)
       - name: Attest build provenance
+        continue-on-error: true
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/sigil-*"
