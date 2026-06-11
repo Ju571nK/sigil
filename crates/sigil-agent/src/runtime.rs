@@ -136,6 +136,11 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 None
             }
         });
+    // #134 review — seed the reload retain cache with the boot-parsed bundle so
+    // a corrupt rule-packs.yaml write arriving BEFORE the first successful reload
+    // (e.g. a fast git-pull right after startup) retains the boot packs instead
+    // of dropping them. Clone before `merge` consumes `bundle_doc`.
+    let bundle_doc_for_ctx = bundle_doc.clone();
     let mut effective = merge(defaults()?, user_doc, bundle_doc, current_platform())?;
     // (host_id resolution moved up above; effective.host_id_strategy is no longer consulted)
 
@@ -576,7 +581,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
                 ext_scripts: ext_scripts_registry.clone(),
                 rubric: rubric_handle.clone(),
                 shared_evaluator: shared_evaluator.clone(),
-                last_good_bundle: None,
+                last_good_bundle: bundle_doc_for_ctx,
             },
         )),
     );

@@ -147,8 +147,9 @@ fn reconcile_rule_packs(
     (added, removed)
 }
 
-/// 번들 파일 3상태. Absent=파일 없음(정상, bundle 레이어 없음),
-/// Present=파스 성공, Corrupt=파일은 있으나 파스 실패(이전 정상 유지 대상).
+/// Three states for the rule-pack bundle file. `Absent` = file missing (normal,
+/// no bundle layer); `Present` = parsed OK; `Corrupt` = file exists but failed
+/// to parse (retain the last-good bundle instead of dropping its packs).
 /// PolicyDocument is large (~392 B) so we box it to keep the enum small.
 pub(crate) enum BundleState {
     Absent,
@@ -165,6 +166,9 @@ pub(crate) fn read_bundle_state(path: &std::path::Path) -> BundleState {
             return BundleState::Corrupt; // 읽기 실패도 보수적으로 corrupt(이전 유지)
         }
     };
+    // A zero-byte / whitespace-only file is treated as Absent (not Corrupt) for
+    // atomic-write resilience: a file briefly empty mid-write — or a deliberately
+    // empty config — should leave no bundle layer, not pin a stale last-good one.
     if s.trim().is_empty() {
         return BundleState::Absent;
     }
@@ -281,8 +285,9 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     let bundle: Option<sigil_core::policy::PolicyDocument> =
         match read_bundle_state(&ctx.rule_packs_yaml_path) {
             BundleState::Present(d) => {
-                ctx.last_good_bundle = Some((*d).clone());
-                Some(*d)
+                let doc = *d;
+                ctx.last_good_bundle = Some(doc.clone());
+                Some(doc)
             }
             BundleState::Corrupt => ctx.last_good_bundle.clone(), // 이전 정상 유지
             BundleState::Absent => {
@@ -1376,6 +1381,53 @@ mod tests {
         assert!(
             has_bundle,
             "expected bundle-pack from rule-packs.yaml after reload"
+        );
+    }
+
+    // #134 review — reload()-level retain test: a corrupt rule-packs.yaml write
+    // arriving AFTER a good bundle was loaded must keep the bundle's pack live
+    // (via ctx.last_good_bundle), not drop it. Exercises the actual Present →
+    // Corrupt arms in reload(), not just the read_bundle_state state machine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reload_corrupt_bundle_retains_pack_in_live_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = "version: 1\nhost_id_strategy: machine_id\ntargets:\n  - id: t1\n    description: x\n    tier: standard\n    platform: any\n    paths: [\"/tmp/x\"]\n";
+        let (mut ctx, plat, _trx, parsers, _state) = build_ctx_with_parsers(dir.path(), initial);
+
+        // 1. Valid bundle → pack goes live, cache seeded.
+        let bundle = "version: 1\nrule_packs:\n  - id: retained-pack\n    pack_version: 1\n    tool: gemini\n    scope:\n      kind: user_global\n    watched_paths: []\n    rules: []\n";
+        std::fs::write(&ctx.rule_packs_yaml_path, bundle).unwrap();
+        reload(&mut ctx, &plat);
+
+        let is_live = |parsers: &Arc<
+            parking_lot::RwLock<Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>>>,
+        >| {
+            parsers.read().iter().any(|p| {
+                p.as_any()
+                    .downcast_ref::<crate::ai_guard::rule_pack::parser::RulePackParser>()
+                    .map(|rpp| rpp.pack.id == "retained-pack")
+                    .unwrap_or(false)
+            })
+        };
+        assert!(is_live(&parsers), "pack should be live after valid bundle");
+        assert!(
+            ctx.last_good_bundle.is_some(),
+            "cache should be seeded after valid bundle"
+        );
+
+        // 2. Corrupt the bundle on disk and reload.
+        std::fs::write(&ctx.rule_packs_yaml_path, "}{not yaml").unwrap();
+        reload(&mut ctx, &plat);
+
+        // 3. The pack MUST still be live (retained from last-good), and the
+        //    cache must still hold it.
+        assert!(
+            is_live(&parsers),
+            "pack must stay live after corrupt reload (retained from last-good)"
+        );
+        assert!(
+            ctx.last_good_bundle.is_some(),
+            "cache must persist across a corrupt reload"
         );
     }
 
