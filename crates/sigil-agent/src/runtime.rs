@@ -584,11 +584,15 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // Bypasses the main normalizer (which drops non-target paths) and sends
     // directly on rule_packs_version_tx so policy_reload_task re-reads the
     // bundle layer when rule-packs.yaml changes on disk (e.g. via git pull).
+    // Passes the SAME poll_interval as the main watcher so a `--poll` host
+    // (NFS/virtiofs/9p) drives rule-packs hot-reload via polling too, instead
+    // of the native FS events the operator declared unreliable.
     sup.track(
         "rule_packs_watch",
         tokio::spawn(crate::rule_packs_watch::run(
             rule_packs_yaml_path_for_fs,
             rule_packs_version_tx_fs,
+            poll_interval,
             sup.shutdown.clone(),
         )),
     );
