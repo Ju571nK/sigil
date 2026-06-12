@@ -228,6 +228,12 @@ pub enum AiGuardReason {
         /// transient_path.
         evidence: String,
     },
+    /// #145 — a committed project config pre-approves project-scope MCP
+    /// servers so they auto-launch on folder-trust (TrustFall class). The
+    /// `mechanism` names the specific auto-enable signal (a settings key, or
+    /// a tool's folder-trust default). Emitted as POSTURE; the launched
+    /// server's own command is scored separately via `emit_one_server`.
+    ProjectMcpAutoEnabled { mechanism: String },
 }
 
 /// #127 — classification of a suspicious stdio MCP launcher. Stable wire
@@ -1184,6 +1190,13 @@ mod tests {
         let j = serde_json::to_value(&a).unwrap();
         assert_eq!(j["kind"], "auto_approval_enabled");
         assert_eq!(j["mode"], "auto_edit");
+
+        let p = AiGuardReason::ProjectMcpAutoEnabled {
+            mechanism: "enableAllProjectMcpServers".into(),
+        };
+        let j = serde_json::to_value(&p).unwrap();
+        assert_eq!(j["kind"], "project_mcp_auto_enabled");
+        assert_eq!(j["mechanism"], "enableAllProjectMcpServers");
     }
 
     #[test]
