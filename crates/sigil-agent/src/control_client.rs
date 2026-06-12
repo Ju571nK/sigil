@@ -101,6 +101,7 @@ mod tests {
                 targets: None,
                 risk: None,
                 doctor_ai_guard: None,
+                assess_verdict: None,
                 error: None,
             };
             let mut bytes = serde_json::to_vec(&resp).unwrap();
@@ -151,6 +152,7 @@ mod tests {
                 }),
                 risk: None,
                 doctor_ai_guard: None,
+                assess_verdict: None,
                 error: None,
             };
             let mut bytes = serde_json::to_vec(&resp).unwrap();

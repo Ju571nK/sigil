@@ -114,6 +114,7 @@ mod tests {
                     effective_rubric: vec![],
                     unknown_override_keys: vec![],
                 }),
+                assess_verdict: None,
             };
             let mut bytes = serde_json::to_vec(&resp).unwrap();
             bytes.push(b'\n');
