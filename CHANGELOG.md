@@ -7,6 +7,23 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The local `rule-packs.yaml` watcher re-arms when the config dir is recreated
+  at runtime** (#135). The dedicated hot-reload watcher previously gave up
+  permanently if its config directory was absent at start, and a by-inode watch
+  went silent if the directory was deleted and re-created while the agent ran. It
+  now watches the grandparent directory (always present — `~/.config`, `/etc`,
+  `$HOME`) and re-arms the parent-directory watch whenever the config dir
+  (re)appears, so local rule-pack edits keep hot-reloading across a dir recreate.
+- **A transient empty `rule-packs.yaml` read retains the active bundle instead of
+  clearing it** (#135). A non-atomic `cp` truncates the destination to zero bytes
+  before writing; that empty window was treated as "file removed" and momentarily
+  dropped the local rule packs (and their enforcement) until the next reload. A
+  zero-byte / whitespace-only read is now retained as last-good. To deliberately
+  clear the bundle, remove the file (honored as before) or write a valid empty
+  document; only a real removal clears.
+
 ## [0.5.1] - 2026-06-12
 
 ### Fixed

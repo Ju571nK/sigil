@@ -147,14 +147,22 @@ fn reconcile_rule_packs(
     (added, removed)
 }
 
-/// Three states for the rule-pack bundle file. `Absent` = file missing (normal,
-/// no bundle layer); `Present` = parsed OK; `Corrupt` = file exists but failed
-/// to parse (retain the last-good bundle instead of dropping its packs).
+/// States for the rule-pack bundle file.
+/// - `Absent` = file genuinely missing (NotFound) → deliberate `rm`, clear the layer.
+/// - `Present` = parsed OK.
+/// - `Corrupt` = file exists but read/parse failed → retain the last-good bundle.
+/// - `Empty` = file is zero-byte / whitespace-only → retain the last-good bundle.
+///   A non-atomic `cp` truncates the destination to zero bytes before writing, so a
+///   transient empty read is ambiguous with a half-finished write; retaining (#135)
+///   never drops enforcement on that race. To intentionally clear the layer, `rm` the
+///   file (→ Absent) or write a valid empty document (→ Present with no packs).
+///
 /// PolicyDocument is large (~392 B) so we box it to keep the enum small.
 pub(crate) enum BundleState {
     Absent,
     Present(Box<sigil_core::policy::PolicyDocument>),
     Corrupt,
+    Empty,
 }
 
 pub(crate) fn read_bundle_state(path: &std::path::Path) -> BundleState {
@@ -166,11 +174,12 @@ pub(crate) fn read_bundle_state(path: &std::path::Path) -> BundleState {
             return BundleState::Corrupt; // 읽기 실패도 보수적으로 corrupt(이전 유지)
         }
     };
-    // A zero-byte / whitespace-only file is treated as Absent (not Corrupt) for
-    // atomic-write resilience: a file briefly empty mid-write — or a deliberately
-    // empty config — should leave no bundle layer, not pin a stale last-good one.
+    // A zero-byte / whitespace-only file is a transient truncate window (non-atomic
+    // cp), NOT a deliberate removal. Treat it as `Empty` → retain last-good (#135),
+    // distinct from NotFound → Absent → clear. Deliberately clearing packs means
+    // `rm` the file or write a valid empty document (which parses to Present).
     if s.trim().is_empty() {
-        return BundleState::Absent;
+        return BundleState::Empty;
     }
     match sigil_core::policy::parse(&s) {
         Ok(d) => BundleState::Present(Box::new(d)),
@@ -281,7 +290,8 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     // Task 5 / #134 — read the distributed rule-pack bundle (3rd merge layer:
     // defaults < policy < bundle).
     // Corrupt(파일 존재+파스 실패) → retain last good (transient git-pull state protected).
-    // Absent(파일 삭제) → clear cache (deliberate rm honored).
+    // Empty(0바이트/공백, cp 트렁케이트 창) → retain last good (#135, enforcement race 방지).
+    // Absent(파일 NotFound) → clear cache (deliberate rm honored).
     let bundle: Option<sigil_core::policy::PolicyDocument> =
         match read_bundle_state(&ctx.rule_packs_yaml_path) {
             BundleState::Present(d) => {
@@ -289,7 +299,7 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
                 ctx.last_good_bundle = Some(doc.clone());
                 Some(doc)
             }
-            BundleState::Corrupt => ctx.last_good_bundle.clone(), // 이전 정상 유지
+            BundleState::Corrupt | BundleState::Empty => ctx.last_good_bundle.clone(), // 이전 정상 유지
             BundleState::Absent => {
                 ctx.last_good_bundle = None; // 의도적 제거 → 캐시 비움
                 None
@@ -1431,11 +1441,12 @@ mod tests {
         );
     }
 
-    // #134 — BundleState 3-way state machine: Absent / Present / Corrupt.
+    // #134/#135 — BundleState state machine: Absent / Present / Corrupt / Empty.
     #[test]
     fn bundle_state_distinguishes_missing_valid_corrupt() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("rule-packs.yaml");
+        // NotFound → Absent (deliberate rm).
         assert!(matches!(read_bundle_state(&p), BundleState::Absent));
         std::fs::write(
             &p,
@@ -1445,6 +1456,42 @@ mod tests {
         assert!(matches!(read_bundle_state(&p), BundleState::Present(_)));
         std::fs::write(&p, "}{not yaml").unwrap();
         assert!(matches!(read_bundle_state(&p), BundleState::Corrupt));
+        // #135 — zero-byte / whitespace-only → Empty (transient truncate), NOT Absent.
+        std::fs::write(&p, "").unwrap();
+        assert!(matches!(read_bundle_state(&p), BundleState::Empty));
+        std::fs::write(&p, "   \n\t\n").unwrap();
+        assert!(matches!(read_bundle_state(&p), BundleState::Empty));
+    }
+
+    // #135 — a transient empty read (cp truncate window) retains the last-good
+    // bundle rather than clearing it, distinct from a NotFound (rm) which clears.
+    #[test]
+    fn empty_bundle_retains_last_good() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("rule-packs.yaml");
+        std::fs::write(
+            &p,
+            "version: 1\nhost_id_strategy: machine_id\ntargets: []\n",
+        )
+        .unwrap();
+        let mut cache: Option<sigil_core::policy::PolicyDocument> = None;
+        if let BundleState::Present(d) = read_bundle_state(&p) {
+            cache = Some(*d);
+        }
+        assert!(cache.is_some());
+        // Truncate to zero bytes (the non-atomic cp window).
+        std::fs::write(&p, "").unwrap();
+        let retained = match read_bundle_state(&p) {
+            BundleState::Empty => cache.clone(),
+            _ => None,
+        };
+        assert!(
+            retained.is_some(),
+            "empty read must retain last good (#135)"
+        );
+        // Contrast: an actual removal clears.
+        std::fs::remove_file(&p).unwrap();
+        assert!(matches!(read_bundle_state(&p), BundleState::Absent));
     }
 
     // #134 — corrupt bundle retains the last successfully parsed bundle doc.

@@ -24,22 +24,16 @@ use std::time::Duration;
 use tokio::sync::{mpsc as tokio_mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-/// 이벤트 경로가 감시 대상(rule-packs.yaml)인지 판정.
+/// 이벤트 경로가 주어진 경로(rule-packs.yaml 또는 부모 디렉터리)와 일치하는지 판정.
 fn is_rule_packs_event(target: &Path, evented: &Path) -> bool {
     evented == target
 }
 
-/// 부모 디렉터리가 존재하면 그 경로, 없으면 None.
-fn existing_parent(target: &Path) -> Option<PathBuf> {
-    target
-        .parent()
-        .filter(|p| p.exists())
-        .map(|p| p.to_path_buf())
-}
-
-/// 전용 watcher 태스크. 부모 디렉터리를 감시하고 대상 파일 변경 시
-/// `version_tx`에 단조 증가 카운터를 보낸다. 부모 디렉터리가 없으면
-/// 경고만 남기고 종료.
+/// 전용 watcher 태스크. 조부모 디렉터리(항상 존재: `~/.config`, `/etc`, `$HOME`)를
+/// 감시해 부모 디렉터리의 생성/삭제를 관측하고, 부모 디렉터리가 (재)등장하면
+/// 부모 watch를 (재)무장해 대상 파일 변경 시 `version_tx`에 단조 증가 카운터를
+/// 보낸다. 부모가 시작 시점에 없어도 영구 비활성화되지 않는다 (#135).
+/// 조부모 디렉터리마저 없으면 경고만 남기고 종료.
 ///
 /// `poll_interval = Some(d)`이면 메인 watcher와 동일하게 `PollWatcher`를 쓴다
 /// (NFS/virtiofs/9p 등 OS-네이티브 FS 이벤트가 신뢰 불가한 호스트, `--poll`).
@@ -54,27 +48,59 @@ pub async fn run(
     poll_interval: Option<Duration>,
     shutdown: CancellationToken,
 ) {
-    let parent = match existing_parent(&target) {
-        Some(p) => p,
+    // #135 — watch the GRANDPARENT dir (always present: ~/.config, /etc, $HOME),
+    // not just the parent. That lets us (re)arm the parent-dir watch when the
+    // config dir is created — or deleted and re-created — at runtime, instead of
+    // giving up permanently when the parent is absent at start.
+    let parent = match target.parent() {
+        Some(p) => p.to_path_buf(),
         None => {
             tracing::warn!(path = %target.display(),
-                "rule-packs.yaml parent dir absent; dedicated watcher not started");
+                "rule-packs.yaml has no parent dir; dedicated watcher not started");
             return;
         }
     };
-    // Canonicalize target so notify event paths (always canonical on macOS/Linux
-    // where /tmp → /private/tmp, /var → /private/var) compare correctly.
-    // If the file doesn't exist yet (first boot before any rule-packs.yaml is
-    // written), fall back to canonicalizing the parent and re-joining the filename.
-    let canon_parent = dunce::canonicalize(&parent).unwrap_or_else(|_| parent.clone());
-    let canonical_target = if target.exists() {
-        dunce::canonicalize(&target).unwrap_or_else(|_| target.clone())
-    } else {
-        target
-            .file_name()
-            .map(|name| canon_parent.join(name))
-            .unwrap_or(target.clone())
+    let grandparent = match parent.parent() {
+        Some(g) => g.to_path_buf(),
+        None => {
+            tracing::warn!(path = %target.display(),
+                "rule-packs.yaml has no grandparent dir; dedicated watcher not started");
+            return;
+        }
     };
+    if !grandparent.exists() {
+        tracing::warn!(path = %grandparent.display(),
+            "rule-packs.yaml grandparent dir absent; dedicated watcher not started");
+        return;
+    }
+    // Two parent representations are needed because the grandparent and parent
+    // watches report the dir differently:
+    //   * `parent_entry` = the parent as it appears *inside* the (canonical)
+    //     grandparent — `canon_grandparent/<name>`. The grandparent watch reports
+    //     parent-dir create/delete events under this lexical path (a symlinked
+    //     config dir is still listed by its own name in the grandparent), so this
+    //     is the re-arm trigger to compare against.
+    //   * `canon_parent` = the *resolved* parent (`canonicalize(parent)` when it
+    //     exists). The parent watch's target-file events arrive under the resolved
+    //     path on FSEvents and under the registered (canonical) path on inotify, so
+    //     we watch and compare against the canonical form — restoring #134's
+    //     symlinked-parent handling that a lexical grandparent-join would regress.
+    // For a real (non-symlink) dir the two are identical.
+    let canon_grandparent =
+        dunce::canonicalize(&grandparent).unwrap_or_else(|_| grandparent.clone());
+    let parent_entry = parent
+        .file_name()
+        .map(|name| canon_grandparent.join(name))
+        .unwrap_or_else(|| parent.clone());
+    let canon_parent = if parent.exists() {
+        dunce::canonicalize(&parent).unwrap_or_else(|_| parent_entry.clone())
+    } else {
+        parent_entry.clone()
+    };
+    let canonical_target = target
+        .file_name()
+        .map(|name| canon_parent.join(name))
+        .unwrap_or_else(|| target.clone());
 
     // std::sync::mpsc for notify callback → blocking drain loop.
     let (std_tx, std_rx) = std_mpsc::channel::<()>();
@@ -82,16 +108,24 @@ pub async fn run(
     let (tok_tx, mut tok_rx) = tokio_mpsc::channel::<()>(8);
 
     let target_for_cb = canonical_target.clone();
+    let parent_entry_for_cb = parent_entry.clone();
+    let canon_parent_for_cb = canon_parent.clone();
     // Mirror the main watcher's callback: log backend errors instead of
     // silently dropping them. If inotify watch-limit / kqueue fd exhaustion
     // hits, hot-reload would otherwise die with no trace.
+    //
+    // Forward a single "something changed" signal when an event touches the
+    // target file (via the parent watch → drives reload) OR the parent dir
+    // itself (via the grandparent watch → drives re-arm + reload). The parent dir
+    // can be reported as either the grandparent-relative `parent_entry` or the
+    // resolved `canon_parent` depending on backend; match both. #135.
     let on_event = move |res: notify::Result<Event>| match res {
         Ok(ev) => {
-            if ev
-                .paths
-                .iter()
-                .any(|p| is_rule_packs_event(&target_for_cb, p))
-            {
+            if ev.paths.iter().any(|p| {
+                is_rule_packs_event(&target_for_cb, p)
+                    || is_rule_packs_event(&parent_entry_for_cb, p)
+                    || is_rule_packs_event(&canon_parent_for_cb, p)
+            }) {
                 let _ = std_tx.send(());
             }
         }
@@ -120,15 +154,32 @@ pub async fn run(
             }
         },
     };
-    // Canonicalize the watch directory so FSEvents on macOS receives the real
-    // path (not the /var → /private/var symlink). Without this, FSEvents may
-    // not deliver events when the watch path is a symlink target.
-    if let Err(e) = watcher.watch(&canon_parent, RecursiveMode::NonRecursive) {
-        tracing::error!(error = ?e, dir = %canon_parent.display(), "rule-packs watch failed");
+    // Watch the grandparent so parent-dir create/delete is observable (the
+    // re-arm source). Fatal if this fails — without it there is no recovery
+    // path. Canonical path so macOS FSEvents receives the real dir, not a
+    // /var → /private/var symlink.
+    if let Err(e) = watcher.watch(&canon_grandparent, RecursiveMode::NonRecursive) {
+        tracing::error!(error = ?e, dir = %canon_grandparent.display(),
+            "rule-packs grandparent watch failed");
         return;
     }
+    // Watch the parent too when it exists now (the target-file event source).
+    // Non-fatal: if the parent is absent at start, a later parent-create event
+    // re-arms it in the async loop below. `parent_armed` tracks whether the watch
+    // is currently registered so the loop only (re)arms on absent→present edges —
+    // re-watching on every event would grow notify's FSEvents watch list unbounded
+    // (its backend appends rather than dedups). #135.
+    let mut parent_armed = false;
+    if parent_entry.exists() {
+        match watcher.watch(&canon_parent, RecursiveMode::NonRecursive) {
+            Ok(()) => parent_armed = true,
+            Err(e) => tracing::warn!(error = ?e, dir = %canon_parent.display(),
+                "rule-packs parent watch failed; will retry on next event"),
+        }
+    }
     tracing::info!(
-        dir = %canon_parent.display(),
+        grandparent = %canon_grandparent.display(),
+        parent = %canon_parent.display(),
         target = %canonical_target.display(),
         "rule-packs.yaml dedicated watcher started"
     );
@@ -168,6 +219,28 @@ pub async fn run(
             msg = tok_rx.recv() => {
                 match msg {
                     Some(()) => {
+                        // #135 — re-arm the parent watch ONLY on absent→present /
+                        // present→absent transitions, never on every event: notify's
+                        // FSEvents backend appends (does not dedup) on watch(), so
+                        // re-watching per file edit would grow the watch list
+                        // unbounded on macOS. The version bump below runs regardless,
+                        // so reload() always re-reads the file from disk.
+                        let present = parent_entry.exists();
+                        if present && !parent_armed {
+                            // (Re)appeared — unwatch any stale registration first so
+                            // FSEvents keeps a single entry, then arm.
+                            let _ = watcher.unwatch(&canon_parent);
+                            match watcher.watch(&canon_parent, RecursiveMode::NonRecursive) {
+                                Ok(()) => parent_armed = true,
+                                Err(e) => tracing::debug!(error = ?e,
+                                    "rule-packs parent re-arm watch failed"),
+                            }
+                        } else if !present && parent_armed {
+                            // Disappeared — drop the watch so the next appearance
+                            // re-arms cleanly (the reload below reads NotFound).
+                            let _ = watcher.unwatch(&canon_parent);
+                            parent_armed = false;
+                        }
                         counter += 1;
                         let _ = version_tx.send(counter);
                         tracing::debug!(counter, "rule-packs.yaml changed; reload triggered");
@@ -256,6 +329,138 @@ mod tests {
         .await
         .expect("poll watcher should bump version within 10s");
         assert!(bumped, "version_tx counter should advance on file change");
+
+        shutdown.cancel();
+        let _ = handle.await;
+    }
+
+    /// #135 re-arm (absent-at-start): the config dir does NOT exist when the
+    /// watcher starts. It must arm on the grandparent and report changes once
+    /// the dir appears — proving it no longer permanently disables itself.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rearm_when_parent_created_after_start() {
+        let gp = tempfile::tempdir().unwrap();
+        let grandparent = dunce::canonicalize(gp.path()).unwrap();
+        let parent = grandparent.join("sigil");
+        let target = parent.join("rule-packs.yaml");
+
+        let (tx, mut rx) = watch::channel(0i64);
+        let shutdown = CancellationToken::new();
+        let handle = tokio::spawn(run(
+            target.clone(),
+            tx,
+            Some(Duration::from_millis(100)),
+            shutdown.clone(),
+        ));
+
+        let bumped = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut n = 1u32;
+            loop {
+                // Create the config dir (idempotent) and write the file.
+                std::fs::create_dir_all(&parent).unwrap();
+                std::fs::write(&target, format!("version: {n}\n")).unwrap();
+                n += 1;
+                tokio::select! {
+                    r = rx.changed() => {
+                        if r.is_err() {
+                            break false;
+                        }
+                        if *rx.borrow() > 0 {
+                            break true;
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+                }
+            }
+        })
+        .await
+        .expect("watcher should arm + report after the config dir appears within 10s");
+        assert!(
+            bumped,
+            "version_tx should advance once the config dir is created"
+        );
+
+        shutdown.cancel();
+        let _ = handle.await;
+    }
+
+    /// #135 re-arm (delete + recreate): the parent exists at start, then is
+    /// deleted and re-created at runtime. A by-inode watch would go silent; the
+    /// grandparent watch must re-arm the parent so changes are reported again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rearm_when_parent_deleted_and_recreated() {
+        let gp = tempfile::tempdir().unwrap();
+        let grandparent = dunce::canonicalize(gp.path()).unwrap();
+        let parent = grandparent.join("sigil");
+        std::fs::create_dir(&parent).unwrap();
+        let target = parent.join("rule-packs.yaml");
+        std::fs::write(&target, "version: 1\n").unwrap();
+
+        let (tx, mut rx) = watch::channel(0i64);
+        let shutdown = CancellationToken::new();
+        let handle = tokio::spawn(run(
+            target.clone(),
+            tx,
+            Some(Duration::from_millis(100)),
+            shutdown.clone(),
+        ));
+
+        // Phase A — confirm the parent watch is armed. A pre-existing file emits
+        // no event, so mutate until the counter first advances.
+        let armed = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut n = 2u32;
+            loop {
+                std::fs::write(&target, format!("version: {n}\n")).unwrap();
+                n += 1;
+                tokio::select! {
+                    r = rx.changed() => {
+                        if r.is_err() {
+                            break false;
+                        }
+                        if *rx.borrow() > 0 {
+                            break true;
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+                }
+            }
+        })
+        .await
+        .expect("parent watch should arm within 10s");
+        assert!(armed, "baseline arm");
+        let baseline = *rx.borrow();
+
+        // Phase B — delete the config dir, let the grandparent poll observe the
+        // absence, then re-create it. The watcher must re-arm and report changes
+        // past the baseline.
+        std::fs::remove_dir_all(&parent).unwrap();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        std::fs::create_dir(&parent).unwrap();
+
+        let rearmed = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut n = 100u32;
+            loop {
+                std::fs::write(&target, format!("version: {n}\n")).unwrap();
+                n += 1;
+                tokio::select! {
+                    r = rx.changed() => {
+                        if r.is_err() {
+                            break false;
+                        }
+                        if *rx.borrow() > baseline {
+                            break true;
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+                }
+            }
+        })
+        .await
+        .expect("watcher should re-arm + report after dir re-creation within 10s");
+        assert!(
+            rearmed,
+            "version_tx should advance past baseline after the config dir is re-created"
+        );
 
         shutdown.cancel();
         let _ = handle.await;
