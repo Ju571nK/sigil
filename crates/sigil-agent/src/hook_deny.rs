@@ -104,6 +104,26 @@ impl DenyEvaluator {
         }
         None
     }
+
+    /// Evaluate a proposed bash command preview against the loaded deny rules,
+    /// using the same path the hook enforcement uses. Returns (rule_id, reason)
+    /// on a deny match. Shared by sigil-hook enforcement and the assess primitive (#149).
+    ///
+    /// The `command_hash` is computed as `blake3(preview.as_bytes()).to_hex()` —
+    /// the same formula that `sigil-hook`'s `redact::capture` uses when building
+    /// `HookAction::Bash` from a live tool call. This ensures the assess path and
+    /// the enforcement path produce an identical action shape.
+    pub fn evaluate_bash_preview(&self, preview: &str) -> Option<(String, String)> {
+        // NOTE: sigil-hook adapters (e.g. claude_code.rs) construct an equivalent
+        // HookAction::Bash via redact::capture, which hashes over the raw command
+        // with blake3. We mirror that here so both call the same evaluate() path.
+        let command_hash = blake3::hash(preview.as_bytes()).to_hex().to_string();
+        let action = HookAction::Bash {
+            command_hash,
+            command_preview: Some(preview.to_string()),
+        };
+        self.evaluate(&action)
+    }
 }
 
 fn rule_matches(m: &CompiledMatch, action: &HookAction) -> bool {
@@ -246,6 +266,58 @@ mod tests {
         assert!(ev.evaluate(&bash(Some("safe"))).is_none());
         // No preview → fail-open (allow).
         assert!(ev.evaluate(&bash(None)).is_none());
+    }
+
+    #[test]
+    fn evaluate_bash_preview_matches_deny_rule() {
+        let ev = DenyEvaluator::new(&[DenyRule {
+            id: "no-rm".into(),
+            match_: HookActionMatch::Bash {
+                command: Matcher::Regex {
+                    pattern: r"rm\s+-rf\s+/".into(),
+                },
+            },
+        }])
+        .unwrap();
+        let result = ev.evaluate_bash_preview("rm -rf /");
+        assert!(result.is_some(), "should deny rm -rf /");
+        assert_eq!(result.unwrap().0, "no-rm");
+    }
+
+    #[test]
+    fn evaluate_bash_preview_no_match() {
+        let ev = DenyEvaluator::new(&[DenyRule {
+            id: "no-rm".into(),
+            match_: HookActionMatch::Bash {
+                command: Matcher::Regex {
+                    pattern: r"rm\s+-rf\s+/".into(),
+                },
+            },
+        }])
+        .unwrap();
+        assert!(ev.evaluate_bash_preview("ls -la").is_none());
+    }
+
+    #[test]
+    fn evaluate_bash_preview_equals_direct_evaluate() {
+        let ev = DenyEvaluator::new(&[DenyRule {
+            id: "no-rm".into(),
+            match_: HookActionMatch::Bash {
+                command: Matcher::Regex {
+                    pattern: r"rm\s+-rf\s+/".into(),
+                },
+            },
+        }])
+        .unwrap();
+        let preview = "rm -rf /";
+        let via_helper = ev.evaluate_bash_preview(preview);
+        let command_hash = blake3::hash(preview.as_bytes()).to_hex().to_string();
+        let direct_action = HookAction::Bash {
+            command_hash,
+            command_preview: Some(preview.to_string()),
+        };
+        let via_direct = ev.evaluate(&direct_action);
+        assert_eq!(via_helper, via_direct, "helper must be a faithful wrapper");
     }
 
     #[test]
