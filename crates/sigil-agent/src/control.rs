@@ -17,9 +17,9 @@ use crate::policy_apply::{apply, apply_rule_packs, ApplyContext, ApplyOutcome};
 // this crate. Re-exported here so existing `crate::control::{...}` paths keep
 // working.
 pub use sigil_core::control_proto::{
-    ApplyPolicyResult, DoctorAiGuardReport, ExtScriptSummary, ParserInfo, PerRepoSummary,
-    PolicyStatusPayload, Request, Response, RiskPayload, RiskSummary, RubricEntry, RulePackInfo,
-    TargetSummary, TargetsPayload,
+    ApplyPolicyResult, AssessVerdict, DoctorAiGuardReport, ExtScriptSummary, ParserInfo,
+    PerRepoSummary, PolicyStatusPayload, Request, Response, RiskPayload, RiskSummary, RubricEntry,
+    RulePackInfo, TargetSummary, TargetsPayload,
 };
 
 /// Default control-socket path. As root, the system path `/var/run/sigil`
@@ -95,6 +95,10 @@ pub struct ControlContext {
     pub ext_scripts: crate::ai_guard::ExtScriptRegistry,
     #[cfg(feature = "operator-cli")]
     pub rubric: crate::ai_guard::RubricHandle,
+    /// Phase 3b.9 (#149) — hot-swappable deny evaluator for `Request::Assess`.
+    /// Snapshot-cloned (inner `Arc`) per request, never held across await.
+    #[cfg(feature = "operator-cli")]
+    pub deny: crate::hook_deny::SharedEvaluator,
 }
 
 /// Shared dispatch logic. Returns the `Response` for a given `Request`.
@@ -109,6 +113,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
             targets: None,
             risk: None,
             doctor_ai_guard: None,
+            assess_verdict: None,
             error: None,
         },
         Request::ApplyPolicy { response } => {
@@ -126,6 +131,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     targets: None,
                     risk: None,
                     doctor_ai_guard: None,
+                    assess_verdict: None,
                     error: None,
                 },
                 ApplyOutcome::Rejected { reason } => Response {
@@ -136,6 +142,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     targets: None,
                     risk: None,
                     doctor_ai_guard: None,
+                    assess_verdict: None,
                     error: None,
                 },
                 ApplyOutcome::Internal { detail } => Response {
@@ -146,6 +153,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     targets: None,
                     risk: None,
                     doctor_ai_guard: None,
+                    assess_verdict: None,
                     error: Some(format!("internal: {detail}")),
                 },
             }
@@ -168,6 +176,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     targets: None,
                     risk: None,
                     doctor_ai_guard: None,
+                    assess_verdict: None,
                     error: None,
                 },
                 ApplyOutcome::Rejected { reason } => Response {
@@ -178,6 +187,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     targets: None,
                     risk: None,
                     doctor_ai_guard: None,
+                    assess_verdict: None,
                     error: None,
                 },
                 ApplyOutcome::Internal { detail } => Response {
@@ -188,6 +198,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     targets: None,
                     risk: None,
                     doctor_ai_guard: None,
+                    assess_verdict: None,
                     error: Some(format!("internal: {detail}")),
                 },
             }
@@ -220,6 +231,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 targets: None,
                 risk: None,
                 doctor_ai_guard: None,
+                assess_verdict: None,
                 error: None,
             }
         }
@@ -242,6 +254,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 targets: Some(TargetsPayload { targets: summaries }),
                 risk: None,
                 doctor_ai_guard: None,
+                assess_verdict: None,
                 error: None,
             }
         }
@@ -258,6 +271,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 targets: None,
                 risk: None,
                 doctor_ai_guard: None,
+                assess_verdict: None,
                 error: None,
             }
         }
@@ -298,6 +312,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                 targets: None,
                 risk: Some(RiskPayload { assessments }),
                 doctor_ai_guard: None,
+                assess_verdict: None,
                 error: None,
             }
         }
@@ -425,6 +440,36 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                     effective_rubric,
                     unknown_override_keys: rubric_snapshot.unknown_override_keys.clone(),
                 }),
+                assess_verdict: None,
+                error: None,
+            }
+        }
+        // Phase 3b.9 (#149) — assess: evaluate a proposed command or MCP server
+        // definition against the LIVE loaded policy.
+        #[cfg(feature = "operator-cli")]
+        Request::Assess { input } => {
+            // Snapshot-clone the rubric and deny evaluator under short read
+            // guards BEFORE any evaluation so a concurrent reload cannot change
+            // the result mid-flight.
+            let rubric_snapshot = ctx.rubric.read().clone();
+            // Inner Arc clone — cheap, no deep copy of compiled regexes.
+            let deny_snapshot = ctx.deny.read().clone();
+            let enforce_bucket = sigil_core::event::AiGuardBucket::High;
+            let ctx_assess = crate::ai_guard::assess::AssessCtx {
+                rubric: &rubric_snapshot,
+                deny: &deny_snapshot,
+                enforce_bucket,
+            };
+            let verdict = crate::ai_guard::assess::assess(&input, &ctx_assess);
+            Response {
+                ok: true,
+                stats: None,
+                apply_policy: None,
+                policy_status: None,
+                targets: None,
+                risk: None,
+                doctor_ai_guard: None,
+                assess_verdict: Some(verdict),
                 error: None,
             }
         }
@@ -435,7 +480,8 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
         Request::Targets
         | Request::ReloadPolicy
         | Request::Risk { .. }
-        | Request::DoctorAiGuardReport => Response {
+        | Request::DoctorAiGuardReport
+        | Request::Assess { .. } => Response {
             ok: false,
             stats: None,
             apply_policy: None,
@@ -443,6 +489,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
             targets: None,
             risk: None,
             doctor_ai_guard: None,
+            assess_verdict: None,
             error: Some("operator-cli feature not enabled in this build".into()),
         },
     }
@@ -495,6 +542,7 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
                     targets: None,
                     risk: None,
                     doctor_ai_guard: None,
+                    assess_verdict: None,
                     error: Some(e.to_string()),
                 },
             };
@@ -536,6 +584,7 @@ pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result
                     targets: None,
                     risk: None,
                     doctor_ai_guard: None,
+                    assess_verdict: None,
                     error: Some(e.to_string()),
                 },
             };

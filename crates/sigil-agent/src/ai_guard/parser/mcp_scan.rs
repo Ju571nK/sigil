@@ -3,7 +3,16 @@
 //! command + NoSandbox, shell destructive-arg). Every per-agent parser routes
 //! its per-server `def` here (#125); `emit_mcp_reasons` is the object-map shape
 //! iterator used by the Gemini/Cursor/Antigravity JSON form.
+//!
+//! All structural-detection helpers (is_shell, is_inline_exec_flag,
+//! effective_shell_target, is_transient_path, …) now live in
+//! `ai_guard::command_scan` and are re-imported here — single source of truth,
+//! zero duplicated logic.
 
+use crate::ai_guard::command_scan::{
+    effective_shell_target, first_destructive_after_shell_flag, is_inline_exec_flag, is_shell,
+    is_transient_path, launcher_basename,
+};
 use crate::ai_guard::rubric;
 use serde_json::Value;
 use sigil_core::event::{AiGuardReason, LauncherShape};
@@ -114,191 +123,12 @@ pub(crate) fn scheme_is_http(u: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
-/// Lowercased basename with a single trailing `.exe` stripped — normalized
-/// launcher name. Defeats `BASH.EXE` / `PwSh` / `bash.exe` case+extension
-/// evasion (macOS/Windows default filesystems are case-insensitive).
-fn launcher_basename(cmd: &str) -> String {
-    let base = cmd
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(cmd)
-        .to_ascii_lowercase();
-    match base.strip_suffix(".exe") {
-        Some(stripped) => stripped.to_string(),
-        None => base,
-    }
-}
-
-/// csh/tcsh quoting semantics differ from sh -c, but structurally `-c` still
-/// executes an inline body — same attack shape.
-fn is_shell(cmd: &str) -> bool {
-    matches!(
-        launcher_basename(cmd).as_str(),
-        "sh" | "bash"
-            | "zsh"
-            | "dash"
-            | "ksh"
-            | "csh"
-            | "tcsh"
-            | "fish"
-            | "cmd"
-            | "powershell"
-            | "pwsh"
-    )
-}
-
-/// #127 — POSIX shell bundled short-option group that includes `c`
-/// (`-c`, `-lc`, `-ic`, `-xc` …). A POSIX shell parses `-lc` as bundled
-/// single-char flags where `c` still takes the next arg as the command
-/// body, so it is the same config-as-code shape as `-c`. Single dash only
-/// (not `--long`), ASCII-alphabetic body, must contain `c`.
-fn is_posix_bundled_exec_flag(arg: &str) -> bool {
-    let Some(body) = arg.strip_prefix('-') else {
-        return false;
-    };
-    !body.is_empty()
-        && !body.starts_with('-')                 // exclude --long
-        && body.chars().all(|c| c.is_ascii_alphabetic())
-        && body.contains('c')
-}
-
-/// #127 — inline-exec flags that make a shell launcher "config-as-code".
-/// `-EncodedCommand`/`-enc` payloads can't be content-scanned; the Shell
-/// shape itself is the structural answer to encoding evasion. The POSIX
-/// bundle branch also catches `-lc`/`-ic`/`-xc` (bundled short options).
-fn is_inline_exec_flag(arg: &str) -> bool {
-    let lower = arg.to_ascii_lowercase();
-    matches!(
-        lower.as_str(),
-        "-c" | "/c" | "/k" | "-command" | "-encodedcommand" | "-enc" | "-file"
-    ) || is_posix_bundled_exec_flag(&lower)
-}
-
-/// #127 — `env`-wrapper unwrap: `/usr/bin/env bash -c …` is assessed as
-/// `bash -c …`. Skips `-flags` and `VAR=val` assignments after `env`;
-/// returns (effective command, args after it). Non-env passes through.
-fn effective_shell_target<'a>(command: &'a str, args: &'a [Value]) -> (&'a str, &'a [Value]) {
-    if launcher_basename(command) != "env" {
-        return (command, args);
-    }
-    for (i, a) in args.iter().enumerate() {
-        let Some(s) = a.as_str() else { continue };
-        if s.starts_with('-') || is_env_assignment(s) {
-            continue;
-        }
-        return (s, &args[i + 1..]);
-    }
-    (command, args)
-}
-
-/// `FOO=bar`-shaped env assignment (POSIX env var name).
-fn is_env_assignment(s: &str) -> bool {
-    let Some(eq) = s.find('=') else { return false };
-    let name = &s[..eq];
-    !name.is_empty()
-        && name
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-/// #127 — transient/attacker-writable launch location. Narrow positive list
-/// (temp, cache, runtime-dir) — general dotdirs (`~/.cargo/bin` …), relative
-/// paths and bare names deliberately do NOT match (false-positive budget).
-/// Case-insensitive segment comparison defeats `/TMP/x`.
-fn is_transient_path(s: &str) -> bool {
-    let segs: Vec<String> = s
-        .split(['/', '\\'])
-        .filter(|p| !p.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect();
-    // A launcher needs at least <marker>/<file>.
-    if segs.len() < 2 {
-        return false;
-    }
-    // POSIX temp/runtime roots — absolute paths only.
-    if s.starts_with('/') {
-        const ROOTS: &[&[&str]] = &[
-            &["tmp"],
-            &["private", "tmp"],
-            &["var", "tmp"],
-            &["private", "var", "tmp"],
-            &["dev", "shm"],
-            &["var", "folders"],
-            &["private", "var", "folders"],
-            &["run", "user"],
-            &["var", "run", "user"],
-        ];
-        if ROOTS.iter().any(|r| starts_with_seq(&segs, r)) {
-            return true;
-        }
-    }
-    // Windows drive-root temp: C:\Temp\x, D:\tmp\x.
-    if segs.len() > 2
-        && segs[0].len() == 2
-        && segs[0].ends_with(':')
-        && segs[0]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic())
-        && matches!(segs[1].as_str(), "temp" | "tmp")
-    {
-        return true;
-    }
-    // Marker sequences anywhere in the path.
-    const SEQS: &[&[&str]] = &[
-        &["windows", "temp"],
-        &["appdata", "local", "temp"],
-        &["%localappdata%", "temp"],
-        &["$env:localappdata", "temp"],
-        &["library", "caches"],
-    ];
-    if SEQS.iter().any(|q| contains_seq(&segs, q)) {
-        return true;
-    }
-    // Single-segment markers (cache dir, unexpanded env temp references).
-    segs.iter().any(|p| {
-        matches!(
-            p.as_str(),
-            ".cache" | "%temp%" | "%tmp%" | "$tmpdir" | "${tmpdir}" | "$env:temp" | "$env:tmp"
-        )
-    })
-}
-
-/// segs strictly longer than prefix (something must follow the marker dir).
-fn starts_with_seq(segs: &[String], prefix: &[&str]) -> bool {
-    segs.len() > prefix.len() && segs.iter().zip(prefix.iter()).all(|(a, b)| a == b)
-}
-
-fn contains_seq(segs: &[String], needle: &[&str]) -> bool {
-    segs.len() >= needle.len()
-        && segs
-            .windows(needle.len())
-            .any(|w| w.iter().zip(needle.iter()).all(|(a, b)| a == b))
-}
-
-/// Returns the argument following a shell command flag (`-c`, `/c`, `-command`)
-/// — the inline script body. Flag match is case-insensitive (`-C`, `/C`,
-/// `-COMMAND` all match). Does NOT cover `-enc`/`-file` by design: the Shell
-/// shape handles those structurally; this scan only reads inline bodies.
-fn first_destructive_after_shell_flag(args: &[Value]) -> Option<String> {
-    let mut iter = args.iter();
-    while let Some(a) = iter.next() {
-        let Some(s) = a.as_str() else { continue };
-        let low = s.to_ascii_lowercase();
-        if matches!(low.as_str(), "-c" | "/c" | "-command") || is_posix_bundled_exec_flag(&low) {
-            if let Some(next) = iter.next().and_then(Value::as_str) {
-                return Some(next.to_string());
-            }
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_guard::command_scan::{
+        effective_shell_target, is_inline_exec_flag, is_shell, is_transient_path,
+    };
     use serde_json::json;
 
     fn reasons(v: serde_json::Value) -> Vec<AiGuardReason> {

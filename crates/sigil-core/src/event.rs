@@ -143,7 +143,11 @@ pub enum AiGuardScope {
 /// Phase 3b.1 — auto-derived from `score`. low <1 / medium <4 / high <7 / critical 7+.
 /// Stable wire strings — operators filter by these in the SIEM, so renames are
 /// breaking changes.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Variants are declared in ascending severity order so `#[derive(PartialOrd, Ord)]`
+/// produces the correct ordering: Low < Medium < High < Critical. Required by the
+/// assess engine's enforce-bucket threshold comparison (#149).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum AiGuardBucket {
     Low,

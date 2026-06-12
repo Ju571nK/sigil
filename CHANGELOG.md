@@ -7,6 +7,24 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+### Added
+
+- **`assess` — a callable pre-flight risk check** (#149). A new primitive scores a
+  *proposed* shell command or a single MCP server definition against this host's
+  loaded policy (the same rubric + rule-pack deny rules the agent enforces), and
+  returns a risk band, score, reasons, any deny-rule match, and a decision
+  (allow / warn / deny). Where the existing read surfaces report standing posture
+  ("what is my risk right now?"), `assess` answers "is *this action* risky / would
+  Sigil block it?" before it runs. Exposed two ways:
+  - **`sigil assess` CLI** — `--command "<cmd>"` (or `--mcp-config <file>` /
+    `--mcp-stdin --mcp-name <name>`), evaluated against the on-disk policy
+    (no daemon required). Prints a one-line JSON verdict and maps the decision to
+    exit codes (allow/warn → 0, deny → 2, usage/policy-load error → 1; `--fail-on-warn`
+    makes warn → 2) so it can gate a shell pre-flight.
+  - **`assess` MCP tool** (local surface) — evaluates against the running agent's
+    *live* loaded policy via the existing control IPC. Read-only; executes nothing.
+  Malformed or oversize input fails closed (error, never an allow verdict).
+
 ### Fixed
 
 - **The local `rule-packs.yaml` watcher re-arms when the config dir is recreated

@@ -1,6 +1,8 @@
 //! Wire protocol for the agent control socket (IPC). Shared by `sigil-agent`
 //! (server/handlers) and `sigil-mcp` (local-mode client) so the two can never
 //! drift. Types only — no handler/dispatch logic lives here.
+use crate::assess::AssessInput;
+pub use crate::assess::AssessVerdict;
 use crate::event::{AiGuardBucket, AiGuardScope, AiTool, PolicySignatureInvalidReason};
 use crate::policy::signed_envelope::SignedPolicyResponse;
 use crate::policy::Tier;
@@ -71,6 +73,13 @@ pub enum Request {
     /// Operator introspection: returns a snapshot of the AI Guard
     /// subsystem state for `sigil doctor`. Phase 3b.5.
     DoctorAiGuardReport,
+    /// Ask the running daemon to evaluate a proposed command or MCP server
+    /// definition against its LIVE loaded policy and return a verdict.
+    /// Phase 3b.9 (#149).
+    Assess {
+        /// The proposed action to evaluate.
+        input: AssessInput,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -87,6 +96,8 @@ pub struct Response {
     pub risk: Option<RiskPayload>,
     /// Present iff the request was `DoctorAiGuardReport`. Phase 3b.5.
     pub doctor_ai_guard: Option<DoctorAiGuardReport>,
+    /// Present iff the request was `Assess`. Phase 3b.9 (#149).
+    pub assess_verdict: Option<AssessVerdict>,
     pub error: Option<String>,
 }
 
@@ -269,6 +280,7 @@ mod tests {
             targets: None,
             risk: None,
             doctor_ai_guard: None,
+            assess_verdict: None,
             error: None,
         };
         let s = serde_json::to_string(&r).unwrap();
@@ -288,6 +300,7 @@ mod tests {
             targets: None,
             risk: None,
             doctor_ai_guard: None,
+            assess_verdict: None,
             error: None,
         };
         let s = serde_json::to_string(&r).unwrap();
@@ -310,6 +323,7 @@ mod tests {
             }),
             risk: None,
             doctor_ai_guard: None,
+            assess_verdict: None,
             error: None,
         };
         let s = serde_json::to_string(&resp).unwrap();
@@ -386,6 +400,7 @@ mod tests {
                 }],
             }),
             doctor_ai_guard: None,
+            assess_verdict: None,
             error: None,
         };
         let s = serde_json::to_string(&resp).unwrap();
@@ -449,6 +464,7 @@ mod tests {
             targets: None,
             risk: None,
             error: None,
+            assess_verdict: None,
             doctor_ai_guard: Some(DoctorAiGuardReport {
                 parsers: vec![],
                 rule_packs: vec![],
@@ -477,5 +493,53 @@ mod tests {
         let s = serde_json::to_string(&r).unwrap();
         let back: Response = serde_json::from_str(&s).unwrap();
         assert_eq!(back.doctor_ai_guard.unwrap().per_repo.claude_code, 2);
+    }
+
+    #[test]
+    fn request_assess_round_trips() {
+        use crate::assess::AssessInput;
+        let req = Request::Assess {
+            input: AssessInput::Command {
+                command: "rm".into(),
+                args: vec!["-rf".into(), "/tmp/x".into()],
+            },
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"cmd\":\"assess\""), "got: {s}");
+        assert!(s.contains("\"kind\":\"command\""), "got: {s}");
+        let back: Request = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, Request::Assess { .. }));
+    }
+
+    #[test]
+    fn response_with_assess_verdict_round_trips() {
+        use crate::assess::{AssessVerdict, Decision};
+        use crate::event::{AiGuardBucket, AiGuardReason};
+        let resp = Response {
+            ok: true,
+            stats: None,
+            apply_policy: None,
+            policy_status: None,
+            targets: None,
+            risk: None,
+            doctor_ai_guard: None,
+            assess_verdict: Some(AssessVerdict {
+                bucket: AiGuardBucket::High,
+                score: 4.0,
+                reasons: vec![AiGuardReason::NoSandbox {
+                    executor: "host_shell".into(),
+                }],
+                deny_match: None,
+                decision: Decision::Deny,
+            }),
+            error: None,
+        };
+        let s = serde_json::to_string(&resp).unwrap();
+        assert!(s.contains("\"assess_verdict\""), "got: {s}");
+        assert!(s.contains("\"decision\":\"deny\""), "got: {s}");
+        let back: Response = serde_json::from_str(&s).unwrap();
+        let v = back.assess_verdict.unwrap();
+        assert_eq!(v.decision, Decision::Deny);
+        assert_eq!(v.bucket, AiGuardBucket::High);
     }
 }

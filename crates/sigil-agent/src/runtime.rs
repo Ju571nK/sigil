@@ -466,6 +466,19 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // sender is created later, close to where the hasher needs it.
     let ai_guard_state: Arc<parking_lot::RwLock<crate::ai_guard::StateMap>> =
         Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new()));
+    // Phase 3b.9 (#149) — shared_evaluator must be created before ControlContext
+    // so it can be referenced by Request::Assess. It is also passed to
+    // policy_reload_task (below) for hot-swap on policy reload.
+    let shared_evaluator_pre: crate::hook_deny::SharedEvaluator = {
+        let initial = match crate::hook_deny::DenyEvaluator::new(&effective.hook_deny_rules) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = ?e, "hook deny rules failed to compile; enforcement disabled (fail-open)");
+                crate::hook_deny::DenyEvaluator::new(&[]).unwrap()
+            }
+        };
+        Arc::new(parking_lot::RwLock::new(Arc::new(initial)))
+    };
     let control_ctx = Arc::new(crate::control::ControlContext {
         stats: stats.clone(),
         apply_ctx: apply_ctx.clone(),
@@ -480,6 +493,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         ext_scripts: ext_scripts_registry.clone(),
         #[cfg(feature = "operator-cli")]
         rubric: rubric_handle.clone(),
+        #[cfg(feature = "operator-cli")]
+        deny: shared_evaluator_pre.clone(),
     });
 
     // Watcher (notify → raw events → tx_norm via normalizer wrapper).
@@ -560,16 +575,10 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // #115 — shared, hot-swappable deny evaluator.  Built once from the
     // effective policy at startup; policy_reload_task rebuilds+swaps on each
     // reload; hook_decide_listener snapshots per-request (no guard across await).
-    let shared_evaluator: crate::hook_deny::SharedEvaluator = {
-        let initial = match crate::hook_deny::DenyEvaluator::new(&effective.hook_deny_rules) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(error = ?e, "hook deny rules failed to compile; enforcement disabled (fail-open)");
-                crate::hook_deny::DenyEvaluator::new(&[]).unwrap()
-            }
-        };
-        Arc::new(parking_lot::RwLock::new(Arc::new(initial)))
-    };
+    // Phase 3b.9 (#149): shared_evaluator_pre was constructed before ControlContext
+    // (above) so it could be included in the deny field; rebind here for the
+    // downstream tasks that consume it by this name.
+    let shared_evaluator: crate::hook_deny::SharedEvaluator = shared_evaluator_pre;
 
     // Live policy reload: on a successful `apply_policy`, re-derive watch
     // targets/roots from the new policy.yaml and apply them to the running
