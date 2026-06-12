@@ -36,8 +36,20 @@ SIGIL_PROFILE=personal curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubu
 The `sigil` package bundles `sigil-mcp` and `sigil-hook` — installing it gives you the full personal set:
 
 ```sh
-sudo dnf install ./sigil-*.rpm
+# RHEL / Rocky / Fedora. `sigil-[0-9]…` selects only the agent package: the
+# fleet packages (sigil-sender / sigil-server / sigil-signer) have a letter
+# after `sigil-`, so they are excluded. Arch-pinned so a second downloaded
+# architecture isn't pulled in.
+sudo dnf install ./sigil-[0-9]*.$(uname -m).rpm
+
+# Debian / Ubuntu. The agent .deb is `sigil_<ver>…` (underscore), which already
+# excludes the `sigil-…` fleet packages; arch-pinned likewise.
+sudo apt install ./sigil_*_$(dpkg --print-architecture).deb
 ```
+
+These globs select only the agent package even if you downloaded the whole
+release into one directory. For the packaged install you do **not** need to
+create the config directory by hand — see below.
 
 ### Create the config directory
 
