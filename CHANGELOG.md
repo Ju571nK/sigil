@@ -9,6 +9,13 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ### Added
 
+- **OpenClaw / Hermes integration glue for `assess`** (#151). `sigil-mcp
+  --print-config` now emits ready-to-paste blocks for `hermes` (a `config.yaml`
+  `mcp_servers:` entry) and `openclaw` (a `~/.openclaw/openclaw.json` `mcpServers`
+  entry), alongside the existing `codex`/`claude`. New `examples/integrations/`
+  carries a drop-in OpenClaw `SKILL.md` (pre-flights commands via `sigil assess`)
+  and a Hermes `config.yaml` snippet, plus a README describing the reusable
+  pre-flight contract (assess → decision → allow/warn/deny).
 - **`assess` — a callable pre-flight risk check** (#149). A new primitive scores a
   *proposed* shell command or a single MCP server definition against this host's
   loaded policy (the same rubric + rule-pack deny rules the agent enforces), and

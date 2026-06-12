@@ -1,0 +1,31 @@
+# Hermes Agent — register Sigil as an MCP server so tasks can pre-flight actions.
+#
+# Merge this into your Hermes `config.yaml`. `sigil-mcp` in its default (local)
+# mode is "sigil-check": it reads THIS host's running sigil-agent and exposes the
+# host's own posture plus the `assess` tool — no server, no fleet.
+#
+# Print a copy with the absolute binary path already filled in:
+#   sigil-mcp --print-config hermes
+#
+# IMPORTANT: use the ABSOLUTE path to sigil-mcp. Hermes (like most MCP clients)
+# may not inherit your interactive-shell PATH.
+
+mcp_servers:
+  sigil-check:
+    command: "/absolute/path/to/sigil-mcp"
+    # No args/env needed for local mode. (Fleet mode: add a SECOND server
+    # `sigil-fleet` with env SIGIL_SERVER_BASE_URL + SIGIL_SERVER_READ_TOKEN.)
+
+# Hermes auto-discovers the server's tools as the `mcp-sigil-check` toolset
+# (which includes `assess`). Enable it for the platforms you run, e.g.:
+platform_toolsets:
+  cli: [hermes-cli, mcp-sigil-check]
+
+# Then, in your agent's instructions / a skill, encode the pre-flight contract:
+#
+#   Before running a risky shell command or wiring an MCP server, call the
+#   `assess` tool (command + args, or mcp_server + server_name). If the returned
+#   `decision` is "deny", do not proceed and surface the reasons; "warn" =
+#   proceed only with explicit user caution; "allow" = proceed.
+#
+# See ../README.md for the full pattern.

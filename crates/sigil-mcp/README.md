@@ -16,7 +16,7 @@ client (and you) can tell them apart:
   `sigil-manager`, not as the default an agent gets.
 
 ## Tools
-`sigil-check` (this host): `my_risk`, `my_guard_detail`, `my_findings`.
+`sigil-check` (this host): `my_risk`, `my_guard_detail`, `my_findings`, `assess` (pre-flight a proposed command / MCP server against the loaded policy).
 `sigil-fleet` (operators): `list_hosts`, `get_host`, `fleet_risk`,
 `fleet_compliance`, `query_events`, `get_event`, `get_policy`, `server_meta`,
 `healthz`.
@@ -31,8 +31,15 @@ shown as a commented operator add-on:
 ```sh
 sigil-mcp --print-config codex     # Codex (~/.codex/config.toml)
 sigil-mcp --print-config claude    # Claude Code / Claude Desktop (mcpServers JSON)
-sigil-mcp --print-config           # both
+sigil-mcp --print-config hermes    # Hermes Agent (config.yaml mcp_servers:)
+sigil-mcp --print-config openclaw  # OpenClaw (~/.openclaw/openclaw.json mcpServers)
+sigil-mcp --print-config           # all of the above
 ```
+
+The local surface also exposes an `assess` tool that pre-flights a proposed
+command or MCP server definition against this host's loaded policy. See
+[examples/integrations/](../../examples/integrations/) for ready-to-use OpenClaw
+and Hermes setups.
 
 Claude Desktop / Code (stdio), single host — no env needed:
 
