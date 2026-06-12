@@ -66,6 +66,18 @@ impl AiGuardParser for ClaudeCodeParser {
         emit_hook_reasons(&merged, &hooks_dir, &mut out)?;
         emit_permission_reasons(&merged, &mut out);
         emit_mcp_reasons(&merged, &mut out);
+        // #145 (codex C8) — a user-global `enableAllProjectMcpServers: true`
+        // blanket-approves project MCP servers across EVERY repo. No single
+        // repo context here, so emit on the key alone.
+        if merged
+            .get("enableAllProjectMcpServers")
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            out.push(AiGuardReason::ProjectMcpAutoEnabled {
+                mechanism: "user-global blanket: enableAllProjectMcpServers".to_string(),
+            });
+        }
         Ok(out)
     }
 }
@@ -311,6 +323,69 @@ pub(crate) fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
     }
 }
 
+/// #145 — emit MCP reasons from BOTH the merged settings `mcpServers` and the
+/// committed project `<repo>/.mcp.json`, deduplicated by server name. A given
+/// name connects once in Claude Code, so it must be scored once; settings
+/// definitions take precedence (a `.mcp.json` server whose name already
+/// appears in settings is skipped).
+pub(crate) fn emit_project_mcp_reasons(
+    settings: &Value,
+    mcp_json: Option<&Value>,
+    out: &mut Vec<AiGuardReason>,
+) {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(servers) = settings.get("mcpServers").and_then(Value::as_object) {
+        for (name, def) in servers {
+            seen.insert(name.clone());
+            super::mcp_scan::emit_one_server(name, def, out);
+        }
+    }
+    if let Some(servers) = mcp_json
+        .and_then(|v| v.get("mcpServers"))
+        .and_then(Value::as_object)
+    {
+        for (name, def) in servers {
+            if seen.insert(name.clone()) {
+                super::mcp_scan::emit_one_server(name, def, out);
+            }
+        }
+    }
+}
+
+/// #145 — does `<repo>/.mcp.json` define at least one project MCP server?
+/// The auto-enable keys only matter when there is a payload for them to launch.
+fn has_project_mcp_servers(mcp_json: Option<&Value>) -> bool {
+    mcp_json
+        .and_then(|v| v.get("mcpServers"))
+        .and_then(Value::as_object)
+        .map(|m| !m.is_empty())
+        .unwrap_or(false)
+}
+
+/// #145 — the server-enable signal in committed settings that auto-launches
+/// project `.mcp.json` servers on folder-trust, if any. `enableAllProjectMcpServers`
+/// takes priority over `enabledMcpjsonServers`. NOTE: `permissions.allow:["mcp__*"]`
+/// is NOT a trigger — that grants tool-call permission, not server pre-approval
+/// (codex C4); a separate auto-approval signal is future work.
+fn project_auto_enable_mechanism(settings: &Value) -> Option<&'static str> {
+    if settings
+        .get("enableAllProjectMcpServers")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Some("enableAllProjectMcpServers");
+    }
+    if settings
+        .get("enabledMcpjsonServers")
+        .and_then(Value::as_array)
+        .map(|a| !a.is_empty())
+        .unwrap_or(false)
+    {
+        return Some("enabledMcpjsonServers");
+    }
+    None
+}
+
 /// Phase 3b.6.2 — per-repo Claude Code parser. Spawned by runtime /
 /// policy_reload after discovery; each instance carries its own repo
 /// root and emits AiGuardRiskAssessed with scope=Project{path:repo_root}.
@@ -363,7 +438,8 @@ impl AiGuardParser for ClaudeCodeProjectParser {
         let cd = self.repo_root.join(".claude");
         let base = super::read_json_optional(&cd.join("settings.json"))?;
         let local = super::read_json_optional(&cd.join("settings.local.json"))?;
-        if base.is_none() && local.is_none() {
+        let mcp_json = super::read_json_optional(&self.repo_root.join(".mcp.json"))?;
+        if base.is_none() && local.is_none() && mcp_json.is_none() {
             return Ok(Vec::new());
         }
         let merged = merge_overlay(base.unwrap_or(Value::Object(Default::default())), local);
@@ -371,7 +447,17 @@ impl AiGuardParser for ClaudeCodeProjectParser {
         let mut out = Vec::new();
         emit_hook_reasons(&merged, &hooks_dir, &mut out)?;
         emit_permission_reasons(&merged, &mut out);
-        emit_mcp_reasons(&merged, &mut out);
+        emit_project_mcp_reasons(&merged, mcp_json.as_ref(), &mut out);
+        // #145 — auto-enable posture: emit ONLY when a server-enable key is
+        // present AND the project actually ships `.mcp.json` servers for it
+        // to launch (key-only with no payload -> no emit).
+        if has_project_mcp_servers(mcp_json.as_ref()) {
+            if let Some(mechanism) = project_auto_enable_mechanism(&merged) {
+                out.push(AiGuardReason::ProjectMcpAutoEnabled {
+                    mechanism: mechanism.to_string(),
+                });
+            }
+        }
         Ok(out)
     }
 }
@@ -386,6 +472,31 @@ mod tests {
         let claude = home.join(".claude");
         std::fs::create_dir_all(&claude).unwrap();
         std::fs::write(claude.join("settings.json"), contents).unwrap();
+    }
+
+    fn write_file(dir: &Path, rel: &str, contents: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, contents).unwrap();
+    }
+
+    #[test]
+    fn project_mcp_json_payload_scored() {
+        let repo = tempdir().unwrap();
+        write_file(
+            repo.path(),
+            ".mcp.json",
+            r#"{ "mcpServers": { "x": { "command": "bash", "args": ["-c", "echo hi"] } } }"#,
+        );
+        let parser = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        };
+        let out = parser.assess(repo.path()).unwrap();
+        assert!(
+            out.iter()
+                .any(|r| matches!(r, AiGuardReason::McpServerSuspiciousLauncher { .. })),
+            "expected #127 launcher reason from .mcp.json payload, got {out:?}"
+        );
     }
 
     #[test]
@@ -953,6 +1064,133 @@ mod tests {
                 AiGuardReason::McpServerRemote { server_name, .. } if server_name == "b")),
             "leading-space server \"b\" should emit remote: {reasons:?}"
         );
+    }
+
+    #[test]
+    fn user_scope_blanket_enable_emits_on_key_alone() {
+        let home = tempdir().unwrap();
+        write_settings(home.path(), r#"{ "enableAllProjectMcpServers": true }"#);
+        let out = ClaudeCodeParser.assess(home.path()).unwrap();
+        assert!(
+            out.iter().any(|r| matches!(
+                r, AiGuardReason::ProjectMcpAutoEnabled { mechanism }
+                    if mechanism.starts_with("user-global blanket")
+            )),
+            "got {out:?}"
+        );
+    }
+
+    #[test]
+    fn auto_enable_key_with_servers_emits_high() {
+        let repo = tempdir().unwrap();
+        write_file(
+            repo.path(),
+            ".claude/settings.json",
+            r#"{ "enableAllProjectMcpServers": true }"#,
+        );
+        write_file(
+            repo.path(),
+            ".mcp.json",
+            r#"{ "mcpServers": { "x": { "command": "node", "args": ["/tmp/.x/p.js"] } } }"#,
+        );
+        let parser = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        };
+        let out = parser.assess(repo.path()).unwrap();
+        assert!(out.iter().any(|r| matches!(
+            r, AiGuardReason::ProjectMcpAutoEnabled { mechanism } if mechanism == "enableAllProjectMcpServers"
+        )), "got {out:?}");
+    }
+
+    #[test]
+    fn auto_enable_key_without_servers_no_emit() {
+        let repo = tempdir().unwrap();
+        write_file(
+            repo.path(),
+            ".claude/settings.json",
+            r#"{ "enableAllProjectMcpServers": true }"#,
+        );
+        let parser = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        };
+        let out = parser.assess(repo.path()).unwrap();
+        assert!(
+            !out.iter()
+                .any(|r| matches!(r, AiGuardReason::ProjectMcpAutoEnabled { .. })),
+            "key with no .mcp.json payload must not emit; got {out:?}"
+        );
+    }
+
+    #[test]
+    fn enabled_mcpjson_servers_array_emits() {
+        let repo = tempdir().unwrap();
+        write_file(
+            repo.path(),
+            ".claude/settings.json",
+            r#"{ "enabledMcpjsonServers": ["x"] }"#,
+        );
+        write_file(
+            repo.path(),
+            ".mcp.json",
+            r#"{ "mcpServers": { "x": { "command": "node" } } }"#,
+        );
+        let parser = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        };
+        let out = parser.assess(repo.path()).unwrap();
+        assert!(out.iter().any(|r| matches!(
+            r, AiGuardReason::ProjectMcpAutoEnabled { mechanism } if mechanism == "enabledMcpjsonServers"
+        )), "got {out:?}");
+    }
+
+    #[test]
+    fn permissions_allow_mcp_does_not_emit_auto_enabled() {
+        // codex C4 regression guard: mcp__* tool-call permission is NOT a
+        // server auto-enable signal.
+        let repo = tempdir().unwrap();
+        write_file(
+            repo.path(),
+            ".claude/settings.json",
+            r#"{ "permissions": { "allow": ["mcp__x"] } }"#,
+        );
+        write_file(
+            repo.path(),
+            ".mcp.json",
+            r#"{ "mcpServers": { "x": { "command": "node" } } }"#,
+        );
+        let parser = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        };
+        let out = parser.assess(repo.path()).unwrap();
+        assert!(
+            !out.iter()
+                .any(|r| matches!(r, AiGuardReason::ProjectMcpAutoEnabled { .. })),
+            "got {out:?}"
+        );
+    }
+
+    #[test]
+    fn mcp_json_and_settings_dedup_by_name() {
+        // codex C9: same server name in both settings and .mcp.json scores once.
+        let repo = tempdir().unwrap();
+        write_file(
+            repo.path(),
+            ".claude/settings.json",
+            r#"{ "mcpServers": { "x": { "command": "node" } } }"#,
+        );
+        write_file(
+            repo.path(),
+            ".mcp.json",
+            r#"{ "mcpServers": { "x": { "command": "node" } } }"#,
+        );
+        let parser = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        };
+        let out = parser.assess(repo.path()).unwrap();
+        let n = out.iter().filter(|r| matches!(
+            r, AiGuardReason::McpServerLocalCommand { server_name, .. } if server_name == "x"
+        )).count();
+        assert_eq!(n, 1, "name dedup failed; got {out:?}");
     }
 
     #[test]
