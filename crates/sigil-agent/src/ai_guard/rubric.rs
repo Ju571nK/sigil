@@ -41,6 +41,7 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
             shape: LauncherShape::TransientPath,
             ..
         } => "mcp_launcher_transient_path",
+        AiGuardReason::ProjectMcpAutoEnabled { .. } => "project_mcp_auto_enabled",
     }
 }
 
@@ -50,7 +51,7 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct Rubric {
     /// kind_key → weight. Keys are static strings owned by the rubric
-    /// module (returned by `kind_key()`). Defaults populate all 15 known
+    /// module (returned by `kind_key()`). Defaults populate all 16 known
     /// kinds; with_overrides() may replace values but never adds keys.
     pub weights: HashMap<&'static str, f32>,
     /// Subset of `weights` whose value came from an operator override
@@ -65,7 +66,7 @@ pub struct Rubric {
 impl Rubric {
     /// Build the canonical hardcoded weights — single source of truth for
     /// defaults. Must match the historical `weight_for()` match arms for
-    /// all 15 kinds.
+    /// all 16 kinds.
     pub fn defaults() -> Self {
         let mut w: HashMap<&'static str, f32> = HashMap::new();
         w.insert("destructive_in_inline_command", 4.0);
@@ -81,6 +82,7 @@ impl Rubric {
         w.insert("mcp_server_local_command", 0.5);
         w.insert("mcp_launcher_shell", 3.0);
         w.insert("mcp_launcher_transient_path", 3.0);
+        w.insert("project_mcp_auto_enabled", 2.5);
         w.insert("trusted_mcp_server", 1.5);
         w.insert("auto_approval_enabled", 2.0);
         Rubric {
@@ -420,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn rubric_defaults_all_15_kinds_present() {
+    fn rubric_defaults_all_16_kinds_present() {
         let r = Rubric::defaults();
         assert_eq!(r.weights.get("destructive_in_inline_command"), Some(&4.0));
         assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&4.0));
@@ -437,7 +439,29 @@ mod tests {
         assert_eq!(r.weights.get("auto_approval_enabled"), Some(&2.0));
         assert_eq!(r.weights.get("mcp_launcher_shell"), Some(&3.0));
         assert_eq!(r.weights.get("mcp_launcher_transient_path"), Some(&3.0));
-        assert_eq!(r.weights.len(), 15);
+        assert_eq!(r.weights.get("project_mcp_auto_enabled"), Some(&2.5));
+        assert_eq!(r.weights.len(), 16);
+    }
+
+    #[test]
+    fn project_mcp_auto_enabled_buckets() {
+        let solo = [AiGuardReason::ProjectMcpAutoEnabled {
+            mechanism: "enableAllProjectMcpServers".into(),
+        }];
+        assert_eq!(bucket(score(&solo)), AiGuardBucket::Medium); // 2.5
+
+        let combo = [
+            AiGuardReason::ProjectMcpAutoEnabled {
+                mechanism: "enableAllProjectMcpServers".into(),
+            },
+            AiGuardReason::McpServerSuspiciousLauncher {
+                server_name: "x".into(),
+                command: "bash".into(),
+                shape: LauncherShape::Shell,
+                evidence: "bash -c".into(),
+            },
+        ];
+        assert_eq!(bucket(score(&combo)), AiGuardBucket::High); // 2.5 + 3.0 = 5.5
     }
 
     #[test]
