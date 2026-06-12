@@ -9,7 +9,7 @@
 //! never as the default an AI coding agent gets.
 
 /// Supported clients (and their aliases) for `render_config`.
-pub const CLIENTS: &str = "codex, claude";
+pub const CLIENTS: &str = "codex, claude, hermes, openclaw";
 
 fn codex_block(exe: &str) -> String {
     format!(
@@ -39,13 +39,60 @@ fn claude_block(exe: &str) -> String {
     )
 }
 
+// Hermes Agent (NousResearch) registers MCP servers in `config.yaml` under
+// `mcp_servers:`; each becomes an auto-discovered `mcp-<server>` toolset. The
+// `assess` tool then lets a Hermes task pre-flight a command/MCP server against
+// this host's loaded Sigil policy.
+fn hermes_block(exe: &str) -> String {
+    format!(
+        "# Hermes Agent — add to your config.yaml\n\
+         # sigil-check — THIS host's own Sigil posture (single host, no server):\n\
+         mcp_servers:\n  \
+           sigil-check:\n    \
+             command: \"{exe}\"\n\
+         # Hermes auto-discovers this server's tools as the `mcp-sigil-check`\n\
+         # toolset (includes `assess`). Enable it for a platform, e.g.:\n\
+         #   platform_toolsets:\n\
+         #     cli: [hermes-cli, mcp-sigil-check]\n\
+         #\n\
+         # Operators only — fleet-wide view: add a SECOND server `sigil-fleet`\n\
+         # with the same command plus env SIGIL_SERVER_BASE_URL +\n\
+         # SIGIL_SERVER_READ_TOKEN; don't replace sigil-check above.\n"
+    )
+}
+
+// OpenClaw registers MCP servers in `~/.openclaw/openclaw.json` under
+// `mcpServers` (same JSON convention as Claude). A SKILL.md drives WHEN to call
+// the `assess` tool; a skill can alternatively shell out to `sigil assess`.
+fn openclaw_block(exe: &str) -> String {
+    format!(
+        "// OpenClaw — add to ~/.openclaw/openclaw.json\n\
+         // sigil-check — THIS host's own Sigil posture (single host, no server):\n\
+         {{\n  \"mcpServers\": {{\n    \"sigil-check\": {{\n      \"command\": \"{exe}\"\n    }}\n  }}\n}}\n\
+         // The `assess` tool lets a skill pre-flight a command/MCP server before\n\
+         // acting. See examples/integrations/openclaw/SKILL.md for a ready-to-use\n\
+         // skill (it can also call `sigil assess` via the CLI — no MCP wiring).\n\
+         //\n\
+         // Operators only — fleet-wide view: add a SECOND entry \"sigil-fleet\" with\n\
+         // the same command and env SIGIL_SERVER_BASE_URL + SIGIL_SERVER_READ_TOKEN.\n"
+    )
+}
+
 /// Render a config block for `client` (None = all clients) with `exe` as the
 /// command path. Returns Err with a usage hint for an unknown client.
 pub fn render_config(exe: &str, client: Option<&str>) -> Result<String, String> {
     match client {
-        None => Ok(format!("{}\n{}", codex_block(exe), claude_block(exe))),
+        None => Ok(format!(
+            "{}\n{}\n{}\n{}",
+            codex_block(exe),
+            claude_block(exe),
+            hermes_block(exe),
+            openclaw_block(exe)
+        )),
         Some("codex") => Ok(codex_block(exe)),
         Some("claude") | Some("claude-code") | Some("claude-desktop") => Ok(claude_block(exe)),
+        Some("hermes") | Some("hermes-agent") => Ok(hermes_block(exe)),
+        Some("openclaw") => Ok(openclaw_block(exe)),
         Some(other) => Err(format!(
             "unknown client '{other}' — supported: {CLIENTS} (or omit for all)"
         )),
@@ -78,10 +125,35 @@ mod tests {
     }
 
     #[test]
-    fn no_client_renders_both() {
+    fn no_client_renders_all() {
         let out = render_config("/x/sigil-mcp", None).unwrap();
-        assert!(out.contains("[mcp_servers.sigil-check]"));
+        assert!(out.contains("[mcp_servers.sigil-check]")); // codex (TOML)
+        assert!(out.contains("\"mcpServers\"")); // claude / openclaw (JSON)
+        assert!(out.contains("mcp_servers:")); // hermes (YAML)
+        assert!(out.contains("~/.openclaw/openclaw.json")); // openclaw
+    }
+
+    #[test]
+    fn hermes_renders_yaml_mcp_servers_with_exe() {
+        for c in ["hermes", "hermes-agent"] {
+            let out = render_config("/abs/sigil-mcp", Some(c)).unwrap();
+            assert!(out.contains("mcp_servers:"), "{c}");
+            assert!(out.contains("sigil-check:"), "{c}");
+            assert!(out.contains("command: \"/abs/sigil-mcp\""), "{c}");
+            // The auto-generated toolset name is documented.
+            assert!(out.contains("mcp-sigil-check"), "{c}");
+        }
+    }
+
+    #[test]
+    fn openclaw_renders_mcpservers_json_with_exe_and_skill_pointer() {
+        let out = render_config("/abs/sigil-mcp", Some("openclaw")).unwrap();
+        assert!(out.contains("~/.openclaw/openclaw.json"));
         assert!(out.contains("\"mcpServers\""));
+        assert!(out.contains("\"sigil-check\""));
+        assert!(out.contains("\"command\": \"/abs/sigil-mcp\""));
+        // Points at the CLI/SKILL.md path too.
+        assert!(out.contains("sigil assess") || out.contains("SKILL.md"));
     }
 
     #[test]
@@ -89,5 +161,7 @@ mod tests {
         let err = render_config("/x/sigil-mcp", Some("nano")).unwrap_err();
         assert!(err.contains("unknown client 'nano'"));
         assert!(err.contains("codex"));
+        assert!(err.contains("hermes"));
+        assert!(err.contains("openclaw"));
     }
 }
