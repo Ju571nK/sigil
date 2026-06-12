@@ -69,6 +69,30 @@ pub enum Command {
     /// through `apply_policy`. Useful after a hand-edit.
     #[cfg(feature = "operator-cli")]
     Reload,
+    /// Evaluate a proposed command or MCP server definition against the
+    /// host's loaded policy (cold-disk). Prints a JSON verdict and exits with
+    /// 0 (allow), 2 (deny/warn-fail), or 1 (usage/policy-load error).
+    #[cfg(feature = "operator-cli")]
+    Assess {
+        /// The command to evaluate (e.g. `rm`).
+        #[arg(long)]
+        command: Option<String>,
+        /// Arguments to the command. Repeat for multiple args.
+        #[arg(long = "arg", allow_hyphen_values = true)]
+        args: Vec<String>,
+        /// Path to a JSON file containing an MCP server definition object.
+        #[arg(long, conflicts_with = "mcp_stdin")]
+        mcp_config: Option<std::path::PathBuf>,
+        /// Read the MCP server definition JSON from stdin.
+        #[arg(long, conflicts_with = "mcp_config")]
+        mcp_stdin: bool,
+        /// Server name (required with --mcp-config or --mcp-stdin).
+        #[arg(long)]
+        mcp_name: Option<String>,
+        /// Treat a Warn verdict as exit 2 instead of 0.
+        #[arg(long)]
+        fail_on_warn: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

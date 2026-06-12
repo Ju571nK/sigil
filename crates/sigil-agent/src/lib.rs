@@ -1,6 +1,8 @@
 //! Internal library shared with integration tests.
 
 pub mod ai_guard;
+#[cfg(feature = "operator-cli")]
+pub mod assess_cli;
 pub mod cli;
 pub mod control;
 pub mod control_client;

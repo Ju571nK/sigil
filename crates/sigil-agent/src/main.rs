@@ -1,6 +1,8 @@
 //! Sigil agent — tokio runtime + system integration.
 
 use clap::Parser;
+#[cfg(feature = "operator-cli")]
+use sigil_agent::assess_cli;
 use sigil_agent::control::{default_control_pipe_name, default_control_socket};
 #[cfg(feature = "operator-cli")]
 use sigil_agent::control_client;
@@ -54,6 +56,26 @@ fn main() -> anyhow::Result<()> {
         #[cfg(feature = "operator-cli")]
         cli::Command::Reload => {
             let code = reload();
+            std::process::exit(code);
+        }
+        #[cfg(feature = "operator-cli")]
+        cli::Command::Assess {
+            command,
+            args,
+            mcp_config,
+            mcp_stdin,
+            mcp_name,
+            fail_on_warn,
+        } => {
+            let code = assess_cli::run(assess_cli::AssessArgs {
+                command,
+                args,
+                mcp_config,
+                mcp_stdin,
+                mcp_name,
+                fail_on_warn,
+                policy_override: cli.policy.clone(),
+            });
             std::process::exit(code);
         }
     }
