@@ -74,7 +74,10 @@ pub enum Command {
     /// 0 (allow), 2 (deny/warn-fail), or 1 (usage/policy-load error).
     #[cfg(feature = "operator-cli")]
     Assess {
-        /// The command to evaluate (e.g. `rm`).
+        /// The command to evaluate. For faithful deny-rule parity with the hook,
+        /// pass the FULL command line here (e.g. `--command "rm -rf /tmp"`).
+        /// `--arg` is a convenience for structural scanning; splitting may re-join
+        /// with different spacing than the agent's original command line.
         #[arg(long)]
         command: Option<String>,
         /// Arguments to the command. Repeat for multiple args.

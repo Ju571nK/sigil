@@ -80,7 +80,9 @@ impl SigilLocal {
         description = "Pre-flight a proposed shell command or a single MCP server definition \
                        against THIS host's currently loaded Sigil policy (rubric + deny rules). \
                        Returns a risk band, score, reasons, any deny-rule match, and a decision \
-                       (allow/warn/deny). Read-only; does not execute anything."
+                       (allow/warn/deny). For faithful deny-rule parity with what the hook would \
+                       block at runtime, put the FULL command line in `command` (args is optional \
+                       and only aids structural scanning). Read-only; does not execute anything."
     )]
     async fn assess(
         &self,
@@ -100,9 +102,9 @@ impl SigilLocal {
                         None,
                     ));
                 }
-                let server_name = p.server_name.ok_or_else(|| {
+                let server_name = p.server_name.filter(|s| !s.is_empty()).ok_or_else(|| {
                     McpError::invalid_params(
-                        "`server_name` is required when `mcp_server` is provided",
+                        "`server_name` is required (non-empty) when `mcp_server` is provided",
                         None,
                     )
                 })?;

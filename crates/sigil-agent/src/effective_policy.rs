@@ -26,7 +26,8 @@ use std::path::Path;
 /// by the live reload task:
 /// - `Absent` → no bundle (same as agent boot when file is missing).
 /// - `Present` → merged as 3rd layer.
-/// - `Corrupt` / `Empty` → returns `Err` (cold load has no last-good state).
+/// - `Empty` → no bundle (matches the daemon: empty rule-packs.yaml is tolerated).
+/// - `Corrupt` → returns `Err` (parse failed; a cold load has no last-good state).
 ///
 /// # enforce_bucket
 /// `EffectivePolicy` has no dedicated enforce-threshold field today.  The
@@ -57,19 +58,20 @@ pub fn load_effective_policy(
         None
     };
 
-    // ── 2. Read the rule-pack bundle (fail-loud for Corrupt/Empty) ────────────
+    // ── 2. Read the rule-pack bundle ─────────────────────────────────────────
+    // Match the daemon's tolerance so a cold `sigil assess` agrees with a running
+    // agent: boot/reload treat an empty (zero-byte / whitespace) rule-packs.yaml
+    // as "no bundle" (Absent at boot, retain-last-good on live reload — #135), not
+    // a hard error. A benign empty file (a `touch`, or a `cp` truncation window)
+    // must NOT make assess exit 1. Only a genuinely Corrupt (parse-failed) file is
+    // fail-loud, since a cold load has no last-good to fall back to.
     use crate::policy_reload_task::{read_bundle_state, BundleState};
     let bundle_doc = match read_bundle_state(rule_packs_path) {
         BundleState::Present(d) => Some(*d),
-        BundleState::Absent => None,
+        BundleState::Absent | BundleState::Empty => None,
         BundleState::Corrupt => {
             return Err(anyhow::anyhow!(
                 "rule-packs.yaml is corrupt (read/parse failed); cold load cannot continue"
-            ))
-        }
-        BundleState::Empty => {
-            return Err(anyhow::anyhow!(
-                "rule-packs.yaml is empty (possible partial write); cold load cannot continue"
             ))
         }
     };
@@ -163,6 +165,24 @@ mod tests {
         // DenyEvaluator should be empty (no rules from an absent bundle).
         assert!(deny.is_empty(), "expected empty deny evaluator");
         // enforce_bucket should default to High.
+        assert_eq!(bucket, AiGuardBucket::High);
+    }
+
+    /// A benign empty (zero-byte / whitespace) rule-packs.yaml is tolerated like
+    /// an absent one — Ok with no bundle — so a cold `sigil assess` agrees with a
+    /// running daemon (which treats empty as "no bundle" / retain-last-good, #135),
+    /// instead of hard-failing. Only a Corrupt (parse-failed) bundle errors.
+    #[test]
+    fn load_effective_policy_empty_rule_packs_ok() {
+        let dir = tempdir().unwrap();
+        let policy_path = dir.path().join("policy.yaml");
+        let rule_packs_path = dir.path().join("rule-packs.yaml");
+        std::fs::write(&policy_path, minimal_policy()).unwrap();
+        std::fs::write(&rule_packs_path, "   \n\t\n").unwrap(); // whitespace-only
+
+        let (_rubric, deny, bucket) =
+            load_effective_policy(&policy_path, &rule_packs_path).unwrap();
+        assert!(deny.is_empty(), "empty bundle => no deny rules");
         assert_eq!(bucket, AiGuardBucket::High);
     }
 

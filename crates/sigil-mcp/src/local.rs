@@ -85,7 +85,7 @@ impl LocalUpstream {
 
     /// Ask the running `sigil-agent` to evaluate a proposed command or MCP
     /// server definition against its LIVE loaded policy. Phase 3b.9 (#149).
-    #[allow(dead_code)] // consumed by sigil-mcp tool wiring in a follow-on task
+    /// Consumed by the `assess` MCP tool in `local_tools.rs`.
     pub async fn assess(&self, input: AssessInput) -> Result<AssessVerdict, LocalError> {
         let resp = self.query(&Request::Assess { input }).await?;
         if let Some(err) = resp.error {
