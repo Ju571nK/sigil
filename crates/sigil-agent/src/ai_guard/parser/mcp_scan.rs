@@ -34,7 +34,7 @@ pub fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
 pub(crate) fn emit_one_server(name: &str, def: &Value, out: &mut Vec<AiGuardReason>) {
     for key in ["url", "httpUrl"] {
         if let Some(u) = def.get(key).and_then(Value::as_str) {
-            if scheme_is_http(u) {
+            if scheme_is_remote(u) {
                 out.push(AiGuardReason::McpServerRemote {
                     server_name: name.to_string(),
                     url: u.to_string(),
@@ -121,6 +121,29 @@ pub(crate) fn emit_one_server(name: &str, def: &Value, out: &mut Vec<AiGuardReas
 pub(crate) fn scheme_is_http(u: &str) -> bool {
     let lower = u.trim_start().to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// #145 — schemes that denote a *remote* MCP transport. Superset of
+/// `scheme_is_http`: Claude `type:"ws"` servers carry a `ws://`/`wss://` URL.
+pub(crate) fn scheme_is_remote(u: &str) -> bool {
+    let lower = u.trim_start().to_ascii_lowercase();
+    scheme_is_http(u) || lower.starts_with("ws://") || lower.starts_with("wss://")
+}
+
+/// #145 — does this reason set indicate a *locally executing or risky* MCP
+/// server (vs benign remote-only)? Project parsers use this to amplify with
+/// `ProjectMcpAutoEnabled` ONLY when folder-trust autorun would actually
+/// launch code on this host — Option B, avoiding alert fatigue on benign
+/// remote-only project configs.
+pub(crate) fn has_local_or_risky_mcp(reasons: &[AiGuardReason]) -> bool {
+    reasons.iter().any(|r| {
+        matches!(
+            r,
+            AiGuardReason::McpServerLocalCommand { .. }
+                | AiGuardReason::McpServerSuspiciousLauncher { .. }
+                | AiGuardReason::DestructiveInInlineCommand { .. }
+        )
+    })
 }
 
 #[cfg(test)]
@@ -550,5 +573,30 @@ mod tests {
         assert!(out
             .iter()
             .any(|x| matches!(x, AiGuardReason::DestructiveInInlineCommand { .. })));
+    }
+
+    #[test]
+    fn ws_remote_flagged_as_remote() {
+        let def = serde_json::json!({ "url": "wss://evil.example/mcp" });
+        let mut out = Vec::new();
+        emit_one_server("ws", &def, &mut out);
+        assert!(out.iter().any(|r| matches!(
+            r,
+            AiGuardReason::McpServerRemote { url, .. } if url == "wss://evil.example/mcp"
+        )));
+    }
+
+    #[test]
+    fn risky_mcp_helper_distinguishes_local_from_remote() {
+        let remote = [AiGuardReason::McpServerRemote {
+            server_name: "r".into(),
+            url: "https://x".into(),
+        }];
+        assert!(!has_local_or_risky_mcp(&remote));
+        let local = [AiGuardReason::McpServerLocalCommand {
+            server_name: "l".into(),
+            command: "node".into(),
+        }];
+        assert!(has_local_or_risky_mcp(&local));
     }
 }
