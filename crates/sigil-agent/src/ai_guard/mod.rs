@@ -5,6 +5,7 @@
 //! `Evidence::AiGuardRiskAssessed` events on file change + on a 24h heartbeat.
 //! Sigil measures, does not block.
 
+pub mod assess;
 pub mod command_scan;
 pub mod ext_script;
 pub mod parser;
