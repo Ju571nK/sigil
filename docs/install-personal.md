@@ -100,7 +100,7 @@ cp ~/sigil-rules/rule-packs.yaml ~/.config/sigil/.rule-packs.yaml.tmp && \
 
 **Prefer plain `cp` over symlinks.** The watcher monitors the config directory; replacing the file in place is reliably detected. An in-place edit of a symlink target in another directory may not be picked up.
 
-**Fault tolerance:** If you save a corrupt `rule-packs.yaml`, the agent retains the last known-good bundle (your active packs stay loaded). Deliberately removing the file clears the bundle layer.
+**Fault tolerance:** If you save a corrupt `rule-packs.yaml`, the agent retains the last known-good bundle (your active packs stay loaded). A momentarily empty read — the zero-byte window a non-atomic `cp` opens mid-write — is likewise retained, so a write race never drops your active packs. Only an actual removal (`rm`) clears the bundle layer; to deliberately empty it without removing the file, write a valid empty document (it parses to a bundle with no packs). If the config directory itself is deleted and re-created while the agent runs, the watcher re-arms and resumes hot-reloading.
 
 For the packaged install, the config directory is `/etc/sigil`:
 
