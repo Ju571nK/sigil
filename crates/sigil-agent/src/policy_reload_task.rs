@@ -351,12 +351,9 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         .into_iter()
         .collect();
     let new_codex: std::collections::BTreeSet<PathBuf> =
-        crate::ai_guard::workspace_discovery::discover_per_repo(
-            &effective.codex_workspaces,
-            ".codex/config.toml",
-        )
-        .into_iter()
-        .collect();
+        crate::ai_guard::workspace_discovery::discover_codex_repos(&effective.codex_workspaces)
+            .into_iter()
+            .collect();
     let new_gemini: std::collections::BTreeSet<PathBuf> =
         crate::ai_guard::workspace_discovery::discover_per_repo(
             &effective.gemini_workspaces,
@@ -365,12 +362,9 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         .into_iter()
         .collect();
     let new_cursor: std::collections::BTreeSet<PathBuf> =
-        crate::ai_guard::workspace_discovery::discover_per_repo(
-            &effective.cursor_workspaces,
-            ".cursor/mcp.json",
-        )
-        .into_iter()
-        .collect();
+        crate::ai_guard::workspace_discovery::discover_cursor_repos(&effective.cursor_workspaces)
+            .into_iter()
+            .collect();
     // #93 — reconciled like the other five tools (built-in
     // AntigravityProjectParser) AND used for Project rule-pack expansion.
     let new_antigravity: std::collections::BTreeSet<PathBuf> =

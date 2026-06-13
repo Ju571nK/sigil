@@ -74,6 +74,46 @@ pub fn discover_claude_repos(roots: &[String]) -> Vec<PathBuf> {
             .into_iter()
             .collect();
     set.extend(discover_per_repo(roots, ".mcp.json"));
+    set.extend(discover_per_repo(roots, "CLAUDE.md"));
+    set.extend(discover_per_repo(roots, "AGENTS.md"));
+    set.into_iter().collect()
+}
+
+/// #146 — Codex repos by EITHER `.codex/config.toml` OR a committed `AGENTS.md`
+/// (Codex's first-class instruction file). Union, deduped by canonical path.
+pub fn discover_codex_repos(roots: &[String]) -> Vec<PathBuf> {
+    let mut set: std::collections::BTreeSet<PathBuf> =
+        discover_per_repo(roots, ".codex/config.toml")
+            .into_iter()
+            .collect();
+    set.extend(discover_per_repo(roots, "AGENTS.md"));
+    set.into_iter().collect()
+}
+
+/// #146 — Cursor repos by `.cursor/mcp.json` OR `.cursorrules` (files) OR a
+/// `.cursor/rules` directory. Union, deduped by canonical path.
+pub fn discover_cursor_repos(roots: &[String]) -> Vec<PathBuf> {
+    let mut set: std::collections::BTreeSet<PathBuf> = discover_per_repo(roots, ".cursor/mcp.json")
+        .into_iter()
+        .collect();
+    set.extend(discover_per_repo(roots, ".cursorrules"));
+    // `.cursor/rules` is a DIRECTORY marker — discover_per_repo only matches files.
+    for raw in roots {
+        let Some(root) = expand_and_canonicalize(raw) else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.join(".cursor").join("rules").is_dir() {
+                if let Ok(c) = dunce::canonicalize(&path) {
+                    set.insert(c);
+                }
+            }
+        }
+    }
     set.into_iter().collect()
 }
 
@@ -204,6 +244,38 @@ mod tests {
         let found = discover_claude_repos(&roots);
         let canon = dunce::canonicalize(&repo).unwrap();
         assert!(found.contains(&canon), "got {found:?}");
+    }
+
+    #[test]
+    fn discover_claude_repos_finds_agents_md_only() {
+        let root = tempdir().unwrap();
+        let repo = root.path().join("only-agents");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("AGENTS.md"), "x").unwrap();
+        let roots = vec![root.path().to_string_lossy().to_string()];
+        assert!(discover_claude_repos(&roots).contains(&dunce::canonicalize(&repo).unwrap()));
+    }
+    #[test]
+    fn discover_codex_repos_finds_agents_md_only() {
+        let root = tempdir().unwrap();
+        let repo = root.path().join("only-agents");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("AGENTS.md"), "x").unwrap();
+        let roots = vec![root.path().to_string_lossy().to_string()];
+        assert!(discover_codex_repos(&roots).contains(&dunce::canonicalize(&repo).unwrap()));
+    }
+    #[test]
+    fn discover_cursor_repos_finds_cursorrules_and_rules_dir() {
+        let root = tempdir().unwrap();
+        let r1 = root.path().join("a");
+        std::fs::create_dir_all(&r1).unwrap();
+        std::fs::write(r1.join(".cursorrules"), "x").unwrap();
+        let r2 = root.path().join("b");
+        std::fs::create_dir_all(r2.join(".cursor").join("rules")).unwrap();
+        let roots = vec![root.path().to_string_lossy().to_string()];
+        let found = discover_cursor_repos(&roots);
+        assert!(found.contains(&dunce::canonicalize(&r1).unwrap()));
+        assert!(found.contains(&dunce::canonicalize(&r2).unwrap()));
     }
 
     #[test]
