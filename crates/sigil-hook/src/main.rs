@@ -226,6 +226,10 @@ enum Cmd {
         /// Fail mode baked into the enforce command. Default open.
         #[arg(long, value_enum, default_value_t = OnFailureArg::Open)]
         on_failure: OnFailureArg,
+        /// Force the Antigravity command-hook install even though it does not
+        /// fire on current agy (see #112). No effect for other agents.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Remove the sigil-hook registration from an agent's settings.
@@ -410,7 +414,8 @@ fn main() {
             capture,
             enforce,
             on_failure,
-        } => cmd_install(&agent, write, capture, enforce, on_failure),
+            force,
+        } => cmd_install(&agent, write, capture, enforce, on_failure, force),
         Cmd::Uninstall { agent, write } => cmd_uninstall(&agent, write),
         Cmd::Verify { agent } => std::process::exit(cmd_verify(&agent)),
     }
@@ -430,6 +435,7 @@ fn cmd_install(
     capture: CaptureArg,
     enforce: bool,
     on_failure: OnFailureArg,
+    force: bool,
 ) {
     let capture_str = match capture {
         CaptureArg::Redacted => "redacted",
@@ -445,7 +451,16 @@ fn cmd_install(
     // Antigravity is not a settings-merge agent: it installs as an `agy` plugin
     // bundle. Route it through the dedicated path.
     if agent == "antigravity" {
-        return cmd_install_antigravity(&exe, write, capture_str);
+        // #112 (C1) — Antigravity enforce is not available: current agy does not
+        // fire plugin command-hooks, so there is no deny path to register.
+        if enforce {
+            eprintln!(
+                "error: Antigravity enforce is not available — current agy does not fire \
+                 plugin command-hooks (sigil #112). Use static posture scanning; omit --enforce."
+            );
+            std::process::exit(2);
+        }
+        return cmd_install_antigravity(&exe, write, capture_str, force);
     }
 
     // Grok is not a settings-merge agent: it writes a dedicated
@@ -675,9 +690,45 @@ fn cmd_uninstall_grok(write: bool) {
     }
 }
 
+/// #112 — current agy (>=1.0.7) does not fire `agy plugin install` PreToolUse
+/// command-hooks; installing one is a no-op that gives false assurance. Skip by
+/// default; only proceed under `--force` (preserves the path for a future agy
+/// that restores command-hooks).
+#[derive(Debug, PartialEq, Eq)]
+enum AntigravityInstallDisposition {
+    NotSupported,
+    Proceed,
+}
+
+fn antigravity_install_disposition(force: bool) -> AntigravityInstallDisposition {
+    if force {
+        AntigravityInstallDisposition::Proceed
+    } else {
+        AntigravityInstallDisposition::NotSupported
+    }
+}
+
+// C6 — must begin with "NOT installed" + "no files written, agy not invoked"
+// so the message never drifts into "installed" language; asserted by tests.
+const ANTIGRAVITY_NOT_SUPPORTED_MSG: &str =
+    "sigil-hook: Antigravity runtime hooks NOT installed (no files written, agy not invoked).\n\
+     Current Antigravity (agy >=1.0.7) does not fire `agy plugin install` PreToolUse \
+     command-hooks (verified — sigil #112), so installing one would be a no-op that \
+     falsely implies runtime protection.\n\
+     Sigil covers Antigravity via STATIC configuration posture scanning \
+     (sandbox / permission settings) instead.\n\
+     If a future agy restores command-hooks, re-run with --force to install anyway.";
+
 /// Antigravity install: materialize the plugin bundle, then register it with
 /// `agy plugin install`. Without `--write`, print the bundle + command preview.
-fn cmd_install_antigravity(exe: &str, write: bool, capture: &str) {
+fn cmd_install_antigravity(exe: &str, write: bool, capture: &str, force: bool) {
+    if antigravity_install_disposition(force) == AntigravityInstallDisposition::NotSupported {
+        // Both preview (!write) and apply (--write) paths: do nothing but explain.
+        eprintln!("{ANTIGRAVITY_NOT_SUPPORTED_MSG}");
+        return;
+    }
+    // --force: legacy bundle path preserved (may still be a no-op on current agy).
+    eprintln!("sigil-hook: --force set; installing Antigravity command-hook anyway (may not fire on current agy — #112).");
     if !write {
         print!("{}", install_antigravity::render_block(exe, capture));
         return;
@@ -844,5 +895,27 @@ mod tests {
         assert_eq!(drift_exit_code(CommandDrift), 2);
         assert_eq!(drift_exit_code(MatcherDrift), 2);
         assert_eq!(drift_exit_code(FailModeDrift), 2);
+    }
+
+    #[test]
+    fn antigravity_disposition_gates_on_force() {
+        assert_eq!(
+            antigravity_install_disposition(false),
+            AntigravityInstallDisposition::NotSupported
+        );
+        assert_eq!(
+            antigravity_install_disposition(true),
+            AntigravityInstallDisposition::Proceed
+        );
+    }
+
+    #[test]
+    fn antigravity_not_supported_msg_is_honest() {
+        let m = ANTIGRAVITY_NOT_SUPPORTED_MSG;
+        assert!(m.contains("NOT installed"));
+        assert!(m.contains("no files written"));
+        assert!(m.contains("#112"));
+        assert!(m.contains("--force"));
+        assert!(m.to_lowercase().contains("static"));
     }
 }
