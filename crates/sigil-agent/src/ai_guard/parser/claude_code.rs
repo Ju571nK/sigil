@@ -412,6 +412,7 @@ impl AiGuardParser for ClaudeCodeProjectParser {
             cd.join("settings.json"),
             cd.join("settings.local.json"),
             cd.join("hooks"),
+            self.repo_root.join(".mcp.json"),
         ]
     }
 
@@ -1210,6 +1211,19 @@ mod tests {
         assert_eq!(
             paths,
             vec![std::path::PathBuf::from("/opt/sigil-tools/pre.sh")]
+        );
+    }
+
+    #[test]
+    fn project_parser_watches_mcp_json() {
+        let repo = tempdir().unwrap();
+        let parser = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        };
+        let watched = parser.watched_paths(repo.path());
+        assert!(
+            watched.contains(&repo.path().join(".mcp.json")),
+            "got {watched:?}"
         );
     }
 }

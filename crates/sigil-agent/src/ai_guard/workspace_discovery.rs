@@ -63,6 +63,20 @@ pub fn discover_per_repo(roots: &[String], marker_subpath: &str) -> Vec<PathBuf>
     out.into_iter().collect()
 }
 
+/// #145 — Claude Code repos are discovered by EITHER marker: the per-tool
+/// settings file (`.claude/settings.json`) OR a committed project MCP payload
+/// at the repo root (`.mcp.json`). A repo with only `.mcp.json` is still a
+/// TrustFall surface, so it must be discovered (and watched) too. Union,
+/// deduplicated by canonical path.
+pub fn discover_claude_repos(roots: &[String]) -> Vec<PathBuf> {
+    let mut set: std::collections::BTreeSet<PathBuf> =
+        discover_per_repo(roots, ".claude/settings.json")
+            .into_iter()
+            .collect();
+    set.extend(discover_per_repo(roots, ".mcp.json"));
+    set.into_iter().collect()
+}
+
 fn expand_and_canonicalize(raw: &str) -> Option<PathBuf> {
     let expanded =
         match sigil_core::policy::expand::expand(raw, &sigil_core::policy::expand::EnvLookup) {
@@ -178,6 +192,18 @@ mod tests {
         let root = dir.path().to_string_lossy().to_string();
         let out = discover_per_repo(&[root.clone(), root], CONTINUE_MARKER);
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn discover_claude_repos_finds_mcp_json_only_repo() {
+        let root = tempdir().unwrap();
+        let repo = root.path().join("only-mcp");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join(".mcp.json"), "{}").unwrap();
+        let roots = vec![root.path().to_string_lossy().to_string()];
+        let found = discover_claude_repos(&roots);
+        let canon = dunce::canonicalize(&repo).unwrap();
+        assert!(found.contains(&canon), "got {found:?}");
     }
 
     #[test]

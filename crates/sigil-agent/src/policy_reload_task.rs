@@ -345,9 +345,8 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
         .into_iter()
         .collect();
     let new_claude: std::collections::BTreeSet<PathBuf> =
-        crate::ai_guard::workspace_discovery::discover_per_repo(
+        crate::ai_guard::workspace_discovery::discover_claude_repos(
             &effective.claude_code_workspaces,
-            ".claude/settings.json",
         )
         .into_iter()
         .collect();
