@@ -234,6 +234,25 @@ pub enum AiGuardReason {
     /// a tool's folder-trust default). Emitted as POSTURE; the launched
     /// server's own command is scored separately via `emit_one_server`.
     ProjectMcpAutoEnabled { mechanism: String },
+    /// #146 — a repo-local agent instruction file (CLAUDE.md / AGENTS.md /
+    /// .cursorrules / .cursor/rules) contains a high-signal exec or
+    /// prompt-injection directive. POSTURE only (advisory, never a hook block).
+    InstructionFileDirective {
+        path: PathBuf,
+        directive_kind: InstructionDirectiveKind,
+        snippet: String,
+    },
+}
+
+/// #146 — category of instruction-file directive. Stable wire strings
+/// (SIEM filter keys; renames are breaking).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InstructionDirectiveKind {
+    FetchPipe,
+    Destructive,
+    Obfuscation,
+    OverrideMarker,
 }
 
 /// #127 — classification of a suspicious stdio MCP launcher. Stable wire
@@ -1197,6 +1216,28 @@ mod tests {
         let j = serde_json::to_value(&p).unwrap();
         assert_eq!(j["kind"], "project_mcp_auto_enabled");
         assert_eq!(j["mechanism"], "enableAllProjectMcpServers");
+
+        let d = AiGuardReason::InstructionFileDirective {
+            path: "/repo/CLAUDE.md".into(),
+            directive_kind: InstructionDirectiveKind::FetchPipe,
+            snippet: "curl x | sh".into(),
+        };
+        let j = serde_json::to_value(&d).unwrap();
+        assert_eq!(j["kind"], "instruction_file_directive");
+        assert_eq!(j["snippet"], "curl x | sh");
+        let back: AiGuardReason = serde_json::from_value(j).unwrap();
+        assert_eq!(back, d);
+        for (k, s) in [
+            (InstructionDirectiveKind::FetchPipe, "fetch_pipe"),
+            (InstructionDirectiveKind::Destructive, "destructive"),
+            (InstructionDirectiveKind::Obfuscation, "obfuscation"),
+            (InstructionDirectiveKind::OverrideMarker, "override_marker"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(k).unwrap(),
+                serde_json::Value::String(s.into())
+            );
+        }
     }
 
     #[test]
