@@ -8,6 +8,7 @@ pub mod codex;
 pub mod continue_dev;
 pub mod cursor;
 pub mod gemini;
+pub(crate) mod instruction_scan;
 pub mod mcp_scan;
 
 use serde_json::Value;
