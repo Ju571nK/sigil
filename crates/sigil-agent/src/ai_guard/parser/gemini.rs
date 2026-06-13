@@ -141,7 +141,13 @@ impl AiGuardParser for GeminiProjectParser {
         vec![self.repo_root.join(".gemini").join("settings.json")]
     }
     fn assess(&self, _home: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
-        assess_path(self.repo_root.join(".gemini").join("settings.json"))
+        let mut out = assess_path(self.repo_root.join(".gemini").join("settings.json"))?;
+        if super::mcp_scan::has_local_or_risky_mcp(&out) {
+            out.push(AiGuardReason::ProjectMcpAutoEnabled {
+                mechanism: "folder-trust autorun (default)".to_string(),
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -299,5 +305,49 @@ mod tests {
             .iter()
             .any(|r| matches!(r, AiGuardReason::SandboxDisabled)));
         assert_eq!(p.scope(), AiGuardScope::Project { path: repo });
+    }
+
+    #[test]
+    fn gemini_local_command_emits_auto_enabled() {
+        let repo = tempdir().unwrap();
+        let g = repo.path().join(".gemini");
+        std::fs::create_dir_all(&g).unwrap();
+        std::fs::write(
+            g.join("settings.json"),
+            r#"{ "mcpServers": { "x": { "command": "node" } } }"#,
+        )
+        .unwrap();
+        let out = GeminiProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        }
+        .assess(repo.path())
+        .unwrap();
+        assert!(
+            out.iter()
+                .any(|r| matches!(r, AiGuardReason::ProjectMcpAutoEnabled { .. })),
+            "got {out:?}"
+        );
+    }
+
+    #[test]
+    fn gemini_benign_remote_no_auto_enabled() {
+        let repo = tempdir().unwrap();
+        let g = repo.path().join(".gemini");
+        std::fs::create_dir_all(&g).unwrap();
+        std::fs::write(
+            g.join("settings.json"),
+            r#"{ "mcpServers": { "x": { "url": "https://api.example/mcp" } } }"#,
+        )
+        .unwrap();
+        let out = GeminiProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        }
+        .assess(repo.path())
+        .unwrap();
+        assert!(
+            !out.iter()
+                .any(|r| matches!(r, AiGuardReason::ProjectMcpAutoEnabled { .. })),
+            "got {out:?}"
+        );
     }
 }

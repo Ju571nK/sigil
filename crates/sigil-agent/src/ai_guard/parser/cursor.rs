@@ -53,7 +53,15 @@ impl AiGuardParser for CursorProjectParser {
         vec![self.repo_root.join(".cursor").join("mcp.json")]
     }
     fn assess(&self, _home: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
-        assess_path(self.repo_root.join(".cursor").join("mcp.json"))
+        let mut out = assess_path(self.repo_root.join(".cursor").join("mcp.json"))?;
+        // #145 Option B — amplify only when folder-trust autorun would launch
+        // local/risky code on this host (not for benign remote-only configs).
+        if super::mcp_scan::has_local_or_risky_mcp(&out) {
+            out.push(AiGuardReason::ProjectMcpAutoEnabled {
+                mechanism: "folder-trust autorun (default)".to_string(),
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -142,5 +150,51 @@ mod tests {
             repo_root: d.path().to_path_buf(),
         };
         assert!(p.assess(Path::new("/unused")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn cursor_local_command_emits_auto_enabled() {
+        let repo = tempdir().unwrap();
+        let cur = repo.path().join(".cursor");
+        std::fs::create_dir_all(&cur).unwrap();
+        std::fs::write(
+            cur.join("mcp.json"),
+            r#"{ "mcpServers": { "x": { "command": "node" } } }"#,
+        )
+        .unwrap();
+        let out = CursorProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        }
+        .assess(repo.path())
+        .unwrap();
+        assert!(
+            out.iter().any(|r| matches!(
+                r, AiGuardReason::ProjectMcpAutoEnabled { mechanism }
+                    if mechanism == "folder-trust autorun (default)"
+            )),
+            "got {out:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_benign_remote_no_auto_enabled() {
+        let repo = tempdir().unwrap();
+        let cur = repo.path().join(".cursor");
+        std::fs::create_dir_all(&cur).unwrap();
+        std::fs::write(
+            cur.join("mcp.json"),
+            r#"{ "mcpServers": { "x": { "url": "https://api.example/mcp" } } }"#,
+        )
+        .unwrap();
+        let out = CursorProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        }
+        .assess(repo.path())
+        .unwrap();
+        assert!(
+            !out.iter()
+                .any(|r| matches!(r, AiGuardReason::ProjectMcpAutoEnabled { .. })),
+            "benign remote must not amplify; got {out:?}"
+        );
     }
 }

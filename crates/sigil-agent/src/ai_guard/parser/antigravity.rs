@@ -105,6 +105,10 @@ impl AntigravityProjectParser {
     }
 }
 
+// #145 — Option B is intentionally NOT applied to Antigravity in v1: its MCP
+// servers live in a global file (`~/.gemini/config/mcp_config.json`), not in
+// the per-repo `.antigravity/settings.json` this parser reads, so there is no
+// project MCP payload to amplify. Revisit if Antigravity adds per-repo MCP.
 impl AiGuardParser for AntigravityProjectParser {
     fn tool(&self) -> AiTool {
         AiTool::Antigravity
