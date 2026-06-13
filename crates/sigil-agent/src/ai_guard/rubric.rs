@@ -4,7 +4,7 @@
 //! delegates to `Rubric::defaults().score()` so existing callers (tests,
 //! doctor static-fallback path) keep working unchanged.
 
-use sigil_core::event::{AiGuardBucket, AiGuardReason, LauncherShape};
+use sigil_core::event::{AiGuardBucket, AiGuardReason, InstructionDirectiveKind, LauncherShape};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -42,6 +42,22 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
             ..
         } => "mcp_launcher_transient_path",
         AiGuardReason::ProjectMcpAutoEnabled { .. } => "project_mcp_auto_enabled",
+        AiGuardReason::InstructionFileDirective {
+            directive_kind: InstructionDirectiveKind::FetchPipe,
+            ..
+        } => "instruction_fetch_pipe",
+        AiGuardReason::InstructionFileDirective {
+            directive_kind: InstructionDirectiveKind::Destructive,
+            ..
+        } => "instruction_destructive",
+        AiGuardReason::InstructionFileDirective {
+            directive_kind: InstructionDirectiveKind::Obfuscation,
+            ..
+        } => "instruction_obfuscation",
+        AiGuardReason::InstructionFileDirective {
+            directive_kind: InstructionDirectiveKind::OverrideMarker,
+            ..
+        } => "instruction_override_marker",
     }
 }
 
@@ -51,7 +67,7 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct Rubric {
     /// kind_key → weight. Keys are static strings owned by the rubric
-    /// module (returned by `kind_key()`). Defaults populate all 16 known
+    /// module (returned by `kind_key()`). Defaults populate all 20 known
     /// kinds; with_overrides() may replace values but never adds keys.
     pub weights: HashMap<&'static str, f32>,
     /// Subset of `weights` whose value came from an operator override
@@ -66,7 +82,7 @@ pub struct Rubric {
 impl Rubric {
     /// Build the canonical hardcoded weights — single source of truth for
     /// defaults. Must match the historical `weight_for()` match arms for
-    /// all 16 kinds.
+    /// all 20 kinds.
     pub fn defaults() -> Self {
         let mut w: HashMap<&'static str, f32> = HashMap::new();
         w.insert("destructive_in_inline_command", 4.0);
@@ -83,6 +99,10 @@ impl Rubric {
         w.insert("mcp_launcher_shell", 3.0);
         w.insert("mcp_launcher_transient_path", 3.0);
         w.insert("project_mcp_auto_enabled", 2.5);
+        w.insert("instruction_fetch_pipe", 3.0);
+        w.insert("instruction_destructive", 3.0);
+        w.insert("instruction_obfuscation", 2.5);
+        w.insert("instruction_override_marker", 2.0);
         w.insert("trusted_mcp_server", 1.5);
         w.insert("auto_approval_enabled", 2.0);
         Rubric {
@@ -422,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn rubric_defaults_all_16_kinds_present() {
+    fn rubric_defaults_all_20_kinds_present() {
         let r = Rubric::defaults();
         assert_eq!(r.weights.get("destructive_in_inline_command"), Some(&4.0));
         assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&4.0));
@@ -440,7 +460,11 @@ mod tests {
         assert_eq!(r.weights.get("mcp_launcher_shell"), Some(&3.0));
         assert_eq!(r.weights.get("mcp_launcher_transient_path"), Some(&3.0));
         assert_eq!(r.weights.get("project_mcp_auto_enabled"), Some(&2.5));
-        assert_eq!(r.weights.len(), 16);
+        assert_eq!(r.weights.get("instruction_fetch_pipe"), Some(&3.0));
+        assert_eq!(r.weights.get("instruction_destructive"), Some(&3.0));
+        assert_eq!(r.weights.get("instruction_obfuscation"), Some(&2.5));
+        assert_eq!(r.weights.get("instruction_override_marker"), Some(&2.0));
+        assert_eq!(r.weights.len(), 20);
     }
 
     #[test]
@@ -574,6 +598,27 @@ mod tests {
                 // Debug build: debug_assert! panicked. That's expected behavior.
             }
         }
+    }
+
+    #[test]
+    fn instruction_directive_buckets() {
+        use sigil_core::event::InstructionDirectiveKind;
+        let mk = |k| AiGuardReason::InstructionFileDirective {
+            path: "/r/CLAUDE.md".into(),
+            directive_kind: k,
+            snippet: "x".into(),
+        };
+        assert_eq!(
+            bucket(score(&[mk(InstructionDirectiveKind::OverrideMarker)])),
+            AiGuardBucket::Medium
+        );
+        assert_eq!(
+            bucket(score(&[
+                mk(InstructionDirectiveKind::FetchPipe),
+                mk(InstructionDirectiveKind::Obfuscation)
+            ])),
+            AiGuardBucket::High
+        );
     }
 
     fn launcher(shape: LauncherShape) -> AiGuardReason {
