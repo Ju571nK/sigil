@@ -169,9 +169,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         &effective.continue_workspaces,
         ".continue/config.json",
     );
-    let claude_code_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
+    let claude_code_repos = crate::ai_guard::workspace_discovery::discover_claude_repos(
         &effective.claude_code_workspaces,
-        ".claude/settings.json",
     );
     let codex_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
         &effective.codex_workspaces,
@@ -1274,6 +1273,7 @@ pub(crate) fn push_claude_code_synthetic_targets(
         paths: vec![
             cd.join("settings.json").to_string_lossy().to_string(),
             cd.join("settings.local.json").to_string_lossy().to_string(),
+            repo_root.join(".mcp.json").to_string_lossy().to_string(),
         ],
         recursive: false,
         follow_symlinks: false,
