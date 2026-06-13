@@ -375,6 +375,11 @@ fn project_auto_enable_mechanism(settings: &Value) -> Option<&'static str> {
     {
         return Some("enableAllProjectMcpServers");
     }
+    // Deliberate: a non-empty `enabledMcpjsonServers` is treated as the signal
+    // without correlating its entries against `.mcp.json` server names. The
+    // presence of the pre-approval intent plus any committed payload is the
+    // risk; an array naming servers absent from the payload is still a standing
+    // blanket-approval posture. Do NOT "tighten" this to require a name match.
     if settings
         .get("enabledMcpjsonServers")
         .and_then(Value::as_array)
@@ -439,7 +444,23 @@ impl AiGuardParser for ClaudeCodeProjectParser {
         let cd = self.repo_root.join(".claude");
         let base = super::read_json_optional(&cd.join("settings.json"))?;
         let local = super::read_json_optional(&cd.join("settings.local.json"))?;
-        let mcp_json = super::read_json_optional(&self.repo_root.join(".mcp.json"))?;
+        // #145 — read `.mcp.json` DEFENSIVELY: a malformed payload must not
+        // abort the whole assess and thereby blind us to a malicious
+        // `.claude/settings.json` in the same repo (a corrupt-sidecar evasion
+        // seam). A corrupt `.mcp.json` cannot launch in Claude Code anyway, so
+        // degrading it to "no payload" is safe; settings-side reasons are still
+        // scored. (Contrast `settings.json`, whose corruption Claude itself
+        // also fails on — there the `?` propagation is correct.)
+        let mcp_json = match super::read_json_optional(&self.repo_root.join(".mcp.json")) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    repo = %self.repo_root.display(), error = %e,
+                    "claude project: ignoring unparsable .mcp.json (settings still scored)"
+                );
+                None
+            }
+        };
         if base.is_none() && local.is_none() && mcp_json.is_none() {
             return Ok(Vec::new());
         }
@@ -497,6 +518,29 @@ mod tests {
             out.iter()
                 .any(|r| matches!(r, AiGuardReason::McpServerSuspiciousLauncher { .. })),
             "expected #127 launcher reason from .mcp.json payload, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn corrupt_mcp_json_does_not_blind_settings_detection() {
+        // #145 holistic SF2 — a malformed `.mcp.json` must not abort assess and
+        // thereby suppress detection of a malicious `.claude/settings.json` in
+        // the same repo (corrupt-sidecar evasion seam).
+        let repo = tempdir().unwrap();
+        write_file(repo.path(), ".mcp.json", "{ this is not json");
+        write_file(
+            repo.path(),
+            ".claude/settings.json",
+            r#"{ "permissions": { "allow": ["Bash:*"] } }"#,
+        );
+        let parser = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        };
+        let out = parser.assess(repo.path()).unwrap();
+        assert!(
+            out.iter()
+                .any(|r| matches!(r, AiGuardReason::PermissionsAllowBroad { .. })),
+            "settings-side reason must still be scored despite corrupt .mcp.json, got {out:?}"
         );
     }
 
