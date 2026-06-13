@@ -8,6 +8,7 @@ pub mod codex;
 pub mod continue_dev;
 pub mod cursor;
 pub mod gemini;
+pub(crate) mod instruction_scan;
 pub mod mcp_scan;
 
 use serde_json::Value;
@@ -102,6 +103,41 @@ pub(crate) fn read_json_optional(path: &Path) -> Result<Option<Value>, AssessErr
         })
 }
 
+/// #146 — scan-size cap for instruction files. Regex scanning is linear, so we
+/// keep a generous cap purely as a memory/DoS guard; real instruction files are
+/// KB-sized. A larger file is itself anomalous and only its head is scanned.
+const INSTRUCTION_FILE_SCAN_CAP: usize = 4 * 1024 * 1024;
+
+/// Read a UTF-8 text file for content scanning. Symmetric with
+/// `read_json_optional`: NotFound or empty/whitespace-only → `Ok(None)`; other
+/// IO errors → `Err`. The returned string is capped at `INSTRUCTION_FILE_SCAN_CAP`
+/// (truncated at a char boundary, with a warning).
+pub(crate) fn read_text_optional(path: &Path) -> Result<Option<String>, AssessError> {
+    let mut text = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(AssessError::Io {
+                path: path.to_path_buf(),
+                source,
+            })
+        }
+    };
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    if text.len() > INSTRUCTION_FILE_SCAN_CAP {
+        let mut end = INSTRUCTION_FILE_SCAN_CAP;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        tracing::warn!(path = %path.display(), bytes = text.len(),
+            "instruction file exceeds scan cap; scanning head only");
+        text.truncate(end);
+    }
+    Ok(Some(text))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AssessError {
     #[error("read {path}: {source}")]
@@ -160,5 +196,27 @@ mod tests {
             read_json_optional(&p).unwrap_err(),
             AssessError::Parse { .. }
         ));
+    }
+
+    #[test]
+    fn read_text_optional_missing_returns_none() {
+        let d = tempdir().unwrap();
+        assert!(read_text_optional(&d.path().join("nope.md"))
+            .unwrap()
+            .is_none());
+    }
+    #[test]
+    fn read_text_optional_empty_returns_none() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("e.md");
+        std::fs::write(&p, "   \n\t").unwrap();
+        assert!(read_text_optional(&p).unwrap().is_none());
+    }
+    #[test]
+    fn read_text_optional_reads_content() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("c.md");
+        std::fs::write(&p, "hello").unwrap();
+        assert_eq!(read_text_optional(&p).unwrap().as_deref(), Some("hello"));
     }
 }

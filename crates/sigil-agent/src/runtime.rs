@@ -172,18 +172,14 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     let claude_code_repos = crate::ai_guard::workspace_discovery::discover_claude_repos(
         &effective.claude_code_workspaces,
     );
-    let codex_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
-        &effective.codex_workspaces,
-        ".codex/config.toml",
-    );
+    let codex_repos =
+        crate::ai_guard::workspace_discovery::discover_codex_repos(&effective.codex_workspaces);
     let gemini_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
         &effective.gemini_workspaces,
         ".gemini/settings.json",
     );
-    let cursor_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
-        &effective.cursor_workspaces,
-        ".cursor/mcp.json",
-    );
+    let cursor_repos =
+        crate::ai_guard::workspace_discovery::discover_cursor_repos(&effective.cursor_workspaces);
     let antigravity_repos = crate::ai_guard::workspace_discovery::discover_per_repo(
         &effective.antigravity_workspaces,
         ".antigravity/settings.json",
@@ -1274,6 +1270,8 @@ pub(crate) fn push_claude_code_synthetic_targets(
             cd.join("settings.json").to_string_lossy().to_string(),
             cd.join("settings.local.json").to_string_lossy().to_string(),
             repo_root.join(".mcp.json").to_string_lossy().to_string(),
+            repo_root.join("CLAUDE.md").to_string_lossy().to_string(),
+            repo_root.join("AGENTS.md").to_string_lossy().to_string(),
         ],
         recursive: false,
         follow_symlinks: false,
@@ -1303,7 +1301,10 @@ pub(crate) fn push_codex_synthetic_target(
         description: format!("Phase 3b.6.2 synthetic: {}", repo_root.display()),
         tier: sigil_core::policy::Tier::Critical,
         platform: sigil_core::policy::Platform::Any,
-        paths: vec![config.to_string_lossy().to_string()],
+        paths: vec![
+            config.to_string_lossy().to_string(),
+            repo_root.join("AGENTS.md").to_string_lossy().to_string(),
+        ],
         recursive: false,
         follow_symlinks: false,
         disabled: false,
@@ -1382,7 +1383,7 @@ pub(crate) fn push_antigravity_synthetic_target(
     });
 }
 
-/// Phase 3b.8 — push ONE synthetic WatchTarget for a Cursor per-repo config.
+/// Phase 3b.8 — push synthetic WatchTargets for a Cursor per-repo config.
 pub(crate) fn push_cursor_synthetic_target(
     effective: &mut sigil_core::policy::EffectivePolicy,
     repo_root: &std::path::Path,
@@ -1394,7 +1395,24 @@ pub(crate) fn push_cursor_synthetic_target(
         description: format!("Phase 3b.8 synthetic: {}", repo_root.display()),
         tier: sigil_core::policy::Tier::Critical,
         platform: sigil_core::policy::Platform::Any,
-        paths: vec![config.to_string_lossy().to_string()],
+        paths: vec![
+            config.to_string_lossy().to_string(),
+            repo_root.join(".cursorrules").to_string_lossy().to_string(),
+        ],
+        recursive: false,
+        follow_symlinks: false,
+        disabled: false,
+    });
+    // #146 — .cursor/rules/* : glob path so the normalizer matches child files;
+    // recursive:false → expand_targets watches the parent dir non-recursively
+    // (flat .mdc convention; nested subdirs are a documented v1 limitation).
+    let rules_glob = repo_root.join(".cursor").join("rules").join("*");
+    effective.targets.push(sigil_core::policy::WatchTarget {
+        id: format!("cursor-rules-{h}"),
+        description: format!("#146 synthetic cursor rules: {}", repo_root.display()),
+        tier: sigil_core::policy::Tier::Critical,
+        platform: sigil_core::policy::Platform::Any,
+        paths: vec![rules_glob.to_string_lossy().to_string()],
         recursive: false,
         follow_symlinks: false,
         disabled: false,
@@ -1506,5 +1524,23 @@ pub(crate) fn discover_and_register_ext_scripts(
     w.clear();
     for (k, v) in per_parser {
         w.insert(k, v);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cursor_rules_glob_matches_child_file() {
+        use sigil_core::policy::glob::CompiledGlob;
+        let repo = std::path::Path::new("/repo");
+        let rules_glob = repo.join(".cursor").join("rules").join("*");
+        let g = CompiledGlob::new(&rules_glob.to_string_lossy()).unwrap();
+        assert!(
+            g.is_match(&repo.join(".cursor").join("rules").join("foo.mdc")),
+            "normalizer would drop a .cursor/rules child event"
+        );
+        let bare =
+            CompiledGlob::new(&repo.join(".cursor").join("rules").to_string_lossy()).unwrap();
+        assert!(!bare.is_match(&repo.join(".cursor").join("rules").join("foo.mdc")));
     }
 }
