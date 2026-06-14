@@ -229,7 +229,7 @@ pub fn run(policy_override: Option<PathBuf>, state_db_override: Option<PathBuf>)
 
     // Phase 2: show persisted host_id from state.db. Honor the `--state-db`
     // override (matching `sigil show`); fall back to the default path.
-    let state_db_path = state_db_override.unwrap_or_else(default_state_db_path);
+    let state_db_path = state_db_override.unwrap_or_else(crate::runtime::default_state_db_path);
     match sigil_core::state::HashCache::open(&state_db_path) {
         Ok(cache) => match cache.host_meta_get() {
             Ok(meta) => {
@@ -474,29 +474,6 @@ fn print_static_rubric(effective: &sigil_core::policy::EffectivePolicy) {
         for k in &rubric.unknown_override_keys {
             println!("[WARN] rubric override ignored — unknown reason kind: '{k}'");
         }
-    }
-}
-
-/// Default state.db path matching the daemon's runtime default. Mirrors
-/// the convention used by the CLI when `--state-db` is not provided.
-fn default_state_db_path() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        PathBuf::from("/var/lib/sigil/state.db")
-    }
-    #[cfg(target_os = "linux")]
-    {
-        PathBuf::from("/var/lib/sigil/state.db")
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Sigil")
-            .join("state.db")
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        PathBuf::from("/tmp/sigil-state.db")
     }
 }
 

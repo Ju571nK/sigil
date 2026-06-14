@@ -1188,19 +1188,227 @@ mod keystore_path_tests {
 }
 
 /// Default `policy.yaml` location when not overridden via `RuntimeConfig.policy_path`.
-/// TODO: factor out a shared `defaults` module if/when other call sites need this.
+/// Root → system `/etc/sigil`; non-root → `$XDG_CONFIG_HOME/sigil` (else
+/// `$HOME/.config/sigil`) so a non-root personal agent reads policy.yaml — and
+/// the sibling `rule-packs.yaml` it derives (see `rule_packs_yaml_path`) — from
+/// its own config dir, matching `docs/install-personal.md` (#159). Mirrors
+/// `resolve_keystore_path_unix`.
 fn default_policy_yaml_path() -> PathBuf {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        PathBuf::from("/etc/sigil/policy.yaml")
-    }
     #[cfg(target_os = "windows")]
     {
         PathBuf::from(r"C:\ProgramData\Sigil\policy.yaml")
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(not(target_os = "windows"))]
     {
-        PathBuf::from("/etc/sigil/policy.yaml")
+        resolve_policy_yaml_path_unix(
+            crate::control::is_root(),
+            std::env::var("XDG_CONFIG_HOME")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            std::env::var("HOME").ok().filter(|s| !s.is_empty()),
+        )
+    }
+}
+
+/// Pure resolver for the Unix `policy.yaml` default. Root → `/etc/sigil`;
+/// non-root → `$XDG_CONFIG_HOME/sigil` (else `$HOME/.config/sigil`); last-resort
+/// `/etc/sigil`.
+#[cfg(not(target_os = "windows"))]
+fn resolve_policy_yaml_path_unix(
+    is_root: bool,
+    xdg_config: Option<String>,
+    home: Option<String>,
+) -> PathBuf {
+    const FILE: &str = "policy.yaml";
+    if is_root {
+        return PathBuf::from("/etc/sigil").join(FILE);
+    }
+    if let Some(dir) = xdg_config {
+        return PathBuf::from(dir).join("sigil").join(FILE);
+    }
+    if let Some(home) = home {
+        return PathBuf::from(home).join(".config").join("sigil").join(FILE);
+    }
+    PathBuf::from("/etc/sigil").join(FILE)
+}
+
+/// Default `state.db` path when not overridden via `--state-db`. Root →
+/// `/var/lib/sigil/state.db` (systemd deploy); non-root → `$XDG_STATE_HOME/sigil`
+/// (else `$HOME/.local/state/sigil`) so a non-root personal agent starts without
+/// `/var/lib` write access (#159). The daemon `create_dir_all`s the parent at
+/// boot, so the XDG dir need not pre-exist.
+pub fn default_state_db_path() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
+            .join("Sigil")
+            .join("state.db")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        resolve_state_db_path_unix(
+            crate::control::is_root(),
+            std::env::var("XDG_STATE_HOME")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            std::env::var("HOME").ok().filter(|s| !s.is_empty()),
+        )
+    }
+}
+
+/// Pure resolver for the Unix `state.db` default. Root → `/var/lib/sigil`;
+/// non-root → `$XDG_STATE_HOME/sigil` (else `$HOME/.local/state/sigil`);
+/// last-resort `/var/lib/sigil`.
+#[cfg(not(target_os = "windows"))]
+fn resolve_state_db_path_unix(
+    is_root: bool,
+    xdg_state: Option<String>,
+    home: Option<String>,
+) -> PathBuf {
+    const FILE: &str = "state.db";
+    if is_root {
+        return PathBuf::from("/var/lib/sigil").join(FILE);
+    }
+    if let Some(dir) = xdg_state {
+        return PathBuf::from(dir).join("sigil").join(FILE);
+    }
+    if let Some(home) = home {
+        return PathBuf::from(home).join(".local/state/sigil").join(FILE);
+    }
+    PathBuf::from("/var/lib/sigil").join(FILE)
+}
+
+/// Default events directory when not overridden via `--events-dir`. Root →
+/// `/var/log/sigil`; non-root → `$XDG_STATE_HOME/sigil/events` (else
+/// `$HOME/.local/state/sigil/events`) so a non-root personal agent starts
+/// without `/var/log` write access (#159). `JsonlSink::open` `create_dir_all`s
+/// it, so the dir need not pre-exist.
+pub fn default_events_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
+            .join("Sigil")
+            .join("events")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        resolve_events_dir_unix(
+            crate::control::is_root(),
+            std::env::var("XDG_STATE_HOME")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            std::env::var("HOME").ok().filter(|s| !s.is_empty()),
+        )
+    }
+}
+
+/// Pure resolver for the Unix events-dir default. Root → `/var/log/sigil`;
+/// non-root → `$XDG_STATE_HOME/sigil/events` (else
+/// `$HOME/.local/state/sigil/events`); last-resort `/var/log/sigil`.
+#[cfg(not(target_os = "windows"))]
+fn resolve_events_dir_unix(
+    is_root: bool,
+    xdg_state: Option<String>,
+    home: Option<String>,
+) -> PathBuf {
+    if is_root {
+        return PathBuf::from("/var/log/sigil");
+    }
+    if let Some(dir) = xdg_state {
+        return PathBuf::from(dir).join("sigil").join("events");
+    }
+    if let Some(home) = home {
+        return PathBuf::from(home)
+            .join(".local/state/sigil")
+            .join("events");
+    }
+    PathBuf::from("/var/log/sigil")
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod nonroot_path_tests {
+    use super::{
+        resolve_events_dir_unix, resolve_policy_yaml_path_unix, resolve_state_db_path_unix,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn root_uses_system_paths() {
+        let x = Some("/home/u/.config".to_string());
+        let xs = Some("/home/u/.local/state".to_string());
+        let h = Some("/home/u".to_string());
+        assert_eq!(
+            resolve_policy_yaml_path_unix(true, x, h.clone()),
+            PathBuf::from("/etc/sigil/policy.yaml")
+        );
+        assert_eq!(
+            resolve_state_db_path_unix(true, xs.clone(), h.clone()),
+            PathBuf::from("/var/lib/sigil/state.db")
+        );
+        assert_eq!(
+            resolve_events_dir_unix(true, xs, h),
+            PathBuf::from("/var/log/sigil")
+        );
+    }
+
+    #[test]
+    fn nonroot_prefers_xdg() {
+        assert_eq!(
+            resolve_policy_yaml_path_unix(
+                false,
+                Some("/home/u/.config".into()),
+                Some("/home/u".into())
+            ),
+            PathBuf::from("/home/u/.config/sigil/policy.yaml")
+        );
+        assert_eq!(
+            resolve_state_db_path_unix(
+                false,
+                Some("/home/u/.local/state".into()),
+                Some("/home/u".into())
+            ),
+            PathBuf::from("/home/u/.local/state/sigil/state.db")
+        );
+        assert_eq!(
+            resolve_events_dir_unix(
+                false,
+                Some("/home/u/.local/state".into()),
+                Some("/home/u".into())
+            ),
+            PathBuf::from("/home/u/.local/state/sigil/events")
+        );
+    }
+
+    #[test]
+    fn nonroot_without_xdg_uses_home() {
+        assert_eq!(
+            resolve_policy_yaml_path_unix(false, None, Some("/home/u".into())),
+            PathBuf::from("/home/u/.config/sigil/policy.yaml")
+        );
+        assert_eq!(
+            resolve_state_db_path_unix(false, None, Some("/home/u".into())),
+            PathBuf::from("/home/u/.local/state/sigil/state.db")
+        );
+        assert_eq!(
+            resolve_events_dir_unix(false, None, Some("/home/u".into())),
+            PathBuf::from("/home/u/.local/state/sigil/events")
+        );
+    }
+
+    #[test]
+    fn nonroot_without_xdg_or_home_falls_back_to_system() {
+        assert_eq!(
+            resolve_policy_yaml_path_unix(false, None, None),
+            PathBuf::from("/etc/sigil/policy.yaml")
+        );
+        assert_eq!(
+            resolve_state_db_path_unix(false, None, None),
+            PathBuf::from("/var/lib/sigil/state.db")
+        );
+        assert_eq!(
+            resolve_events_dir_unix(false, None, None),
+            PathBuf::from("/var/log/sigil")
+        );
     }
 }
 

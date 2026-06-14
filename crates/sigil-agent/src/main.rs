@@ -6,6 +6,7 @@ use sigil_agent::assess_cli;
 use sigil_agent::control::{default_control_pipe_name, default_control_socket};
 #[cfg(feature = "operator-cli")]
 use sigil_agent::control_client;
+use sigil_agent::runtime::{default_events_dir, default_state_db_path};
 use sigil_agent::{cli, doctor, runtime, show};
 
 fn main() -> anyhow::Result<()> {
@@ -100,25 +101,5 @@ fn reload() -> i32 {
             eprintln!("sigil reload: {e}");
             1
         }
-    }
-}
-
-fn default_state_db_path() -> std::path::PathBuf {
-    if cfg!(any(target_os = "macos", target_os = "linux")) {
-        "/var/lib/sigil/state.db".into()
-    } else {
-        std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Sigil")
-            .join("state.db")
-    }
-}
-
-fn default_events_dir() -> std::path::PathBuf {
-    if cfg!(any(target_os = "macos", target_os = "linux")) {
-        "/var/log/sigil".into()
-    } else {
-        std::path::PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Sigil")
-            .join("events")
     }
 }
