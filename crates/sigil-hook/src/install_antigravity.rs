@@ -1,22 +1,25 @@
-// Antigravity (Google `agy` CLI) install. Unlike the JSON-settings agents in
-// install.rs, Antigravity loads hooks ONLY from an imported plugin — on-hardware
-// verification (real `agy` 1.0.4) showed settings.json hooks are silently
-// ignored, while a plugin bundle handed to `agy plugin install <dir>` is loaded
-// (`agy plugin validate` reports "hooks: 1 processed").
+// Antigravity (Google `agy` CLI) install. Antigravity loads hooks from an
+// imported plugin bundle (`agy plugin install <dir>`), NOT settings.json.
 //
-// Canonical bundle layout, verified three ways (`agy plugin validate`, a full
-// install→list→uninstall cycle, and the official `google-antigravity-sdk` /
-// `chrome-devtools-plugin` plugins under ~/.gemini/config/plugins):
+// VERSION CAVEAT (#112): agy 1.0.4 accepted and loaded this `hooks/hooks.json`
+// bundle (`agy plugin validate` reported "hooks: 1 processed"), but agy
+// 1.0.7/1.0.8 do NOT fire `agy plugin install` PreToolUse command-hooks —
+// `agy plugin validate` reports "hooks: skipped (not found)", `plugin list`
+// shows components: null, and an always-deny probe hook fired 0 times on
+// hardware. So on current agy this registration is a no-op. `sigil-hook install
+// --agent antigravity` therefore does NOT install by default (see
+// cmd_install_antigravity); this module's bundle path is reached only under
+// `--force` (experimental / for a future agy that restores command-hooks).
+//
+// Canonical bundle layout (as accepted by agy 1.0.4; `hooks/` subdir required —
+// root-level hooks.json, inline `hooks` in plugin.json, and hooks.toml were all
+// reported "hooks: not found"):
 //
 //   <dir>/plugin.json        {name, version, description, license, keywords}
 //   <dir>/hooks/hooks.json   {PreToolUse:[{matcher, hooks:[{type, command}]}]}
 //
-// The `hooks/` subdirectory is required: a root-level hooks.json, an inline
-// `hooks` field in plugin.json, and a hooks.toml are all reported as
-// "hooks: not found". Only `hooks/hooks.json` is processed.
-//
-// `agy plugin install` copies the bundle into ~/.gemini/config/plugins/<name>/
-// and records it in `agy plugin list`; `agy plugin uninstall <name>` reverses it.
+// `agy plugin install` copies the bundle into ~/.gemini/config/plugins/<name>/;
+// `agy plugin uninstall <name>` reverses it.
 
 use serde_json::{json, Value};
 use std::io;
@@ -46,7 +49,7 @@ pub fn plugin_json() -> Value {
     json!({
         "name": PLUGIN_NAME,
         "version": env!("CARGO_PKG_VERSION"),
-        "description": "Sigil runtime observer — emits AI agent tool-call events to the local sigil-agent.",
+        "description": "Sigil runtime observer (NOTE: current agy may not invoke this command-hook — sigil #112).",
         "license": "Apache-2.0",
         "keywords": ["sigil", "security", "observability", "antigravity"],
     })
@@ -111,7 +114,9 @@ pub fn render_block(exe: &str, capture: &str) -> String {
     let hj = serde_json::to_string_pretty(&hooks_json(exe, capture)).unwrap_or_default();
     format!(
         "// Antigravity registers hooks via an imported plugin, not a settings file.\n\
-         // `sigil-hook install --agent antigravity --write` writes this bundle to\n\
+         // NOTE: current agy (>=1.0.7) does NOT fire this command-hook (sigil #112);\n\
+         // `install --agent antigravity` is a no-op unless you pass --force.\n\
+         // Under --force, --write writes this bundle to\n\
          //   {dir_s}\n\
          // then runs: agy plugin install {dir_s}\n\
          //\n\
