@@ -45,7 +45,7 @@ pub fn run(
         pretty,
     } = what
     {
-        let events_dir = events_dir_override.unwrap_or_else(default_events_dir);
+        let events_dir = events_dir_override.unwrap_or_else(crate::runtime::default_events_dir);
         return show_events(&events_dir, tail, follow, pretty);
     }
     #[cfg(feature = "operator-cli")]
@@ -260,20 +260,6 @@ fn latest_segment(events_dir: &std::path::Path) -> Option<PathBuf> {
                 .unwrap_or(false)
         })
         .max()
-}
-
-/// Mirror of `main.rs::default_events_dir`. Kept here so `show::run` can
-/// resolve `--events-dir` without main.rs needing to plumb the default in for
-/// every variant.
-#[cfg(feature = "operator-cli")]
-fn default_events_dir() -> PathBuf {
-    if cfg!(any(target_os = "macos", target_os = "linux")) {
-        PathBuf::from("/var/log/sigil")
-    } else {
-        PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
-            .join("Sigil")
-            .join("events")
-    }
 }
 
 /// Snapshot or follow the agent's JSONL events. Wrapper around the
