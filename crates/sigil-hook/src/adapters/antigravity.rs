@@ -10,6 +10,8 @@ use sigil_core::hook_proto::*;
 /// also defensively handle Gemini-carryover tool names
 /// (`run_shell_command` / `write_file` / `replace`) in case Antigravity still
 /// emits any of them. Unknown tools degrade to `Other { label }`.
+/// NOTE (#112): this adapter is not reachable from current agy command-hooks
+/// (they do not fire); it is retained for parser / forced-bundle compatibility.
 pub struct Antigravity;
 
 impl HookAdapter for Antigravity {

@@ -10,6 +10,8 @@ pub mod grok;
 /// deny response, if any) and the process exit code. claude-code/codex/
 /// antigravity: the JSON rides stdout with exit 0; the exit_code field lets a
 /// future agent whose deny path needs a non-zero exit express that.
+/// (antigravity: this deny contract is NOT reachable on current agy — its
+/// command-hooks do not fire; #112).
 pub struct DenyOutput {
     pub stdout: Option<String>,
     pub exit_code: i32,
