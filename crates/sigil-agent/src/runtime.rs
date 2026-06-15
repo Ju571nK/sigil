@@ -891,6 +891,36 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
             }),
         );
     }
+    // #162 — Windows enforce: same shared evaluator, served over a named pipe.
+    #[cfg(windows)]
+    {
+        let decide_pipe = crate::control::default_hook_decide_pipe_name();
+        let tx_decide = tx_sink.clone();
+        let host_id_decide = host_id.clone();
+        let decide_activity_map = activity_map.clone();
+        let se = shared_evaluator.clone();
+        let pipe_for_log = decide_pipe.clone();
+        sup.track(
+            "hook_decide_listener",
+            tokio::spawn(async move {
+                if let Err(e) = crate::hook_decide_listener::serve_pipe(
+                    decide_pipe,
+                    tx_decide,
+                    host_id_decide,
+                    se,
+                    decide_activity_map,
+                )
+                .await
+                {
+                    tracing::error!(
+                        error = ?e,
+                        pipe = %pipe_for_log,
+                        "hook-decide listener exited"
+                    );
+                }
+            }),
+        );
+    }
 
     // #107 — silence-detection task. Uses the shared activity_map populated by
     // both hook listeners above. Early-returns immediately when enabled_agents

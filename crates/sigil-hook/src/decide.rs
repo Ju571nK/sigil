@@ -33,13 +33,49 @@ pub fn request_verdict(
 }
 
 // called by the per-agent enforce path (run_enforce)
+//
+// #162 — Windows: the daemon serves the decide IPC on a named pipe. The hook is
+// a short-lived, no-tokio process, so we open the pipe as a blocking file and
+// do the request/response on a worker thread, bounding it with `deadline` via
+// `recv_timeout`. Any failure or timeout → None, so the caller falls back to its
+// local on_failure mode (matching the Unix transport's contract).
 #[cfg(not(unix))]
 pub fn request_verdict(
-    _socket: &Path,
-    _req: &HookDecisionRequest,
-    _deadline: Duration,
+    pipe: &Path,
+    req: &HookDecisionRequest,
+    deadline: Duration,
 ) -> Option<HookVerdict> {
-    None // Windows enforce is out of scope (slice 1): always fall back to on_failure.
+    use sigil_core::hook_proto::HookDecisionResponse;
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::mpsc;
+
+    let pipe = pipe.to_path_buf();
+    let mut line = serde_json::to_string(req).ok()?;
+    line.push('\n');
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let verdict = (|| -> Option<HookVerdict> {
+            // A tokio `ServerOptions` pipe is a duplex byte stream; opening it
+            // read+write connects this process as the client.
+            let mut f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&pipe)
+                .ok()?;
+            f.write_all(line.as_bytes()).ok()?;
+            f.flush().ok()?;
+            let mut resp = String::new();
+            BufReader::new(f).read_line(&mut resp).ok()?;
+            let parsed: HookDecisionResponse = serde_json::from_str(resp.trim()).ok()?;
+            Some(parsed.verdict)
+        })();
+        // Receiver may already be gone (deadline elapsed); ignore the send error.
+        let _ = tx.send(verdict);
+    });
+
+    // recv_timeout returns Err on timeout/disconnect → None (fail to on_failure).
+    rx.recv_timeout(deadline).ok().flatten()
 }
 
 #[cfg(all(test, unix))]
@@ -52,6 +88,43 @@ mod tests {
             Path::new("/nonexistent/sigil/hook-decide.sock"),
             &req,
             Duration::from_millis(100),
+        );
+        assert!(v.is_none());
+    }
+    fn sample_req() -> HookDecisionRequest {
+        use sigil_core::hook_proto::*;
+        HookDecisionRequest {
+            protocol_version: HOOK_PROTOCOL_VERSION,
+            request_id: uuid::Uuid::nil(),
+            sent_at_unix_ms: 0,
+            invocation: HookInvocation {
+                agent: sigil_core::event::AiTool::ClaudeCode,
+                agent_session_id: None,
+                tool_use_id: None,
+                action: HookAction::Bash {
+                    command_hash: "ab".repeat(32),
+                    command_preview: Some("x".into()),
+                },
+                capture_level: CaptureLevel::Redacted,
+                capture_status: CaptureStatus::Ok,
+                cwd: None,
+            },
+            deadline_ms: 100,
+        }
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod win_tests {
+    use super::*;
+    #[test]
+    fn missing_pipe_returns_none() {
+        // No daemon → pipe open fails → None (fail to on_failure), within deadline.
+        let req = sample_req();
+        let v = request_verdict(
+            Path::new(r"\\.\pipe\sigil-nonexistent-decide-test"),
+            &req,
+            Duration::from_millis(300),
         );
         assert!(v.is_none());
     }

@@ -13,6 +13,7 @@ use sigil_core::hook_proto::{
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::UnixListener;
 use tokio::sync::{mpsc, Semaphore};
 
@@ -58,6 +59,7 @@ pub async fn serve(
                 continue;
             }
         };
+        // peer_cred is Unix-only; the Windows pipe path has no peer uid.
         let peer_uid = stream.peer_cred().map(|c| c.uid()).unwrap_or(u32::MAX);
         let tx = tx.clone();
         let host_id = host_id.clone();
@@ -65,97 +67,155 @@ pub async fn serve(
         let activity_map = activity_map.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let mut line = String::new();
-            // Use take() for bounded read then recover the stream via into_inner chain.
-            // BufReader<Take<UnixStream>> -> into_inner() -> Take<UnixStream> -> into_inner() -> UnixStream.
-            use tokio::io::AsyncReadExt;
-            let mut rd = BufReader::new(stream.take(MAX_LINE));
-            if rd.read_line(&mut line).await.is_err() {
-                return;
-            }
-            let req: HookDecisionRequest = match serde_json::from_str(line.trim()) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::debug!(error = ?e, "hook-decide: malformed request");
-                    return;
-                }
-            };
-            // Recover the raw stream to write the response.
-            let mut stream = rd.into_inner().into_inner();
-
-            // 1) Observe event (best-effort, like Stage 1's one-way path).
-            // D6: record BEFORE try_send so a dropped-on-backpressure
-            // observation never becomes false silence.
-            crate::hook_silence::record_hook_event(
-                &activity_map,
-                req.invocation.agent,
-                peer_uid,
-                time::OffsetDateTime::now_utc(),
-            );
-            let action = req.invocation.action.clone();
-            let inv = req.invocation.clone();
-            let observe_env = HookEnvelope {
-                protocol_version: HOOK_PROTOCOL_VERSION,
-                msg_type: HookMsgType::HookInvocation,
-                request_id: req.request_id,
-                sent_at_unix_ms: req.sent_at_unix_ms,
-                payload: inv,
-            };
-            let observe_ev = to_event(observe_env, peer_uid, &host_id);
-            let _ = tx.try_send(CommittableEvent {
-                event: observe_ev,
-                new_hash: None,
-                path_for_db: PathBuf::new(),
-                target_id: String::new(),
-            });
-
-            // 2) Decide.
-            // Snapshot the evaluator Arc without holding the read-guard across any await.
-            let ev = { std::sync::Arc::clone(&*evaluator.read()) };
-            let verdict = match ev.evaluate(&action) {
-                Some((rule_id, reason)) => {
-                    // Record HookDecision(deny) RELIABLY before responding.
-                    let ev = decision_event(
-                        &req.invocation,
-                        peer_uid,
-                        &host_id,
-                        "deny",
-                        Some(rule_id.clone()),
-                        Some(reason.clone()),
-                    );
-                    let _ = tx
-                        .send(CommittableEvent {
-                            event: ev,
-                            new_hash: None,
-                            path_for_db: PathBuf::new(),
-                            target_id: String::new(),
-                        })
-                        .await;
-                    HookVerdict {
-                        decision: Decision::Deny { rule_id, reason },
-                        enforcement_mode: EnforcementMode::Enforce,
-                    }
-                }
-                None => HookVerdict {
-                    decision: Decision::Allow,
-                    enforcement_mode: EnforcementMode::Enforce,
-                },
-            };
-
-            let resp = HookDecisionResponse {
-                protocol_version: HOOK_PROTOCOL_VERSION,
-                request_id: req.request_id,
-                verdict,
-            };
-            if let Ok(mut s) = serde_json::to_string(&resp) {
-                s.push('\n');
-                let _ = stream.write_all(s.as_bytes()).await;
-                let _ = stream.flush().await;
-                // Signal EOF promptly so the client's read_line returns without
-                // waiting on drop.
-                let _ = stream.shutdown().await;
-            }
+            handle_decide_conn(stream, peer_uid, tx, host_id, evaluator, activity_map).await;
         });
+    }
+}
+
+/// Windows hook-decide listener over a named pipe (#162). Mirrors the control
+/// plane's named-pipe `serve` and the Unix listener above; the per-connection
+/// logic is shared via `handle_decide_conn`. Windows named pipes carry no peer
+/// uid, so the caller is recorded as `u32::MAX` for silence detection.
+#[cfg(windows)]
+pub async fn serve_pipe(
+    pipe_name: String,
+    tx: mpsc::Sender<CommittableEvent>,
+    host_id: String,
+    evaluator: crate::hook_deny::SharedEvaluator,
+    activity_map: crate::hook_silence::ActivityMap,
+) -> std::io::Result<()> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+    let sem = Arc::new(Semaphore::new(MAX_INFLIGHT));
+    tracing::info!(pipe = %pipe_name, "hook-decide IPC listening");
+    loop {
+        let server = ServerOptions::new()
+            .first_pipe_instance(false)
+            .access_inbound(true)
+            .access_outbound(true)
+            .create(&pipe_name)?;
+        server.connect().await?;
+        // Overload: drop the connection. The hook treats no-answer-within-deadline
+        // as the no-verdict case and applies its local on_failure (fail-open default).
+        let permit = match sem.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::debug!("hook-decide overload: dropping (fail-open at hook)");
+                drop(server);
+                continue;
+            }
+        };
+        let tx = tx.clone();
+        let host_id = host_id.clone();
+        let evaluator = evaluator.clone();
+        let activity_map = activity_map.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            handle_decide_conn(server, u32::MAX, tx, host_id, evaluator, activity_map).await;
+        });
+    }
+}
+
+/// Transport-independent per-connection handler shared by the Unix-socket and
+/// Windows-named-pipe listeners: read one bounded request line, record the
+/// observe event, evaluate deny rules (recording a deny reliably before
+/// answering), and write the verdict. `peer_uid` is the caller's uid on Unix,
+/// `u32::MAX` where the transport carries no peer credential.
+async fn handle_decide_conn<S>(
+    stream: S,
+    peer_uid: u32,
+    tx: mpsc::Sender<CommittableEvent>,
+    host_id: String,
+    evaluator: crate::hook_deny::SharedEvaluator,
+    activity_map: crate::hook_silence::ActivityMap,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+    let (rd, mut wr) = tokio::io::split(stream);
+    let mut line = String::new();
+    let mut rd = BufReader::new(rd.take(MAX_LINE));
+    if rd.read_line(&mut line).await.is_err() {
+        return;
+    }
+    let req: HookDecisionRequest = match serde_json::from_str(line.trim()) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(error = ?e, "hook-decide: malformed request");
+            return;
+        }
+    };
+
+    // 1) Observe event (best-effort, like Stage 1's one-way path).
+    // D6: record BEFORE try_send so a dropped-on-backpressure
+    // observation never becomes false silence.
+    crate::hook_silence::record_hook_event(
+        &activity_map,
+        req.invocation.agent,
+        peer_uid,
+        time::OffsetDateTime::now_utc(),
+    );
+    let action = req.invocation.action.clone();
+    let inv = req.invocation.clone();
+    let observe_env = HookEnvelope {
+        protocol_version: HOOK_PROTOCOL_VERSION,
+        msg_type: HookMsgType::HookInvocation,
+        request_id: req.request_id,
+        sent_at_unix_ms: req.sent_at_unix_ms,
+        payload: inv,
+    };
+    let observe_ev = to_event(observe_env, peer_uid, &host_id);
+    let _ = tx.try_send(CommittableEvent {
+        event: observe_ev,
+        new_hash: None,
+        path_for_db: PathBuf::new(),
+        target_id: String::new(),
+    });
+
+    // 2) Decide.
+    // Snapshot the evaluator Arc without holding the read-guard across any await.
+    let ev = { std::sync::Arc::clone(&*evaluator.read()) };
+    let verdict = match ev.evaluate(&action) {
+        Some((rule_id, reason)) => {
+            // Record HookDecision(deny) RELIABLY before responding.
+            let ev = decision_event(
+                &req.invocation,
+                peer_uid,
+                &host_id,
+                "deny",
+                Some(rule_id.clone()),
+                Some(reason.clone()),
+            );
+            let _ = tx
+                .send(CommittableEvent {
+                    event: ev,
+                    new_hash: None,
+                    path_for_db: PathBuf::new(),
+                    target_id: String::new(),
+                })
+                .await;
+            HookVerdict {
+                decision: Decision::Deny { rule_id, reason },
+                enforcement_mode: EnforcementMode::Enforce,
+            }
+        }
+        None => HookVerdict {
+            decision: Decision::Allow,
+            enforcement_mode: EnforcementMode::Enforce,
+        },
+    };
+
+    let resp = HookDecisionResponse {
+        protocol_version: HOOK_PROTOCOL_VERSION,
+        request_id: req.request_id,
+        verdict,
+    };
+    if let Ok(mut s) = serde_json::to_string(&resp) {
+        s.push('\n');
+        let _ = wr.write_all(s.as_bytes()).await;
+        let _ = wr.flush().await;
+        // Signal EOF promptly so the client's read_line returns without
+        // waiting on drop.
+        let _ = wr.shutdown().await;
     }
 }
 
