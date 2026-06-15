@@ -21,9 +21,15 @@ use sigil_core::hook_proto::{
     HookAction, HookConfigDriftReport, HookDriftEnvelope, HookEnvelope, HookMsgType,
 };
 use std::path::PathBuf;
+// Serve-only (Unix socket) imports — the pure helpers (`to_event`, `enum_str`)
+// used cross-platform by `hook_decide_listener` need none of these (#162).
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+#[cfg(unix)]
 use tokio::net::UnixListener;
+#[cfg(unix)]
 use tokio::sync::{mpsc, Semaphore};
 
 /// Maximum concurrent in-flight connections.

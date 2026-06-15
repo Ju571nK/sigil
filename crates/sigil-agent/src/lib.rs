@@ -14,12 +14,12 @@ pub mod hasher;
 pub mod heartbeat;
 pub mod hook_deny;
 pub mod hook_silence;
-// The hook listener uses Unix-domain sockets (tokio UnixListener); Windows agent
-// IPC is a named pipe (see control.rs) and a named-pipe hook listener is a
-// follow-up, so the module is unix-only for Stage 1.
-#[cfg(unix)]
+// The one-way `hook_listener` serves over a Unix socket (its `serve` is
+// `#[cfg(unix)]`); its pure helpers (`to_event`) are cross-platform. The
+// two-way `hook_decide_listener` serves over a Unix socket on Unix and a named
+// pipe on Windows (#162), so both modules compile on Windows with their
+// transport-specific `serve`/`serve_pipe` gated internally.
 pub mod hook_decide_listener;
-#[cfg(unix)]
 pub mod hook_listener;
 pub mod host_meta_snapshot;
 pub mod host_meta_snapshot_task;
