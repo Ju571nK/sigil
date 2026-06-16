@@ -133,9 +133,11 @@ fn hook_decide_socket_path() -> PathBuf {
 
 #[cfg(not(unix))]
 fn hook_decide_socket_path() -> PathBuf {
+    // #162 — Windows: the daemon serves the decide IPC on a named pipe. The path
+    // string is the pipe name; `decide::request_verdict` opens it as a file.
     std::env::var("SIGIL_HOOK_DECIDE_SOCKET")
         .map(PathBuf::from)
-        .unwrap_or_default()
+        .unwrap_or_else(|_| PathBuf::from(r"\\.\pipe\sigil-hook-decide"))
 }
 
 #[derive(Parser)]

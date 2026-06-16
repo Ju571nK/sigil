@@ -72,6 +72,14 @@ pub fn default_control_pipe_name() -> String {
     r"\\.\pipe\sigil-control".to_string()
 }
 
+/// Default hook-decide named-pipe name on Windows (#162) — the enforce IPC the
+/// `sigil-hook` client connects to, parallel to the control pipe. Mirrors the
+/// Unix `<control-socket-dir>/hook-decide.sock` default.
+#[cfg(windows)]
+pub fn default_hook_decide_pipe_name() -> String {
+    r"\\.\pipe\sigil-hook-decide".to_string()
+}
+
 /// Shared context bundle passed to both platform `serve` functions.
 pub struct ControlContext {
     pub stats: Arc<Stats>,
