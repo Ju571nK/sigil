@@ -21,6 +21,32 @@ fn it_show_paths_prints_targets() {
     assert!(stdout.contains("# "));
 }
 
+// #161: a missing state.db (fresh install, before the first `sigil run`) is
+// reported as INFO and does NOT emit the degradation WARN — so a clean machine
+// isn't told it has a problem just because the daemon hasn't created the DB yet.
+#[test]
+fn doctor_absent_state_db_is_info_not_warn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing_db = tmp.path().join("nope").join("state.db");
+    assert!(!missing_db.exists());
+    let bin = env!("CARGO_BIN_EXE_sigil");
+    let out = Command::new(bin)
+        .arg("doctor")
+        .arg("--state-db")
+        .arg(&missing_db)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("state.db not yet present"),
+        "doctor should report a missing state.db as INFO. Output:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("state.db unavailable for host_id read"),
+        "a missing state.db must not produce the degradation WARN. Output:\n{stdout}"
+    );
+}
+
 // Phase 3b.5 Task 6: doctor AI Guard section coverage.
 //
 // These tests assert observable doctor output:

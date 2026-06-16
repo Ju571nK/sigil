@@ -14,6 +14,19 @@ use rmcp::transport::stdio;
 use rmcp::ServiceExt;
 use std::sync::Arc;
 
+/// Handle `--version` / `-V` before any server setup (#161): a bare invocation
+/// starts the MCP server, so the version flag must be intercepted explicitly or
+/// it would silently launch the server instead of printing a version.
+fn handle_version() -> Option<i32> {
+    match std::env::args().nth(1).as_deref() {
+        Some("--version") | Some("-V") => {
+            println!("sigil-mcp {}", env!("CARGO_PKG_VERSION"));
+            Some(0)
+        }
+        _ => None,
+    }
+}
+
 /// Handle `--print-config [client]` before any async/server setup. Returns
 /// `Some(exit_code)` when the flag was handled (the caller then exits), else
 /// `None` to start the server as usual.
@@ -43,6 +56,9 @@ fn handle_print_config() -> Option<i32> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if let Some(code) = handle_version() {
+        std::process::exit(code);
+    }
     if let Some(code) = handle_print_config() {
         std::process::exit(code);
     }
