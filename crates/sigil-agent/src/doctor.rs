@@ -201,6 +201,7 @@ pub fn run(policy_override: Option<PathBuf>, state_db_override: Option<PathBuf>)
 
     let env = EnvLookup;
     let mut total_paths = 0usize;
+    let mut absent_paths = 0usize;
     for t in &effective.targets {
         for path_template in &t.paths {
             let results = expand_per_user(path_template, &users, &env);
@@ -208,12 +209,16 @@ pub fn run(policy_override: Option<PathBuf>, state_db_override: Option<PathBuf>)
                 match r {
                     Ok(p) => {
                         if !p.exists() {
+                            // Expected on a personal machine: not every covered AI
+                            // tool is installed, so its config file is simply
+                            // absent. Informational — it must NOT gate the exit
+                            // code or alarm a healthy setup (#161).
                             println!(
-                                "[WARN] target {}: path does not exist: {}",
+                                "[INFO] target {}: not present (no file at {})",
                                 t.id,
                                 p.display()
                             );
-                            warn_count += 1;
+                            absent_paths += 1;
                         }
                         total_paths += 1;
                     }
@@ -226,32 +231,47 @@ pub fn run(policy_override: Option<PathBuf>, state_db_override: Option<PathBuf>)
         }
     }
     println!("[OK]   total expanded paths: {total_paths}");
+    if absent_paths > 0 {
+        println!(
+            "[INFO] {absent_paths} target path(s) absent (tool not installed — simply not watched)"
+        );
+    }
 
     // Phase 2: show persisted host_id from state.db. Honor the `--state-db`
     // override (matching `sigil show`); fall back to the default path.
     let state_db_path = state_db_override.unwrap_or_else(crate::runtime::default_state_db_path);
-    match sigil_core::state::HashCache::open(&state_db_path) {
-        Ok(cache) => match cache.host_meta_get() {
-            Ok(meta) => {
-                let host_id_display = meta
-                    .host_id
-                    .clone()
-                    .unwrap_or_else(|| "<not yet generated>".into());
-                println!("[OK]   host_id: {host_id_display} (UUIDv4, persisted in state.db)");
-                let rp_ver = meta.last_applied_rule_packs_version;
-                println!("[INFO] rule-pack bundle version: {rp_ver}");
-            }
+    if !state_db_path.exists() {
+        // Fresh install: the daemon creates state.db on its first `sigil run`.
+        // Absent-before-first-run is expected, not a degradation (#161) — so it
+        // stays informational and does NOT gate the exit code.
+        println!(
+            "[INFO] state.db not yet present (created on first 'sigil run'): {}",
+            state_db_path.display()
+        );
+    } else {
+        match sigil_core::state::HashCache::open(&state_db_path) {
+            Ok(cache) => match cache.host_meta_get() {
+                Ok(meta) => {
+                    let host_id_display = meta
+                        .host_id
+                        .clone()
+                        .unwrap_or_else(|| "<not yet generated>".into());
+                    println!("[OK]   host_id: {host_id_display} (UUIDv4, persisted in state.db)");
+                    let rp_ver = meta.last_applied_rule_packs_version;
+                    println!("[INFO] rule-pack bundle version: {rp_ver}");
+                }
+                Err(e) => {
+                    println!("[WARN] host_meta_get failed: {e}");
+                    warn_count += 1;
+                }
+            },
             Err(e) => {
-                println!("[WARN] host_meta_get failed: {e}");
+                println!(
+                    "[WARN] state.db unavailable for host_id read: {e} (path: {})",
+                    state_db_path.display()
+                );
                 warn_count += 1;
             }
-        },
-        Err(e) => {
-            println!(
-                "[WARN] state.db unavailable for host_id read: {e} (path: {})",
-                state_db_path.display()
-            );
-            warn_count += 1;
         }
     }
 

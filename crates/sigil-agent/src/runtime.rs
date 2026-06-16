@@ -11,6 +11,7 @@ use crate::{
     supervisor::Supervisor,
     watcher,
 };
+use anyhow::Context;
 use parking_lot::Mutex;
 use sigil_core::policy::expand::{expand_per_user, EnvLookup, UserEnumerator};
 use sigil_core::policy::pubkeys::Keystore;
@@ -55,9 +56,13 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
 
     // Open state.db FIRST — host_id resolution depends on it.
     if let Some(dir) = cfg.state_db_path.parent() {
-        std::fs::create_dir_all(dir)?;
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("creating state.db directory {}", dir.display()))?;
     }
-    let cache = Arc::new(Mutex::new(HashCache::open(&cfg.state_db_path)?));
+    let cache = Arc::new(Mutex::new(
+        HashCache::open(&cfg.state_db_path)
+            .with_context(|| format!("opening state.db {}", cfg.state_db_path.display()))?,
+    ));
 
     // Resolve persisted host_id (UUIDv4, generated on first run).
     let host_id = {
@@ -336,7 +341,8 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     perform_warmup(&effective, &expanded_paths, &cache)?;
 
     // 4. Open sink.
-    let sink = JsonlSink::open(&cfg.events_dir, OffsetDateTime::now_utc())?;
+    let sink = JsonlSink::open(&cfg.events_dir, OffsetDateTime::now_utc())
+        .with_context(|| format!("opening events directory {}", cfg.events_dir.display()))?;
 
     // 5. Bootstrap channels and tasks.
     let (tx_norm, rx_norm) = mpsc::channel::<NormalizedEvent>(512);

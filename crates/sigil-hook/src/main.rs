@@ -143,6 +143,7 @@ fn hook_decide_socket_path() -> PathBuf {
 #[derive(Parser)]
 #[command(
     name = "sigil-hook",
+    version,
     about = "Runtime observer at the AI agent tool boundary"
 )]
 struct Cli {
