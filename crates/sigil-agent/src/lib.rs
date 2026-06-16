@@ -14,12 +14,13 @@ pub mod hasher;
 pub mod heartbeat;
 pub mod hook_deny;
 pub mod hook_silence;
-// The one-way `hook_listener` serves over a Unix socket (its `serve` is
-// `#[cfg(unix)]`); its pure helpers (`to_event`) are cross-platform. The
-// two-way `hook_decide_listener` serves over a Unix socket on Unix and a named
-// pipe on Windows (#162), so both modules compile on Windows with their
-// transport-specific `serve`/`serve_pipe` gated internally.
+// `hook_event` holds the cross-platform event-conversion helpers (`to_event`).
+// The one-way `hook_listener` (observe) is a Unix-socket listener — unix-only.
+// The two-way `hook_decide_listener` (enforce) serves a Unix socket on Unix and
+// a named pipe on Windows (#162), so it compiles on both.
 pub mod hook_decide_listener;
+pub mod hook_event;
+#[cfg(unix)]
 pub mod hook_listener;
 pub mod host_meta_snapshot;
 pub mod host_meta_snapshot_task;

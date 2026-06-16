@@ -1,7 +1,7 @@
 //! Stage 2 (#100): hook-decide.sock request/response listener. Distinct from
 //! the one-way `hook_listener` — here the agent MUST answer, and a deny is
 //! recorded reliably (awaited) before the verdict is returned.
-use crate::hook_listener::to_event;
+use crate::hook_event::to_event;
 use crate::state_task::CommittableEvent;
 use sigil_core::event::{
     Evidence, HookDecisionEvidence, Severity, SourceKind, Subject, AGENT_VERSION, SCHEMA_VERSION,
@@ -271,7 +271,7 @@ fn decision_event(
             rule_id,
             deny_reason,
             enforcement_mode: "enforce".to_string(),
-            capture_level: crate::hook_listener::enum_str(&inv.capture_level),
+            capture_level: crate::hook_event::enum_str(&inv.capture_level),
         }),
         target_id: None,
     }
