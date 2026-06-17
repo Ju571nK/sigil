@@ -20,6 +20,20 @@
 the config that decided what your AI coding agent was allowed to do in the
 first place. Sigil measures that surface; it does not block.
 
+## What it detects
+
+⚠️ **TrustFall-style AI agent attacks** — and the misconfigurations that enable
+them: project-scoped MCP servers set to **auto-execute**, **prompt-injection
+directives** planted in agent instruction files, **disabled sandboxes**, silent
+**auto-approve**, overly broad tool permissions, and **remote / shell-launcher
+MCP servers** — scored across the AI coding agents your developers actually run.
+
+**Agents covered**
+&nbsp;&nbsp;✅ Claude Code&nbsp;&nbsp;✅ Codex&nbsp;&nbsp;✅ Cursor&nbsp;&nbsp;✅ Gemini CLI&nbsp;&nbsp;✅ Antigravity&nbsp;&nbsp;✅ Continue.dev&nbsp;&nbsp;✅ Claude Desktop
+
+**Built in**
+&nbsp;&nbsp;✅ SIEM integration&nbsp;&nbsp;✅ MCP support (read-only — host + fleet)&nbsp;&nbsp;✅ fleet monitoring&nbsp;&nbsp;✅ signed policy distribution
+
 ## See it
 
 A security team's view first: **`sigil-manager`** renders the fleet's posture as
