@@ -4,10 +4,19 @@
 //!   - settings (user-global): `~/.gemini/antigravity-cli/settings.json`
 //!   - MCP servers: `~/.gemini/config/mcp_config.json` (`mcpServers`, a separate
 //!     file — unlike Gemini, MCP is not inline in settings.json)
-//!   - terminal sandbox: `enableTerminalSandbox` (boolean, default false)
-//!   - tool permission: `toolPermission` (`request-review` default / `auto-approve`),
-//!     verified against the real `agy` 1.0.4 binary + runtime log. (NOT Gemini's
-//!     `approval_mode` — Antigravity dropped it.)
+//!   - terminal sandbox: `enableTerminalSandbox` (boolean, default false). This
+//!     is the ONLY sandbox knob the settings file carries — `sandbox_mode` /
+//!     `sandbox_type` / `sandbox_allow_network` are internal sandbox-subsystem
+//!     struct fields, NOT CLI settings keys (hardware-verified on agy 1.0.8:
+//!     writing `sandbox_mode` into settings.json is silently ignored, exactly
+//!     like an unknown key — the CLI settings validator never sees it).
+//!   - tool permission: `toolPermission`. Accepted enum (hardware-verified on
+//!     agy 1.0.8): `request-review` (default, safe — agent asks per action),
+//!     `proceed-in-sandbox` (auto-executes inside the sandbox), `always-proceed`
+//!     (auto-executes, NOT sandboxed). The old Gemini `approval_mode`
+//!     (`yolo`/`auto_edit`) was dropped, and the literal `auto-approve` is now
+//!     REJECTED by 1.0.8's settings validator (replaced with the `request-review`
+//!     default at load) — see `emit_approval`.
 //!
 //! UserGlobal scope only for now; the per-repo (`<repo>/.antigravity/settings.json`)
 //! parser needs an `antigravity_workspaces` policy field and is a follow-up.
@@ -51,27 +60,38 @@ pub(crate) fn emit_sandbox(v: &Value, out: &mut Vec<AiGuardReason>) {
     }
 }
 
-/// `toolPermission == "auto-approve"` -> AutoApprovalEnabled (the agent runs
-/// tools without confirmation). `request-review` (the default) is safe.
+/// Flag the `toolPermission` modes that make the agent run tools WITHOUT
+/// per-action review. Hardware-verified against `agy` 1.0.8's settings
+/// validator (`cli_setting_manager.go`, via `CLI settings initialized:
+/// ... toolPermission=<value>` + `unrecognized value` rejections):
+///   - `always-proceed`     -> auto-execute, NOT sandboxed  (highest risk)
+///   - `proceed-in-sandbox` -> auto-execute, confined to the terminal sandbox
+///   - `request-review`     -> the safe default (agent asks); not flagged
 ///
-/// Verified against the real `agy` 1.0.4 binary + runtime log
-/// (`CLI settings initialized: ... toolPermission=request-review`): the key is
-/// `toolPermission`, NOT Gemini's `approval_mode` (`yolo`/`auto_edit`), which
-/// Antigravity dropped. A truthy `permissions.allowAll` is also flagged.
+/// The old literal `auto-approve` is deliberately NOT matched: 1.0.8's validator
+/// rejects it as an unrecognized value and falls back to `request-review`, so a
+/// settings file carrying `auto-approve` is effectively safe at runtime — flagging
+/// it would be a false positive. (Permissive auto-approval without a persisted
+/// setting is reached via the session-scoped `--dangerously-skip-permissions`
+/// CLI flag, which never touches settings.json and so is out of scope here.)
+///
+/// A truthy `permissions.allowAll` is a separate explicit auto-approval signal.
 pub(crate) fn emit_approval(v: &Value, out: &mut Vec<AiGuardReason>) {
-    if v.get("toolPermission").and_then(Value::as_str) == Some("auto-approve") {
-        out.push(AiGuardReason::AutoApprovalEnabled {
-            mode: "auto-approve".into(),
-        });
-    } else if v
-        .get("permissions")
-        .and_then(|p| p.get("allowAll"))
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
-        out.push(AiGuardReason::AutoApprovalEnabled {
-            mode: "allow_all".into(),
-        });
+    match v.get("toolPermission").and_then(Value::as_str) {
+        Some(mode @ ("always-proceed" | "proceed-in-sandbox")) => {
+            out.push(AiGuardReason::AutoApprovalEnabled { mode: mode.into() });
+        }
+        _ if v
+            .get("permissions")
+            .and_then(|p| p.get("allowAll"))
+            .and_then(Value::as_bool)
+            == Some(true) =>
+        {
+            out.push(AiGuardReason::AutoApprovalEnabled {
+                mode: "allow_all".into(),
+            });
+        }
+        _ => {}
     }
 }
 
@@ -189,12 +209,42 @@ mod tests {
             .any(|r| matches!(r, AiGuardReason::SandboxDisabled)));
     }
     #[test]
-    fn auto_approve_emits_auto_approval() {
+    fn sandbox_mode_key_is_ignored() {
+        // `sandbox_mode` is NOT a CLI settings key (agy 1.0.8 silently ignores it,
+        // like any unknown field — #158). Only `enableTerminalSandbox` counts, so a
+        // file carrying solely `sandbox_mode` must not be read as a sandbox signal.
+        let d = tempdir().unwrap();
+        write_settings(d.path(), r#"{"sandbox_mode":"off"}"#);
+        assert!(assess(d.path()).is_empty());
+    }
+    #[test]
+    fn always_proceed_emits_auto_approval() {
+        // agy 1.0.8: unsandboxed auto-execute — the highest-risk persisted mode.
+        let d = tempdir().unwrap();
+        write_settings(d.path(), r#"{"toolPermission":"always-proceed"}"#);
+        assert!(assess(d.path()).iter().any(
+            |r| matches!(r, AiGuardReason::AutoApprovalEnabled { mode } if mode == "always-proceed")
+        ));
+    }
+    #[test]
+    fn proceed_in_sandbox_emits_auto_approval() {
+        // agy 1.0.8: auto-execute confined to the sandbox — still no per-action review.
+        let d = tempdir().unwrap();
+        write_settings(d.path(), r#"{"toolPermission":"proceed-in-sandbox"}"#);
+        assert!(assess(d.path()).iter().any(
+            |r| matches!(r, AiGuardReason::AutoApprovalEnabled { mode } if mode == "proceed-in-sandbox")
+        ));
+    }
+    #[test]
+    fn auto_approve_literal_is_not_flagged() {
+        // agy 1.0.8 rejects `auto-approve` as an unrecognized settings value and
+        // falls back to `request-review`, so the file is safe at runtime —
+        // flagging it would be a false positive. (Hardware-verified, #158.)
         let d = tempdir().unwrap();
         write_settings(d.path(), r#"{"toolPermission":"auto-approve"}"#);
-        assert!(assess(d.path()).iter().any(
-            |r| matches!(r, AiGuardReason::AutoApprovalEnabled { mode } if mode == "auto-approve")
-        ));
+        assert!(!assess(d.path())
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
     }
     #[test]
     fn permissions_allow_all_emits_auto_approval() {
@@ -277,7 +327,7 @@ mod tests {
         std::fs::create_dir_all(repo.join(".antigravity")).unwrap();
         std::fs::write(
             repo.join(".antigravity").join("settings.json"),
-            r#"{"enableTerminalSandbox":false,"toolPermission":"auto-approve"}"#,
+            r#"{"enableTerminalSandbox":false,"toolPermission":"always-proceed"}"#,
         )
         .unwrap();
         let p = AntigravityProjectParser {
