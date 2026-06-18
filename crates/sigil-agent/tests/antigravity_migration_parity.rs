@@ -27,8 +27,8 @@ rules:
     on_file: "~/.gemini/antigravity-cli/settings.json"
     format: json
     selector: "$.toolPermission"
-    matcher: { kind: equals, value: "auto-approve" }
-    emit: { kind: auto_approval_enabled, mode: "auto-approve" }
+    matcher: { kind: regex, pattern: '^(always-proceed|proceed-in-sandbox)$' }
+    emit: { kind: auto_approval_enabled, mode: "<selector-value>" }
   - id: s3-allowall
     on_file: "~/.gemini/antigravity-cli/settings.json"
     format: json
@@ -37,7 +37,7 @@ rules:
     emit: { kind: auto_approval_enabled, mode: "allow_all" }
     when:
       - selector: "$.toolPermission"
-        matcher: { kind: equals, value: "auto-approve" }
+        matcher: { kind: regex, pattern: '^(always-proceed|proceed-in-sandbox)$' }
         negate: true
   - id: m1-remote-url
     on_file: "~/.gemini/config/mcp_config.json"
@@ -187,8 +187,12 @@ fn parity_sandbox_false() {
     assert_parity(Some(r#"{"enableTerminalSandbox":false}"#), None);
 }
 #[test]
-fn parity_toolperm_auto_approve() {
-    assert_parity(Some(r#"{"toolPermission":"auto-approve"}"#), None);
+fn parity_toolperm_always_proceed() {
+    assert_parity(Some(r#"{"toolPermission":"always-proceed"}"#), None);
+}
+#[test]
+fn parity_toolperm_proceed_in_sandbox() {
+    assert_parity(Some(r#"{"toolPermission":"proceed-in-sandbox"}"#), None);
 }
 #[test]
 fn parity_allowall_bool_true() {
@@ -264,6 +268,17 @@ fn parity_request_review_silent() {
 fn parity_dropped_gemini_approval_mode_silent() {
     assert_silent(r#"{"approval_mode":"yolo"}"#);
 }
+#[test]
+fn parity_rejected_auto_approve_literal_silent() {
+    // agy 1.0.8 rejects `auto-approve` (-> request-review at runtime), so both the
+    // parser and the pack must stay silent — flagging it would be a false positive.
+    assert_silent(r#"{"toolPermission":"auto-approve"}"#);
+}
+#[test]
+fn parity_unknown_sandbox_mode_key_silent() {
+    // `sandbox_mode` is not a CLI settings key (silently ignored, #158).
+    assert_silent(r#"{"sandbox_mode":"off"}"#);
+}
 
 // ---------------------------------------------------------------------------
 // Task 4 — else-if negate-gate fixture (both toolPermission + allowAll true)
@@ -275,9 +290,11 @@ fn parity_else_if_both_true_emits_single_auto_approve() {
     write_file(
         home.path(),
         ".gemini/antigravity-cli/settings.json",
-        r#"{"toolPermission":"auto-approve","permissions":{"allowAll":true}}"#,
+        r#"{"toolPermission":"always-proceed","permissions":{"allowAll":true}}"#,
     );
-    // Direct parser check: exactly one AutoApprovalEnabled, mode auto-approve.
+    // Direct parser check: exactly one AutoApprovalEnabled — the toolPermission
+    // arm wins and the allowAll branch is gated off (mode is the toolPermission
+    // value, not "allow_all").
     let parser_reasons = AntigravityParser.assess(home.path()).unwrap();
     let approvals: Vec<_> = parser_reasons
         .iter()
@@ -286,7 +303,7 @@ fn parity_else_if_both_true_emits_single_auto_approve() {
     assert_eq!(approvals.len(), 1);
     assert!(matches!(
         approvals[0],
-        AiGuardReason::AutoApprovalEnabled { mode } if mode == "auto-approve"
+        AiGuardReason::AutoApprovalEnabled { mode } if mode == "always-proceed"
     ));
     // Parity: the pack's allow_all rule must be gated off -> no divergence.
     let d = diff(home.path());
@@ -512,7 +529,7 @@ fn every_selector_is_exercised_without_parse_error() {
     write_file(
         home.path(),
         ".gemini/antigravity-cli/settings.json",
-        r#"{"enableTerminalSandbox":false,"toolPermission":"auto-approve","permissions":{"allowAll":true}}"#,
+        r#"{"enableTerminalSandbox":false,"toolPermission":"always-proceed","permissions":{"allowAll":true}}"#,
     );
     write_file(
         home.path(),
