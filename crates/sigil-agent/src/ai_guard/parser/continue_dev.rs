@@ -251,6 +251,19 @@ impl AiGuardParser for ContinueDevProjectParser {
         let hooks_dir = self.repo_root.join(".continue").join("hooks");
         let mut out = Vec::new();
         emit_mcp_reasons(&val, &mut out);
+        // #154 Option B — Continue auto-loads repo-local `.continue/` config and
+        // spawns its mcpServers (StdioClientTransport) on workspace config load
+        // with NO per-server approval (source-verified: MCPManagerSingleton marks
+        // new servers refresh=true -> refreshConnections -> connectClient). The
+        // only gate is VS Code Workspace Trust (absent in JetBrains) — the same
+        // one-keypress folder-trust trigger TrustFall describes. Amplify off the
+        // MCP-only reasons here, BEFORE the slash/custom-command reasons (which
+        // can also emit DestructiveInInlineCommand) join `out`.
+        if super::mcp_scan::has_local_or_risky_mcp(&out) {
+            out.push(AiGuardReason::ProjectMcpAutoEnabled {
+                mechanism: "folder-trust autorun (default)".to_string(),
+            });
+        }
         emit_slash_command_reasons(&val, &hooks_dir, &mut out);
         emit_custom_command_reasons(&val, &mut out);
         Ok(out)
@@ -623,5 +636,85 @@ mod tests {
         };
         let err = p.assess(std::path::Path::new("/unused")).unwrap_err();
         assert!(matches!(err, AssessError::Parse { .. }), "got {err:?}");
+    }
+
+    fn write_project_config(repo: &Path, body: &str) {
+        let cd = repo.join(".continue");
+        std::fs::create_dir_all(&cd).unwrap();
+        std::fs::write(cd.join("config.json"), body).unwrap();
+    }
+
+    #[test]
+    fn project_local_mcp_emits_auto_enabled() {
+        // #154: a repo-committed local-command MCP server -> ProjectMcpAutoEnabled
+        // (Continue auto-spawns it on workspace config load, no per-server prompt).
+        let dir = tempdir().unwrap();
+        write_project_config(
+            dir.path(),
+            r#"{"mcpServers": {"fs": {"command": "/tmp/x", "args": ["m.js"]}}}"#,
+        );
+        let out = ContinueDevProjectParser {
+            repo_root: dir.path().to_path_buf(),
+        }
+        .assess(std::path::Path::new("/unused"))
+        .unwrap();
+        assert!(
+            out.iter().any(|r| matches!(
+                r, AiGuardReason::ProjectMcpAutoEnabled { mechanism }
+                    if mechanism == "folder-trust autorun (default)"
+            )),
+            "got {out:?}"
+        );
+    }
+
+    #[test]
+    fn project_benign_remote_mcp_no_auto_enabled() {
+        // #154: remote-only project MCP launches no local code -> no amplify.
+        let dir = tempdir().unwrap();
+        write_project_config(
+            dir.path(),
+            r#"{"mcpServers": {"r": {"url": "https://api.example/mcp"}}}"#,
+        );
+        let out = ContinueDevProjectParser {
+            repo_root: dir.path().to_path_buf(),
+        }
+        .assess(std::path::Path::new("/unused"))
+        .unwrap();
+        assert!(
+            !out.iter()
+                .any(|r| matches!(r, AiGuardReason::ProjectMcpAutoEnabled { .. })),
+            "benign remote must not amplify; got {out:?}"
+        );
+    }
+
+    #[test]
+    fn project_amplifier_ignores_non_mcp_destructive_reasons() {
+        // #154: the amplifier keys only on MCP-derived reasons. A destructive
+        // slash command alongside a benign remote-only MCP must NOT auto-enable.
+        let dir = tempdir().unwrap();
+        write_project_config(
+            dir.path(),
+            r#"{"mcpServers": {"r": {"url": "https://api.example/mcp"}},
+                "slashCommands": [{"name": "danger", "run": "rm -rf /tmp/sigil-test"}]}"#,
+        );
+        let out = ContinueDevProjectParser {
+            repo_root: dir.path().to_path_buf(),
+        }
+        .assess(std::path::Path::new("/unused"))
+        .unwrap();
+        // Sanity: the destructive slash-command reason IS present (test is real)…
+        assert!(
+            out.iter().any(|r| matches!(
+                r, AiGuardReason::DestructiveInInlineCommand { hook_event, .. }
+                    if hook_event == "slash_command"
+            )),
+            "fixture should produce a destructive slash-command reason; got {out:?}"
+        );
+        // …but it must NOT be mistaken for an auto-launching project MCP.
+        assert!(
+            !out.iter()
+                .any(|r| matches!(r, AiGuardReason::ProjectMcpAutoEnabled { .. })),
+            "destructive slash command (not MCP) must not trigger the amplifier; got {out:?}"
+        );
     }
 }
