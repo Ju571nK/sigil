@@ -1005,6 +1005,22 @@ pub(crate) fn perform_warmup(
     Ok(())
 }
 
+/// The directory prefix of a (possibly glob) path: everything before the path
+/// segment that holds the first glob metacharacter. `.cursor/rules/**` →
+/// `.cursor/rules`; a plain path with no glob is returned unchanged. Used to
+/// pick the recursive watch root for a glob target (#156).
+fn glob_root_dir(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.find(['*', '?', '[', ']', '{', '}']) {
+        Some(idx) => {
+            let head = &s[..idx];
+            let cut = head.rfind('/').map(|i| &s[..i]).unwrap_or(head);
+            PathBuf::from(cut)
+        }
+        None => p.to_path_buf(),
+    }
+}
+
 /// Expand a policy's per-user path templates into concrete watch paths and the
 /// set of (canonical) watch roots to register. Shared by `run` (startup) and
 /// `policy_reload_task` (live reload).
@@ -1026,7 +1042,11 @@ pub(crate) fn expand_targets(
                 // canonical event paths the normalizer produces.
                 let p = normalizer::canonicalize_glob_prefix(&p);
                 let parent = if t.recursive {
-                    p.clone()
+                    // A recursive target may be a plain dir (e.g. `.claude/hooks/`)
+                    // or a glob (e.g. `.cursor/rules/**`, #156). For a glob, watch
+                    // the directory prefix before the first glob metacharacter, not
+                    // the literal glob path (which never exists on disk).
+                    glob_root_dir(&p)
                 } else {
                     p.parent().map(PathBuf::from).unwrap_or_else(|| p.clone())
                 };
@@ -1647,17 +1667,21 @@ pub(crate) fn push_cursor_synthetic_target(
         follow_symlinks: false,
         disabled: false,
     });
-    // #146 — .cursor/rules/* : glob path so the normalizer matches child files;
-    // recursive:false → expand_targets watches the parent dir non-recursively
-    // (flat .mdc convention; nested subdirs are a documented v1 limitation).
-    let rules_glob = repo_root.join(".cursor").join("rules").join("*");
+    // #156 — .cursor/rules/** : recursive glob so the normalizer matches files in
+    // nested subdirs too (Cursor supports `.cursor/rules/<subdir>/foo.mdc`).
+    // recursive:true → expand_targets watches the `.cursor/rules` dir recursively
+    // (the glob-root-dir resolution handles the `**` tail).
+    let rules_glob = repo_root.join(".cursor").join("rules").join("**");
     effective.targets.push(sigil_core::policy::WatchTarget {
         id: format!("cursor-rules-{h}"),
-        description: format!("#146 synthetic cursor rules: {}", repo_root.display()),
+        description: format!(
+            "#156 synthetic cursor rules (recursive): {}",
+            repo_root.display()
+        ),
         tier: sigil_core::policy::Tier::Critical,
         platform: sigil_core::policy::Platform::Any,
         paths: vec![rules_glob.to_string_lossy().to_string()],
-        recursive: false,
+        recursive: true,
         follow_symlinks: false,
         disabled: false,
     });
@@ -1774,17 +1798,47 @@ pub(crate) fn discover_and_register_ext_scripts(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn cursor_rules_glob_matches_child_file() {
+    fn cursor_rules_glob_matches_child_and_nested_file() {
         use sigil_core::policy::glob::CompiledGlob;
         let repo = std::path::Path::new("/repo");
-        let rules_glob = repo.join(".cursor").join("rules").join("*");
+        // #156 — recursive `**` glob: keeps both direct and nested child events.
+        let rules_glob = repo.join(".cursor").join("rules").join("**");
         let g = CompiledGlob::new(&rules_glob.to_string_lossy()).unwrap();
         assert!(
             g.is_match(&repo.join(".cursor").join("rules").join("foo.mdc")),
-            "normalizer would drop a .cursor/rules child event"
+            "normalizer would drop a direct .cursor/rules child event"
+        );
+        assert!(
+            g.is_match(&repo.join(".cursor").join("rules").join("sub").join("x.mdc")),
+            "normalizer would drop a NESTED .cursor/rules/<subdir> event"
         );
         let bare =
             CompiledGlob::new(&repo.join(".cursor").join("rules").to_string_lossy()).unwrap();
         assert!(!bare.is_match(&repo.join(".cursor").join("rules").join("foo.mdc")));
+    }
+
+    #[test]
+    fn glob_root_dir_strips_glob_tail() {
+        // #156 — a recursive `**` glob target's watch root is the dir prefix
+        // before the first glob metacharacter, not the literal glob path.
+        assert_eq!(
+            super::glob_root_dir(std::path::Path::new("/repo/.cursor/rules/**")),
+            std::path::PathBuf::from("/repo/.cursor/rules")
+        );
+        // single-segment glob too
+        assert_eq!(
+            super::glob_root_dir(std::path::Path::new("/repo/.cursor/rules/*")),
+            std::path::PathBuf::from("/repo/.cursor/rules")
+        );
+        // glob metachar mid-segment cuts at the segment's parent
+        assert_eq!(
+            super::glob_root_dir(std::path::Path::new("/a/b/c*.json")),
+            std::path::PathBuf::from("/a/b")
+        );
+        // no glob → returned unchanged (plain recursive dir target)
+        assert_eq!(
+            super::glob_root_dir(std::path::Path::new("/a/b/hooks")),
+            std::path::PathBuf::from("/a/b/hooks")
+        );
     }
 }
