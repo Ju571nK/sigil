@@ -34,6 +34,7 @@ pub mod policy_expiry_task;
 pub mod policy_reload_task;
 pub mod rule_packs_watch;
 pub mod runtime;
+pub mod scan_cli;
 pub mod sender_offset;
 pub mod show;
 pub mod silence_task;

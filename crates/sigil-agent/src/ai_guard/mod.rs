@@ -53,3 +53,39 @@ pub type RubricHandle = std::sync::Arc<parking_lot::RwLock<rubric::Rubric>>;
 pub fn default_rubric_handle() -> RubricHandle {
     std::sync::Arc::new(parking_lot::RwLock::new(rubric::Rubric::defaults()))
 }
+
+/// The seven built-in user-global parsers, one per supported AI agent. Single
+/// source of truth shared by the daemon boot path (`runtime::run`) and the
+/// one-shot `sigil scan` (#174) so the two can never drift on which tools are
+/// covered. Per-repo / project parsers are appended separately by each caller.
+pub fn user_global_parsers() -> Vec<std::sync::Arc<dyn parser::AiGuardParser>> {
+    vec![
+        std::sync::Arc::new(ClaudeCodeParser),
+        std::sync::Arc::new(CodexParser),
+        std::sync::Arc::new(ClaudeDesktopParser),
+        std::sync::Arc::new(ContinueDevParser),
+        std::sync::Arc::new(GeminiParser),
+        std::sync::Arc::new(CursorParser),
+        std::sync::Arc::new(AntigravityParser),
+    ]
+}
+
+/// Canonical hyphenated CLI label for an `AiTool`. Single source of truth shared
+/// by `sigil show risk` (`--tool` parsing, the unknown-tool error message, the
+/// pretty table) and `sigil scan`, so the accepted set can never drift from the
+/// enum. The exhaustive match means a new `AiTool` variant fails to compile here
+/// until a label is added. Ungated (scan is in the default build).
+pub(crate) fn tool_cli_label(t: sigil_core::event::AiTool) -> &'static str {
+    use sigil_core::event::AiTool::*;
+    match t {
+        ClaudeCode => "claude-code",
+        Codex => "codex",
+        ClaudeDesktop => "claude-desktop",
+        ContinueDev => "continue-dev",
+        Gemini => "gemini",
+        Cursor => "cursor",
+        Antigravity => "antigravity",
+        Grok => "grok",
+        Other => "other",
+    }
+}

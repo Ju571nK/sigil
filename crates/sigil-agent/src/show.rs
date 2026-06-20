@@ -555,25 +555,11 @@ fn format_pretty(line: &str) -> String {
     format!("{ts}\t{severity}\t{subject}\t{kind}\t{summary}")
 }
 
-/// Canonical hyphenated CLI label for an `AiTool`. Single source of truth shared
-/// by `--tool` parsing, the unknown-tool error message, and the pretty table, so
-/// the accepted set can never drift from the enum. The exhaustive match means a
-/// new `AiTool` variant fails to compile here until a label is added.
+// `tool_cli_label` moved to `crate::ai_guard` (ungated) so `sigil scan` shares
+// the same single source of truth. Re-exported here under the original name so
+// the call sites below stay unchanged.
 #[cfg(feature = "operator-cli")]
-fn tool_cli_label(t: sigil_core::event::AiTool) -> &'static str {
-    use sigil_core::event::AiTool::*;
-    match t {
-        ClaudeCode => "claude-code",
-        Codex => "codex",
-        ClaudeDesktop => "claude-desktop",
-        ContinueDev => "continue-dev",
-        Gemini => "gemini",
-        Cursor => "cursor",
-        Antigravity => "antigravity",
-        Grok => "grok",
-        Other => "other",
-    }
-}
+use crate::ai_guard::tool_cli_label;
 
 /// Every `AiTool`, in display order — drives `--tool` parsing and the error
 /// message so the accepted set tracks the enum.

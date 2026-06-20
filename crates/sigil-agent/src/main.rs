@@ -54,6 +54,14 @@ fn main() -> anyhow::Result<()> {
         cli::Command::Version => {
             println!("sigil {}", env!("CARGO_PKG_VERSION"));
         }
+        cli::Command::Scan { json } => {
+            let code = sigil_agent::scan_cli::run(sigil_agent::scan_cli::ScanArgs {
+                json,
+                home_override: None,
+                cwd_override: None,
+            });
+            std::process::exit(code);
+        }
         #[cfg(feature = "operator-cli")]
         cli::Command::Reload => {
             let code = reload();

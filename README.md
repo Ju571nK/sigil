@@ -600,7 +600,33 @@ End-to-end production walkthroughs (PKI/mTLS, config, firewall, systemd, verific
 
 ## Usage
 
-Run the agent:
+### Scan your machine (one command, no daemon)
+
+The fastest way to see your posture — reads the installed agents' configs once
+(`~/.claude`, `~/.codex`, `~/.cursor`, …, plus the current directory if it's a
+project), prints a score, and exits. No daemon, no policy, no setup:
+
+```sh
+sigil scan
+```
+
+```text
+Sigil scan — HIGH (5.8)
+3 tools assessed · 7 findings
+
+TOOL         SCOPE         SCORE  BUCKET    TOP FINDINGS
+claude-code  user-global     5.8  high      no_sandbox, broad_matcher (+1 more)
+codex        user-global     5.6  high      mcp_server_local_command, no_sandbox
+cursor       user-global     2.5  medium    mcp_server_local_command
+
+2 tools not configured: continue-dev, gemini
+```
+
+Add `--json` for the full machine-readable report. `sigil scan` always exits 0
+— it's a read-out, not a gate. For continuous monitoring (file-change events,
+SIEM export, enforcement), run the daemon below.
+
+### Run the agent (daemon)
 
 ```sh
 cargo run -p sigil-agent -- run
