@@ -37,16 +37,32 @@ if [ "${SIGIL_PROFILE_DRYRUN:-}" = "1" ]; then
 fi
 
 # --- tooling ---------------------------------------------------------------
-command -v uname >/dev/null 2>&1 || err "missing required tool: uname"
-command -v tar   >/dev/null 2>&1 || err "missing required tool: tar"
-command -v mktemp >/dev/null 2>&1 || err "missing required tool: mktemp"
+# Minimal RHEL-family / container images often ship without `tar` (and even
+# `curl`); a bare "missing required tool" leaves the user guessing. Suggest the
+# one-liner for the host's package manager (#179).
+pkg_hint() { # $1 = tool/package name
+  if   command -v dnf     >/dev/null 2>&1; then echo "install it: sudo dnf install -y $1"
+  elif command -v apt-get >/dev/null 2>&1; then echo "install it: sudo apt-get install -y $1"
+  elif command -v yum     >/dev/null 2>&1; then echo "install it: sudo yum install -y $1"
+  elif command -v apk     >/dev/null 2>&1; then echo "install it: sudo apk add $1"
+  elif command -v zypper  >/dev/null 2>&1; then echo "install it: sudo zypper install -y $1"
+  elif command -v pacman  >/dev/null 2>&1; then echo "install it: sudo pacman -S $1"
+  elif command -v brew    >/dev/null 2>&1; then echo "install it: brew install $1"
+  else echo "install $1 with your package manager"; fi
+}
+need() { # $1 = command, $2 = package providing it (defaults to $1)
+  command -v "$1" >/dev/null 2>&1 || err "missing required tool: $1 — $(pkg_hint "${2:-$1}")"
+}
+need uname coreutils
+need tar tar
+need mktemp coreutils
 
 if command -v curl >/dev/null 2>&1; then
   dl() { curl --proto '=https' --tlsv1.2 -fsSL "$1"; }
 elif command -v wget >/dev/null 2>&1; then
   dl() { wget -qO- "$1"; }
 else
-  err "need curl or wget"
+  err "need curl or wget — $(pkg_hint curl)"
 fi
 
 if command -v sha256sum >/dev/null 2>&1; then
@@ -54,7 +70,7 @@ if command -v sha256sum >/dev/null 2>&1; then
 elif command -v shasum >/dev/null 2>&1; then
   sha_check() { shasum -a 256 -c "$1"; }
 else
-  err "need sha256sum or shasum to verify the download"
+  err "need sha256sum or shasum to verify the download — $(pkg_hint coreutils)"
 fi
 
 # --- detect platform -------------------------------------------------------
