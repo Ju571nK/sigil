@@ -294,10 +294,19 @@ pub fn run(policy_override: Option<PathBuf>, state_db_override: Option<PathBuf>)
     {
         let checks = [
             check_selinux(std::path::Path::new("/sys/fs/selinux/enforce")),
-            check_control_socket_perms(
-                std::path::Path::new("/var/run/sigil/control.sock"),
-                std::path::Path::new("/etc/group"),
-            ),
+            {
+                // Resolve the SAME socket path the daemon/CLI use: root →
+                // /var/run/sigil, non-root → the XDG/tmp fallback. Expect it to
+                // be owned by our euid (root for a root install). A non-root
+                // personal install therefore no longer warns about a root-owned
+                // socket at a path it never binds (#178).
+                let euid = unsafe { libc::geteuid() };
+                check_control_socket_perms(
+                    &crate::control::default_control_socket(),
+                    std::path::Path::new("/etc/group"),
+                    euid,
+                )
+            },
             check_systemd_unit(
                 std::path::Path::new("/run/systemd/system"),
                 std::path::Path::new("/usr/lib/systemd/system/sigil.service"),
@@ -553,6 +562,7 @@ fn check_selinux(enforce_path: &std::path::Path) -> CheckResult {
 fn check_control_socket_perms(
     socket_path: &std::path::Path,
     group_file: &std::path::Path,
+    expected_uid: u32,
 ) -> CheckResult {
     use std::os::unix::fs::MetadataExt;
     let meta = match std::fs::metadata(socket_path) {
@@ -577,12 +587,15 @@ fn check_control_socket_perms(
         meta.gid(),
         meta.mode() & 0o777,
         sigil_gid,
+        expected_uid,
     )
 }
 
-/// Pure classifier (testable without a real root-owned file). The socket must be
-/// root-owned and have no access bits for `other`; the `sigil` group, if present
-/// and matching, is reported but not required.
+/// Pure classifier (testable without a real owned file). The socket must be
+/// owned by `expected_uid` (root for a root install, the invoking user for a
+/// non-root personal install) and have no access bits for `other`. The
+/// root:sigil group hardening (epic #10) applies only to the root deployment,
+/// so the `sigil` group is reported but never required.
 #[cfg(target_os = "linux")]
 fn classify_socket_perms(
     path: &str,
@@ -590,10 +603,16 @@ fn classify_socket_perms(
     gid: u32,
     mode: u32,
     sigil_gid: Option<u32>,
+    expected_uid: u32,
 ) -> CheckResult {
-    if uid != 0 {
+    if uid != expected_uid {
+        let expected = if expected_uid == 0 {
+            "root (uid 0)".to_string()
+        } else {
+            format!("uid {expected_uid}")
+        };
         return CheckResult::warn(format!(
-            "control socket: owner uid={uid}, expected root (uid 0) at {path}"
+            "control socket: owner uid={uid}, expected {expected} at {path}"
         ));
     }
     if mode & 0o007 != 0 {
@@ -602,12 +621,17 @@ fn classify_socket_perms(
              (e.g. 0660) at {path}"
         ));
     }
-    let group = match sigil_gid {
-        Some(g) if g == gid => format!("root:sigil({g})"),
-        _ => format!("root:gid({gid})"),
+    let (owner, ownership) = if uid == 0 {
+        let group = match sigil_gid {
+            Some(g) if g == gid => format!("root:sigil({g})"),
+            _ => format!("root:gid({gid})"),
+        };
+        (group, "root-owned")
+    } else {
+        (format!("uid({uid}):gid({gid})"), "user-owned")
     };
     CheckResult::ok(format!(
-        "control socket: {group} mode {mode:o} (root-owned, not world-accessible)"
+        "control socket: {owner} mode {mode:o} ({ownership}, not world-accessible)"
     ))
 }
 
@@ -822,14 +846,14 @@ mod linux_tests {
         let p = dir.path().join("control.sock");
         let group_file = dir.path().join("group");
         std::fs::write(&group_file, "sigil:x:996:\n").unwrap();
-        let r = check_control_socket_perms(&p, &group_file);
+        let r = check_control_socket_perms(&p, &group_file, 0);
         assert_eq!(r.level, CheckLevel::Info);
         assert!(r.message.contains("not present"), "{:?}", r);
     }
 
     #[test]
     fn classify_socket_ok_root_0660_with_sigil_group() {
-        let r = classify_socket_perms("/run/sigil/control.sock", 0, 996, 0o660, Some(996));
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 996, 0o660, Some(996), 0);
         assert_eq!(r.level, CheckLevel::Ok);
         assert!(r.message.contains("root:sigil(996)"), "{r:?}");
     }
@@ -837,7 +861,7 @@ mod linux_tests {
     #[test]
     fn classify_socket_ok_root_0660_without_sigil_group() {
         // sigil group absent or gid mismatch → still OK (group is informational, epic #10).
-        let r = classify_socket_perms("/run/sigil/control.sock", 0, 0, 0o660, None);
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 0, 0o660, None, 0);
         assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
         assert!(r.message.contains("root-owned"), "{r:?}");
     }
@@ -845,7 +869,7 @@ mod linux_tests {
     #[test]
     fn classify_socket_ok_root_0660_with_gid_mismatch() {
         // sigil group exists but the socket's gid differs → still Ok, labeled root:gid(N).
-        let r = classify_socket_perms("/run/sigil/control.sock", 0, 999, 0o660, Some(996));
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 999, 0o660, Some(996), 0);
         assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
         assert!(r.message.contains("root:gid(999)"), "{r:?}");
         assert!(!r.message.contains("sigil"), "{r:?}");
@@ -854,22 +878,50 @@ mod linux_tests {
     #[test]
     fn classify_socket_ok_root_0600_is_not_world_accessible() {
         // 0600 (no group/other access) is stricter than 0660 → still Ok.
-        let r = classify_socket_perms("/run/sigil/control.sock", 0, 0, 0o600, None);
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 0, 0o600, None, 0);
         assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
     }
 
     #[test]
     fn classify_socket_warns_when_world_accessible() {
-        let r = classify_socket_perms("/run/sigil/control.sock", 0, 0, 0o666, Some(996));
+        let r = classify_socket_perms("/run/sigil/control.sock", 0, 0, 0o666, Some(996), 0);
         assert_eq!(r.level, CheckLevel::Warn);
         assert!(r.message.contains("world-accessible"), "{r:?}");
     }
 
     #[test]
-    fn classify_socket_warns_when_not_root_owned() {
-        let r = classify_socket_perms("/run/sigil/control.sock", 1000, 1000, 0o660, Some(996));
+    fn classify_socket_warns_when_owner_differs_from_expected() {
+        // Root install expects uid 0; a non-root owner is a real warning.
+        let r = classify_socket_perms("/run/sigil/control.sock", 1000, 1000, 0o660, Some(996), 0);
         assert_eq!(r.level, CheckLevel::Warn);
         assert!(r.message.contains("uid=1000"), "{r:?}");
+        assert!(r.message.contains("expected root"), "{r:?}");
+    }
+
+    #[test]
+    fn classify_socket_ok_nonroot_user_owned() {
+        // #178 — non-root personal install: socket owned by the invoking user
+        // (expected_uid = 1000) is Ok, labeled user-owned (no root expectation).
+        let r = classify_socket_perms(
+            "/tmp/sigil-1000/control.sock",
+            1000,
+            1000,
+            0o600,
+            None,
+            1000,
+        );
+        assert_eq!(r.level, CheckLevel::Ok, "{r:?}");
+        assert!(r.message.contains("user-owned"), "{r:?}");
+        assert!(r.message.contains("uid(1000)"), "{r:?}");
+    }
+
+    #[test]
+    fn classify_socket_nonroot_warns_when_owner_mismatch() {
+        // #178 — non-root expects its own uid; a root-owned socket there is a
+        // genuine mismatch, reported as "expected uid 1000" (not "expected root").
+        let r = classify_socket_perms("/tmp/sigil-1000/control.sock", 0, 0, 0o600, None, 1000);
+        assert_eq!(r.level, CheckLevel::Warn);
+        assert!(r.message.contains("expected uid 1000"), "{r:?}");
     }
 
     #[test]
