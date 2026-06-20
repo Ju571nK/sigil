@@ -514,9 +514,17 @@ below). Pin a release with `SIGIL_VERSION`, or change the location with
 gh attestation verify <archive> --repo Ju571nK/sigil
 ```
 
-Windows: download the `.zip` from the
-[latest release](https://github.com/Ju571nK/sigil/releases/latest). (Intel Macs
-aren't shipped as prebuilt binaries — build from source below.)
+### Quick install (Windows)
+
+```powershell
+irm https://raw.githubusercontent.com/Ju571nK/sigil/main/install.ps1 | iex
+```
+
+Same defaults as the shell installer — **personal** profile to
+`%LOCALAPPDATA%\Programs\sigil` (added to your user PATH), checksum-verified,
+`SIGIL_PROFILE` / `SIGIL_VERSION` / `SIGIL_INSTALL_DIR` honored. Both x64 and
+ARM64 Windows are prebuilt. (Intel Macs aren't shipped as prebuilt binaries —
+build from source below.)
 
 ### Install profiles
 

@@ -58,8 +58,10 @@ else
 fi
 
 # --- detect platform -------------------------------------------------------
-os="$(uname -s)"
-arch="$(uname -m)"
+# SIGIL_UNAME_S / SIGIL_UNAME_M let the tests drive platform detection without
+# spoofing uname; unset in normal use.
+os="${SIGIL_UNAME_S:-$(uname -s)}"
+arch="${SIGIL_UNAME_M:-$(uname -m)}"
 case "$os/$arch" in
   Linux/x86_64 | Linux/amd64)
     target="x86_64-unknown-linux-musl" ;;
@@ -68,10 +70,18 @@ case "$os/$arch" in
   Darwin/x86_64)
     err "Intel Macs aren't supported — build from source: https://github.com/$REPO#build-from-source" ;;
   Linux/aarch64 | Linux/arm64)
-    err "no prebuilt Linux aarch64 binary yet — build from source or open an issue" ;;
+    # Static musl ARM64 — runs on Graviton/Ampere and RHEL/Rocky 9 aarch64 (#171).
+    target="aarch64-unknown-linux-musl" ;;
   *)
     err "unsupported platform '$os/$arch' — see https://github.com/$REPO#installation" ;;
 esac
+
+# dry-run hook: print the resolved release target and exit before any network
+# I/O. Used by tests/install_profile_test.sh to verify platform->target mapping.
+if [ "${SIGIL_TARGET_DRYRUN:-}" = "1" ]; then
+  printf '%s\n' "$target"
+  exit 0
+fi
 
 # --- resolve version -------------------------------------------------------
 ver="${SIGIL_VERSION:-}"
