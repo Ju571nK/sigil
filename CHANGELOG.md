@@ -9,6 +9,20 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ### Added
 
+- **`sigil scan` — one-shot, daemon-free posture score** (#174). The fastest
+  personal read: it reads each installed agent's user-global config once
+  (`~/.claude`, `~/.codex`, `~/.cursor`, …) plus the current directory if it is a
+  project, scores them with the default rubric, and prints a headline (worst-scope
+  bucket + score) and a per-tool table — no daemon, no `state.db`, no policy.
+  `--json` emits the full report; the command always exits 0 (a read-out, not a
+  gate). Closes the gap behind the one-line installers ("install → score").
+- **One-line installer for all three OSes** (#172, #171). New `install.ps1` is the
+  Windows counterpart to `install.sh` (`irm …/install.ps1 | iex`): arch-detected
+  (x64 / ARM64), checksum-verified, installs the personal profile to
+  `%LOCALAPPDATA%\Programs\sigil` and adds it to PATH. `install.sh` now resolves
+  Linux **aarch64** (the musl tarball it had been wrongly rejecting), so the
+  one-liner works on Graviton/Ampere and RHEL/Rocky 9 aarch64. Script installs
+  avoid code-signing friction (Gatekeeper/SmartScreen) by design.
 - **OpenClaw / Hermes integration glue for `assess`** (#151). `sigil-mcp
   --print-config` now emits ready-to-paste blocks for `hermes` (a `config.yaml`
   `mcp_servers:` entry) and `openclaw` (a `~/.openclaw/openclaw.json` `mcpServers`
@@ -34,6 +48,19 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ### Fixed
 
+- **`sigil doctor` no longer warns about a control socket on a non-root install**
+  (#178). The check hardcoded `/var/run/sigil/control.sock` and expected it
+  root-owned, so a non-root personal user got a spurious `Permission denied`
+  warning (and a non-zero exit) about a socket the non-root daemon never binds.
+  Doctor now resolves the same XDG/tmp fallback path the daemon uses and expects
+  ownership by the invoking user.
+- **`install.sh` suggests how to install a missing tool** (#179). On a minimal
+  RHEL-family / container host without `tar` (or `curl`), the bare "missing
+  required tool" message now appends the host package manager's one-liner
+  (`sudo dnf install -y tar`, `sudo apt-get install -y …`, etc.).
+- **macOS install guide corrected** (#176). It claimed `install.sh` installs all
+  six binaries; the personal default is three. Added a 30-second personal
+  quickstart and framed the rest as the operator deployment.
 - **The local `rule-packs.yaml` watcher re-arms when the config dir is recreated
   at runtime** (#135). The dedicated hot-reload watcher previously gave up
   permanently if its config directory was absent at start, and a by-inode watch
