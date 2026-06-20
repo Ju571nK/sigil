@@ -220,15 +220,10 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     // `expand_targets` → `watch_roots` → `spawn_watcher` at boot. Otherwise
     // the OS watcher never subscribes to ext-script paths until the first
     // hot-reload. Per-repo synth above follows the same ordering rule.
-    let mut parsers_vec: Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>> = vec![
-        Arc::new(crate::ai_guard::ClaudeCodeParser),
-        Arc::new(crate::ai_guard::CodexParser),
-        Arc::new(crate::ai_guard::ClaudeDesktopParser),
-        Arc::new(crate::ai_guard::ContinueDevParser),
-        Arc::new(crate::ai_guard::GeminiParser),
-        Arc::new(crate::ai_guard::CursorParser),
-        Arc::new(crate::ai_guard::AntigravityParser),
-    ];
+    // The seven built-in user-global parsers (shared with `sigil scan` via
+    // `user_global_parsers()`); per-repo parsers are appended below.
+    let mut parsers_vec: Vec<Arc<dyn crate::ai_guard::parser::AiGuardParser>> =
+        crate::ai_guard::user_global_parsers();
     for repo_root in &continue_repos {
         parsers_vec.push(Arc::new(crate::ai_guard::ContinueDevProjectParser {
             repo_root: repo_root.clone(),

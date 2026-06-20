@@ -65,6 +65,15 @@ pub enum Command {
     },
     /// Print the version (also available via `--version`).
     Version,
+    /// Scan installed AI agents' configs once and print a posture score, then
+    /// exit. No daemon, no policy, no state.db: reads the user-global configs
+    /// (`~/.claude`, `~/.codex`, `~/.cursor`, …) plus the current directory if
+    /// it is a project. Always exits 0 (informational).
+    Scan {
+        /// Emit the full report as JSON instead of the human table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Ask the running daemon to re-read the on-disk policy.yaml without going
     /// through `apply_policy`. Useful after a hand-edit.
     #[cfg(feature = "operator-cli")]
