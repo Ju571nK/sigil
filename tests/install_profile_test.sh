@@ -20,4 +20,15 @@ if SIGIL_PROFILE=bogus SIGIL_PROFILE_DRYRUN=1 sh "$SH" >/dev/null 2>&1; then
   echo "FAIL: bogus profile should exit non-zero"; fail=1
 else echo "ok: bogus profile rejected"; fi
 
+# platform -> release target mapping (#171: aarch64 Linux must resolve, not err).
+tgt() { SIGIL_UNAME_S="$1" SIGIL_UNAME_M="$2" SIGIL_TARGET_DRYRUN=1 sh "$SH" 2>/dev/null; }
+assert_eq "linux x86_64 target"  "x86_64-unknown-linux-musl"  "$(tgt Linux x86_64)"
+assert_eq "linux aarch64 target" "aarch64-unknown-linux-musl" "$(tgt Linux aarch64)"
+assert_eq "linux arm64 target"   "aarch64-unknown-linux-musl" "$(tgt Linux arm64)"
+assert_eq "macos arm64 target"   "aarch64-apple-darwin"       "$(tgt Darwin arm64)"
+
+if tgt Darwin x86_64 >/dev/null 2>&1; then
+  echo "FAIL: intel mac should exit non-zero"; fail=1
+else echo "ok: intel mac rejected"; fi
+
 exit $fail
