@@ -6,8 +6,24 @@ events**. It measures; it does not block. Events can be read locally by a SIEM
 agent, or shipped to a [`sigil-server`](install-server.md) by the companion
 `sigil-sender`.
 
-This guide covers a **production** macOS install. For the server side, see
-[install-server.md](install-server.md).
+> **Just want your own machine's score? (30 seconds)**
+> Install the personal profile and run a one-shot scan — no daemon, no Full Disk
+> Access, no launchd:
+>
+> ```sh
+> curl --proto '=https' --tlsv1.2 -fsSL \
+>   https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
+> sigil scan
+> ```
+>
+> That installs three binaries (`sigil`, `sigil-mcp`, `sigil-hook`) and prints a
+> posture score. For the full personal guide (local rule packs, MCP, hook
+> enforcement) see [install-personal.md](install-personal.md).
+
+This guide covers a **production / operator** macOS deployment — running the
+agent persistently (root launchd), granting Full Disk Access for fleet-wide
+coverage, and shipping events to a [`sigil-server`](install-server.md). For the
+server side, see [install-server.md](install-server.md).
 
 ---
 
@@ -20,9 +36,20 @@ curl --proto '=https' --tlsv1.2 -fsSL \
   https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
 ```
 
-Installs `sigil`, `sigil-sender`, `sigil-server`, `sigil-sign`, `sigil-mcp`, and
-`sigil-hook` to `~/.local/bin` (verifies SHA-256). Make sure `~/.local/bin` is on
-your `PATH`.
+Installs the **personal** profile by default — `sigil`, `sigil-mcp`, and
+`sigil-hook` — to `~/.local/bin` (verifies SHA-256). Make sure `~/.local/bin` is
+on your `PATH`.
+
+This operator deployment also ships events with `sigil-sender` (§7). It is part
+of the **fleet** profile, so install that instead to add the server-side
+binaries on top of the personal three:
+
+```sh
+SIGIL_PROFILE=fleet curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
+```
+
+`fleet` adds `sigil-sender`, `sigil-server`, and `sigil-sign`.
 
 ### Option B — build from source
 
@@ -148,6 +175,8 @@ sigil show stats          # live heartbeat from the running daemon
 
 `sigil show risk` is the core AI-SPM read: it scores each detected AI tool
 (`claude-code`, `codex`, `gemini`, `cursor`) from its real on-disk config.
+Without a running daemon, `sigil scan` produces the same per-tool scores in one
+shot (and exits 0) — handy for a quick check before the daemon is set up.
 
 ---
 
