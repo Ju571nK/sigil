@@ -24,6 +24,7 @@ fn state_in_with_rule_packs(
         events_out_dir: dir.to_path_buf(),
         policy_bundle_path: dir.join("signed-policy.json"),
         rule_packs_bundle_path,
+        artifacts_dir: None,
         high_water_path: dir.join(".high-water.json"),
         allowlist,
         high_water: Mutex::new(HighWater::default()),

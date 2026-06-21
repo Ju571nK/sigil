@@ -21,6 +21,9 @@ pub struct AppState {
     pub policy_bundle_path: PathBuf,
     /// Path to the signed pack-set bundle. `None` ⇒ `GET /v1/rule-packs` 404s.
     pub rule_packs_bundle_path: Option<std::path::PathBuf>,
+    /// Directory of signed agent release artifacts. `None` ⇒ `GET /v1/artifacts*`
+    /// 404s (feature off). #182
+    pub artifacts_dir: Option<std::path::PathBuf>,
     pub high_water_path: PathBuf,
     /// `None` ⇒ every authenticated host is accepted.
     pub allowlist: Option<HashSet<String>>,
@@ -99,6 +102,18 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/v1/events/:event_id",
             get(crate::routes::events::get_event_by_id)
+                .route_layer(from_fn_with_state(token.clone(), require_bearer)),
+        )
+        // #182 — read-only signed-artifact serving for air-gapped/PMS fleet
+        // install. Gated by the read-API bearer token, same as the read routes.
+        .route(
+            "/v1/artifacts",
+            get(crate::routes::artifacts::get_artifacts_index)
+                .route_layer(from_fn_with_state(token.clone(), require_bearer)),
+        )
+        .route(
+            "/v1/artifacts/:filename",
+            get(crate::routes::artifacts::get_artifact_by_name)
                 .route_layer(from_fn_with_state(token.clone(), require_bearer)),
         )
         .with_state(state)
