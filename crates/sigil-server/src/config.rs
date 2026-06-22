@@ -39,6 +39,11 @@ pub struct ServerConfig {
     /// produced by `sigil-sign`). Absent ⇒ `GET /v1/rule-packs` returns 404.
     #[serde(default)]
     pub rule_packs_bundle_path: Option<std::path::PathBuf>,
+    /// Directory of operator-populated, signed agent release artifacts
+    /// (tarballs/zips, `.deb`/`.rpm`, `SHA256SUMS`, `build-manifest.json`).
+    /// Absent ⇒ `GET /v1/artifacts*` returns 404 (feature off). #182
+    #[serde(default)]
+    pub artifacts_dir: Option<PathBuf>,
     /// Optional allowlist of `host_id`s. Absent ⇒ accept all authenticated hosts.
     #[serde(default)]
     pub host_allowlist_path: Option<PathBuf>,

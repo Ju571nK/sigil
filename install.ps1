@@ -11,6 +11,11 @@
     SIGIL_PROFILE       personal (default) | fleet
                         personal = sigil + sigil-mcp + sigil-hook (local self-assessment)
                         fleet    = + sigil-sender + sigil-server + sigil-sign
+    SIGIL_BASE_URL      fetch artifacts from here instead of GitHub Releases, e.g.
+                        an air-gapped sigil-server: https://sigil.example:8443/v1/artifacts
+                        (requires SIGIL_VERSION — no "latest" resolution off GitHub).
+    SIGIL_BASE_TOKEN    bearer token sent to SIGIL_BASE_URL (the server read token);
+                        requires SIGIL_BASE_URL.
 
   Provenance: every release archive also carries a GitHub build-provenance
   attestation. To verify it (optional, needs the gh CLI):
@@ -64,9 +69,18 @@ if ($env:SIGIL_TARGET_DRYRUN -eq '1') {
   exit 0
 }
 
+# A bearer token only makes sense against a SIGIL_BASE_URL artifact server;
+# requiring the pair keeps it from ever reaching GitHub's API (#182).
+if ($env:SIGIL_BASE_TOKEN -and -not $env:SIGIL_BASE_URL) {
+  Die "SIGIL_BASE_TOKEN requires SIGIL_BASE_URL (it authenticates to your sigil-server)"
+}
+
 # --- resolve version -------------------------------------------------------
 $ver = $env:SIGIL_VERSION
 if (-not $ver) {
+  if ($env:SIGIL_BASE_URL) {
+    Die "set SIGIL_VERSION when using SIGIL_BASE_URL (no 'latest' resolution off GitHub)"
+  }
   try {
     $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
       -Headers @{ 'User-Agent' = 'sigil-install' }
@@ -78,7 +92,21 @@ if (-not $ver) {
 if (-not $ver) { Die "could not resolve the latest release (set SIGIL_VERSION to pin one)" }
 $verN = $ver -replace '^v', ''
 $asset = "sigil-$verN-$target.zip"
-$base = "https://github.com/$Repo/releases/download/$ver"
+# Default base = GitHub Releases; SIGIL_BASE_URL points at a sigil-server
+# artifact endpoint (.../v1/artifacts) instead. Both resolve <base>/<name>. (#182)
+$base = if ($env:SIGIL_BASE_URL) { $env:SIGIL_BASE_URL } else { "https://github.com/$Repo/releases/download/$ver" }
+
+# Bearer header sent to a SIGIL_BASE_URL artifact server, if any.
+$dlHeaders = @{}
+if ($env:SIGIL_BASE_TOKEN) { $dlHeaders['Authorization'] = "Bearer $($env:SIGIL_BASE_TOKEN)" }
+
+# dry-run hook: print the resolved asset + checksum URLs and exit before any
+# download. Mirrors install.sh SIGIL_URL_DRYRUN; used by the parity test.
+if ($env:SIGIL_URL_DRYRUN -eq '1') {
+  Write-Output "$base/$asset"
+  Write-Output "$base/SHA256SUMS"
+  exit 0
+}
 
 # --- download + verify -----------------------------------------------------
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("sigil-install-" + [System.IO.Path]::GetRandomFileName())
@@ -88,9 +116,9 @@ try {
   $sums = Join-Path $tmp 'SHA256SUMS'
 
   Say "downloading $asset ($ver)"
-  try { Invoke-WebRequest -Uri "$base/$asset"  -OutFile $zip  -UseBasicParsing }
+  try { Invoke-WebRequest -Uri "$base/$asset"  -OutFile $zip  -Headers $dlHeaders -UseBasicParsing }
   catch { Die "download failed: $base/$asset" }
-  try { Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing }
+  try { Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile $sums -Headers $dlHeaders -UseBasicParsing }
   catch { Die "download failed: $base/SHA256SUMS" }
 
   Say "verifying checksum"

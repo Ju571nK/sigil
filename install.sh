@@ -10,6 +10,11 @@
 #   SIGIL_PROFILE       personal (default) | fleet
 #                       personal = sigil + sigil-mcp + sigil-hook (local self-assessment)
 #                       fleet    = + sigil-sender + sigil-server + sigil-sign
+#   SIGIL_BASE_URL      fetch the artifacts from here instead of GitHub Releases,
+#                       e.g. an air-gapped sigil-server: https://sigil.example:8443/v1/artifacts
+#                       (#182). Requires SIGIL_VERSION (no "latest" resolution off GitHub).
+#   SIGIL_BASE_TOKEN    bearer token sent as `Authorization: Bearer` to SIGIL_BASE_URL
+#                       (the sigil-server read token). Requires SIGIL_BASE_URL.
 #
 # Provenance: every release archive also carries a GitHub build-provenance
 # attestation. To verify it (optional, needs the gh CLI):
@@ -57,10 +62,24 @@ need uname coreutils
 need tar tar
 need mktemp coreutils
 
+# A bearer token only makes sense against a SIGIL_BASE_URL artifact server;
+# requiring the pair keeps the token from ever being sent to GitHub's API (#182).
+if [ -n "${SIGIL_BASE_TOKEN:-}" ] && [ -z "${SIGIL_BASE_URL:-}" ]; then
+  err "SIGIL_BASE_TOKEN requires SIGIL_BASE_URL (it authenticates to your sigil-server)"
+fi
+
 if command -v curl >/dev/null 2>&1; then
-  dl() { curl --proto '=https' --tlsv1.2 -fsSL "$1"; }
+  if [ -n "${SIGIL_BASE_TOKEN:-}" ]; then
+    dl() { curl --proto '=https' --tlsv1.2 -fsSL -H "Authorization: Bearer ${SIGIL_BASE_TOKEN}" "$1"; }
+  else
+    dl() { curl --proto '=https' --tlsv1.2 -fsSL "$1"; }
+  fi
 elif command -v wget >/dev/null 2>&1; then
-  dl() { wget -qO- "$1"; }
+  if [ -n "${SIGIL_BASE_TOKEN:-}" ]; then
+    dl() { wget -qO- --header="Authorization: Bearer ${SIGIL_BASE_TOKEN}" "$1"; }
+  else
+    dl() { wget -qO- "$1"; }
+  fi
 else
   err "need curl or wget — $(pkg_hint curl)"
 fi
@@ -102,13 +121,27 @@ fi
 # --- resolve version -------------------------------------------------------
 ver="${SIGIL_VERSION:-}"
 if [ -z "$ver" ]; then
+  # A custom artifact server has no GitHub "latest" API; require an explicit pin.
+  [ -z "${SIGIL_BASE_URL:-}" ] \
+    || err "set SIGIL_VERSION when using SIGIL_BASE_URL (no 'latest' resolution off GitHub)"
   ver="$(dl "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
           | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)"
   [ -n "$ver" ] || err "could not resolve the latest release (set SIGIL_VERSION to pin one)"
 fi
 verN="${ver#v}"
 asset="sigil-${verN}-${target}.tar.gz"
-base="https://github.com/$REPO/releases/download/$ver"
+# Default base = GitHub Releases (`.../download/<tag>`); SIGIL_BASE_URL points at
+# a sigil-server artifact endpoint (`.../v1/artifacts`) instead. Both resolve the
+# asset + SHA256SUMS as `<base>/<name>`, so the rest of the flow is unchanged (#182).
+base="${SIGIL_BASE_URL:-https://github.com/$REPO/releases/download/$ver}"
+
+# dry-run hook: print the resolved asset + checksum URLs and exit before any
+# download. Used by tests/install_profile_test.sh to verify base resolution.
+if [ "${SIGIL_URL_DRYRUN:-}" = "1" ]; then
+  printf '%s\n' "$base/$asset"
+  printf '%s\n' "$base/SHA256SUMS"
+  exit 0
+fi
 
 # --- download + verify -----------------------------------------------------
 tmp="$(mktemp -d)"

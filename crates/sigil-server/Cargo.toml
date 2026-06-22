@@ -27,6 +27,7 @@ time = { workspace = true }
 uuid = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 axum = { workspace = true, features = ["query"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls = { workspace = true }

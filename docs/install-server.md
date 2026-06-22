@@ -198,6 +198,9 @@ client_ca_path: "/etc/sigil/ca.crt"
 # Optional hardening:
 # host_allowlist_path: "/etc/sigil/host-allowlist.json"  # {"hosts":["uuid",...]}
 # high_water_path: "/var/lib/sigil-server/high_water.json" # at-least-once dedup
+
+# Optional — serve signed agent artifacts for air-gapped / PMS install (§5.1):
+# artifacts_dir: "/var/lib/sigil-server/artifacts"
 ```
 
 ### Read API token
@@ -213,6 +216,45 @@ sudo systemctl edit sigil-server
 # [Service]
 # Environment=SIGIL_SERVER_READ_TOKEN=<long-random-token>
 ```
+
+### 5.1 Serve agent artifacts (air-gapped / PMS install)
+
+Set `artifacts_dir` and the server serves the signed release files read-only, so
+an air-gapped fleet or a PMS (Ansible/Intune) can pull binaries from the server
+it already runs instead of GitHub. Absent ⇒ the routes 404 (feature off).
+
+Populate the directory from a release (the operator does this once per version):
+
+```sh
+sudo mkdir -p /var/lib/sigil-server/artifacts
+# copy the GitHub release assets you intend to serve, e.g.:
+#   sigil-<ver>-<target>.tar.gz / .zip, sigil*_<ver>*.deb / .rpm,
+#   SHA256SUMS, build-manifest.json
+```
+
+Two routes, both gated by the **read token** (`SIGIL_SERVER_READ_TOKEN`) like the
+rest of the read API:
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" https://sigil.example:8443/v1/artifacts
+#   → {"artifacts":["SHA256SUMS","build-manifest.json","sigil-…-musl.tar.gz", …]}
+curl -H "Authorization: Bearer $TOKEN" \
+  https://sigil.example:8443/v1/artifacts/sigil-0.6.2-aarch64-unknown-linux-musl.tar.gz -O
+```
+
+The one-line installer can target the server directly — it verifies the same
+`SHA256SUMS`, so the trust story is unchanged:
+
+```sh
+SIGIL_VERSION=v0.6.2 \
+SIGIL_BASE_URL=https://sigil.example:8443/v1/artifacts \
+SIGIL_BASE_TOKEN=$TOKEN \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh)"
+```
+
+> The artifact files stay **operator-populated and signed**; the server only
+> serves them read-only. Filenames are whitelisted (no path traversal). Per-host
+> certificate enrollment is a separate concern (not this endpoint).
 
 ---
 

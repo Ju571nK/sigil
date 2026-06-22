@@ -31,4 +31,29 @@ if tgt Darwin x86_64 >/dev/null 2>&1; then
   echo "FAIL: intel mac should exit non-zero"; fail=1
 else echo "ok: intel mac rejected"; fi
 
+# base URL resolution (#182): default = GitHub Releases; SIGIL_BASE_URL overrides.
+# SIGIL_URL_DRYRUN prints "<base>/<asset>" then "<base>/SHA256SUMS"; take line 1.
+asset_url() { # $1=base-url-or-empty
+  SIGIL_UNAME_S=Linux SIGIL_UNAME_M=x86_64 SIGIL_VERSION=v0.6.2 \
+    SIGIL_BASE_URL="$1" SIGIL_URL_DRYRUN=1 sh "$SH" 2>/dev/null | head -1
+}
+assert_eq "default base = github releases" \
+  "https://github.com/Ju571nK/sigil/releases/download/v0.6.2/sigil-0.6.2-x86_64-unknown-linux-musl.tar.gz" \
+  "$(asset_url '')"
+assert_eq "SIGIL_BASE_URL overrides base" \
+  "https://srv.example:8443/v1/artifacts/sigil-0.6.2-x86_64-unknown-linux-musl.tar.gz" \
+  "$(asset_url 'https://srv.example:8443/v1/artifacts')"
+
+# SIGIL_BASE_TOKEN without SIGIL_BASE_URL must fail closed.
+if SIGIL_UNAME_S=Linux SIGIL_UNAME_M=x86_64 SIGIL_VERSION=v0.6.2 \
+   SIGIL_BASE_TOKEN=x SIGIL_URL_DRYRUN=1 sh "$SH" >/dev/null 2>&1; then
+  echo "FAIL: SIGIL_BASE_TOKEN without SIGIL_BASE_URL should exit non-zero"; fail=1
+else echo "ok: SIGIL_BASE_TOKEN requires SIGIL_BASE_URL"; fi
+
+# SIGIL_BASE_URL without SIGIL_VERSION must fail closed (no GitHub 'latest').
+if SIGIL_UNAME_S=Linux SIGIL_UNAME_M=x86_64 \
+   SIGIL_BASE_URL=https://srv.example/v1/artifacts SIGIL_URL_DRYRUN=1 sh "$SH" >/dev/null 2>&1; then
+  echo "FAIL: SIGIL_BASE_URL without SIGIL_VERSION should exit non-zero"; fail=1
+else echo "ok: SIGIL_BASE_URL requires SIGIL_VERSION"; fi
+
 exit $fail
