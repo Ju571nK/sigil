@@ -15,7 +15,6 @@
 //! (tempfile), cleaned up on every exit path (Drop).
 
 use rand_core::{OsRng, RngCore};
-use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -50,7 +49,11 @@ impl std::fmt::Display for SignError {
 /// signing never consults `$PATH` (no PATH-hijack window).
 pub fn resolve_openssl() -> Option<PathBuf> {
     // Probe candidates: explicit common locations first, then a `version` run.
-    for cand in ["/usr/bin/openssl", "/opt/homebrew/bin/openssl", "/usr/local/bin/openssl"] {
+    for cand in [
+        "/usr/bin/openssl",
+        "/opt/homebrew/bin/openssl",
+        "/usr/local/bin/openssl",
+    ] {
         let p = Path::new(cand);
         if p.is_file() {
             return Some(p.to_path_buf());
@@ -181,11 +184,15 @@ fn inspect_issued(openssl: &Path, cert_pem: &str, host_id: &str) -> Result<(), S
     }
     // No serverAuth EKU.
     if lc.contains("tls web server authentication") || lc.contains("serverauth") {
-        return Err(SignError::BadIssued("issued cert has serverAuth EKU".into()));
+        return Err(SignError::BadIssued(
+            "issued cert has serverAuth EKU".into(),
+        ));
     }
     // clientAuth EKU must be present.
     if !(lc.contains("tls web client authentication") || lc.contains("clientauth")) {
-        return Err(SignError::BadIssued("issued cert missing clientAuth EKU".into()));
+        return Err(SignError::BadIssued(
+            "issued cert missing clientAuth EKU".into(),
+        ));
     }
     // The ONLY SAN entry permitted is DNS:<host_id>. Parse the SAN line.
     if let Some(sans) = extract_san_entries(&text) {
@@ -197,9 +204,7 @@ fn inspect_issued(openssl: &Path, cert_pem: &str, host_id: &str) -> Result<(), S
                 .map(|s| s.to_lowercase())
                 .unwrap_or_default();
             if dns != host_lc {
-                return Err(SignError::BadIssued(format!(
-                    "unexpected SAN entry: {e}"
-                )));
+                return Err(SignError::BadIssued(format!("unexpected SAN entry: {e}")));
             }
         }
     }
@@ -309,7 +314,7 @@ fn extract_cn(subject: &str) -> Option<String> {
         .strip_prefix("subject=")
         .unwrap_or(subject)
         .trim();
-    body.split(|c| c == ',' || c == '/')
+    body.split([',', '/'])
         .find_map(|f| {
             let f = f.trim();
             // Accept "CN=v" and "CN = v" (split key/value on the first '=').
@@ -321,25 +326,6 @@ fn extract_cn(subject: &str) -> Option<String> {
             }
         })
         .filter(|s| !s.is_empty())
-}
-
-/// True iff `openssl` is unavailable (used by EnrollState::load to disable).
-pub fn openssl_missing(openssl: Option<&Path>) -> bool {
-    let Some(p) = openssl else {
-        return true;
-    };
-    Command::new(p)
-        .arg("version")
-        .output()
-        .map(|o| !o.status.success())
-        .unwrap_or(true)
-}
-
-/// True iff the openssl arg references a path component (defensive; the binary
-/// is resolved at boot, this just documents the invariant for argv-only use).
-#[allow(dead_code)]
-fn is_pathish(s: &OsStr) -> bool {
-    Path::new(s).components().count() > 1
 }
 
 #[cfg(test)]
@@ -356,19 +342,42 @@ mod tests {
         let crt = dir.join("ca.crt");
         let ssl = openssl();
         let st = Command::new(&ssl)
-            .args(["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out"])
+            .args([
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+            ])
             .arg(&key)
             .output()
             .unwrap();
-        assert!(st.status.success(), "genpkey: {}", String::from_utf8_lossy(&st.stderr));
+        assert!(
+            st.status.success(),
+            "genpkey: {}",
+            String::from_utf8_lossy(&st.stderr)
+        );
         let st = Command::new(&ssl)
             .args(["req", "-x509", "-new", "-key"])
             .arg(&key)
-            .args(["-days", "3650", "-subj", "/CN=test-int-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out"])
+            .args([
+                "-days",
+                "3650",
+                "-subj",
+                "/CN=test-int-ca",
+                "-addext",
+                "basicConstraints=critical,CA:TRUE",
+                "-out",
+            ])
             .arg(&crt)
             .output()
             .unwrap();
-        assert!(st.status.success(), "req x509: {}", String::from_utf8_lossy(&st.stderr));
+        assert!(
+            st.status.success(),
+            "req x509: {}",
+            String::from_utf8_lossy(&st.stderr)
+        );
         (crt, key)
     }
 
@@ -378,7 +387,14 @@ mod tests {
         let csr = dir.join("host.csr");
         let ssl = openssl();
         let st = Command::new(&ssl)
-            .args(["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out"])
+            .args([
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+            ])
             .arg(&key)
             .output()
             .unwrap();
@@ -390,7 +406,11 @@ mod tests {
             .arg(&csr)
             .output()
             .unwrap();
-        assert!(st.status.success(), "req new: {}", String::from_utf8_lossy(&st.stderr));
+        assert!(
+            st.status.success(),
+            "req new: {}",
+            String::from_utf8_lossy(&st.stderr)
+        );
         std::fs::read_to_string(&csr).unwrap()
     }
 
@@ -431,8 +451,14 @@ mod tests {
         assert_eq!(cn, "host-1");
         let cert = sign_csr(&ssl, &ca_cert, &ca_key, &csr, "host-1", 30).unwrap();
         assert!(cert.contains("BEGIN CERTIFICATE"));
-        assert!(openssl_verify(d.path(), &ca_cert, &cert), "leaf must verify vs CA");
-        assert!(cert_has_client_auth(d.path(), &cert), "must have clientAuth EKU");
+        assert!(
+            openssl_verify(d.path(), &ca_cert, &cert),
+            "leaf must verify vs CA"
+        );
+        assert!(
+            cert_has_client_auth(d.path(), &cert),
+            "must have clientAuth EKU"
+        );
     }
 
     #[test]

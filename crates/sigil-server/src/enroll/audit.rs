@@ -75,10 +75,7 @@ fn resume_chain(path: &Path) -> (u64, String) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return (0, GENESIS_PREV_HASH.to_string());
     };
-    let last = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .next_back();
+    let last = content.lines().rfind(|l| !l.trim().is_empty());
     match last.and_then(|l| serde_json::from_str::<SignedEnrollmentRecord>(l).ok()) {
         Some(s) => (s.record.seq + 1, s.hash),
         None => (0, GENESIS_PREV_HASH.to_string()),
@@ -126,8 +123,8 @@ pub fn append(
         sig: data_encoding::BASE64.encode(&sig.to_bytes()),
         pubkey_id: key.pubkey_id.clone(),
     };
-    let line = serde_json::to_string(&signed)
-        .map_err(|e| AuditAppendError::Canonical(e.to_string()))?;
+    let line =
+        serde_json::to_string(&signed).map_err(|e| AuditAppendError::Canonical(e.to_string()))?;
 
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -162,7 +159,10 @@ mod tests {
         let raw = data_encoding::BASE64.decode(signed.sig.as_bytes()).unwrap();
         let arr: [u8; 64] = raw.as_slice().try_into().unwrap();
         let sig = ed25519_dalek::Signature::from_bytes(&arr);
-        k.signing_key.verifying_key().verify(&canonical, &sig).is_ok()
+        k.signing_key
+            .verifying_key()
+            .verify(&canonical, &sig)
+            .is_ok()
     }
 
     #[test]
@@ -171,12 +171,28 @@ mod tests {
         let k = key(d.path());
         let p = d.path().join("enrollment-audit.jsonl");
         let a = append(
-            &p, &k, "host-1", "issued", "ok", "csrfp", "certfp", "0a", "2026-07-01T00:00:00Z",
+            &p,
+            &k,
+            "host-1",
+            "issued",
+            "ok",
+            "csrfp",
+            "certfp",
+            "0a",
+            "2026-07-01T00:00:00Z",
             "2026-06-23T00:00:00Z",
         )
         .unwrap();
         let b = append(
-            &p, &k, "host-2", "denied", "token_expired", "csrfp2", "", "", "",
+            &p,
+            &k,
+            "host-2",
+            "denied",
+            "token_expired",
+            "csrfp2",
+            "",
+            "",
+            "",
             "2026-06-23T00:01:00Z",
         )
         .unwrap();

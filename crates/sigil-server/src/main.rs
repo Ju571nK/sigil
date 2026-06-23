@@ -315,3 +315,26 @@ fn build_mtls(cfg: &ServerConfig) -> Result<axum_server::tls_rustls::RustlsConfi
         Arc::new(server_config),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ttl;
+    use time::Duration;
+
+    #[test]
+    fn parse_ttl_units() {
+        assert_eq!(parse_ttl("45s").unwrap(), Duration::seconds(45));
+        assert_eq!(parse_ttl("30m").unwrap(), Duration::minutes(30));
+        assert_eq!(parse_ttl("1h").unwrap(), Duration::hours(1));
+        assert_eq!(parse_ttl("2d").unwrap(), Duration::days(2));
+    }
+
+    #[test]
+    fn parse_ttl_rejects_bad_input() {
+        assert!(parse_ttl("1h30m").is_err()); // unknown unit "h30m"
+        assert!(parse_ttl("h").is_err()); // no number
+        assert!(parse_ttl("10").is_err()); // no unit
+        assert!(parse_ttl("0h").is_err()); // non-positive
+        assert!(parse_ttl("-1h").is_err()); // leading '-' is not a digit
+    }
+}

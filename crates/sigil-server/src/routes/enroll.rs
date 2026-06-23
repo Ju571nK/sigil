@@ -51,7 +51,11 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
 
     // Input validation (distinct 400, before touching any token).
     if uuid::Uuid::parse_str(&req.host_id).is_err() {
-        return err(StatusCode::BAD_REQUEST, "bad_request", "host_id must be a UUID");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "host_id must be a UUID",
+        );
     }
     if req.token.is_empty() {
         return err(StatusCode::BAD_REQUEST, "bad_request", "missing token");
@@ -80,7 +84,11 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         }
         Err(e) => {
             tracing::error!(error = %e, "enroll: csr parse failed");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "sign_failed", "csr inspect failed");
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "sign_failed",
+                "csr inspect failed",
+            );
         }
     };
     if cn != req.host_id {
@@ -96,7 +104,11 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         // I/O errors are a server fault (500); everything else is a denial.
         if let RedeemErr::Io(msg) = &e {
             tracing::error!(error = %msg, "enroll: token store read failed");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "sign_failed", "token store error");
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "sign_failed",
+                "token store error",
+            );
         }
         return enrollment_denied();
     }
@@ -108,7 +120,11 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         record_denied(&st, en, &req.host_id, reason, &csr_fp, &ts);
         if matches!(e, RedeemErr::Io(_)) {
             tracing::error!(error = %e, "enroll: token reserve write failed");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "sign_failed", "token reserve failed");
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "sign_failed",
+                "token reserve failed",
+            );
         }
         // Lost a race (used/expired since check): still a denial.
         return enrollment_denied();
@@ -127,7 +143,11 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         Err(e) => {
             tracing::error!(error = %e, host_id = %req.host_id, "enroll: signing failed (token already spent)");
             record_denied(&st, en, &req.host_id, "sign_failed", &csr_fp, &ts);
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "sign_failed", "signing failed");
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "sign_failed",
+                "signing failed",
+            );
         }
     };
     let cert_fp = audit::fingerprint(cert.as_bytes());
@@ -137,14 +157,22 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
     if let Some(p) = st.allowlist_path.as_ref() {
         if let Err(e) = crate::allowlist::add_host_atomic(p, &req.host_id) {
             tracing::error!(error = %e, "enroll: allowlist add failed (token already spent)");
-            return err(StatusCode::INTERNAL_SERVER_ERROR, "sign_failed", "allowlist update failed");
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "sign_failed",
+                "allowlist update failed",
+            );
         }
     }
 
     // 6. Audit append — FAIL-CLOSED. No key ⇒ cannot audit ⇒ 500, no cert.
     let Some(key) = st.audit_key.as_ref() else {
         tracing::error!("enroll: no audit key; refusing to issue without an audit trail");
-        return err(StatusCode::INTERNAL_SERVER_ERROR, "sign_failed", "audit unavailable");
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sign_failed",
+            "audit unavailable",
+        );
     };
     if let Err(e) = audit::append(
         &en.audit_path,
@@ -159,7 +187,11 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         &ts,
     ) {
         tracing::error!(error = %e, "enroll: audit append failed (token already spent)");
-        return err(StatusCode::INTERNAL_SERVER_ERROR, "sign_failed", "audit append failed");
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sign_failed",
+            "audit append failed",
+        );
     }
 
     let chain = std::fs::read_to_string(&en.ca_cert_path).unwrap_or_default();
@@ -219,7 +251,11 @@ fn record_denied(
 
 fn enrollment_denied() -> Response {
     // Single generic response for ALL token failures (no state leak).
-    err(StatusCode::FORBIDDEN, "enrollment_denied", "enrollment denied")
+    err(
+        StatusCode::FORBIDDEN,
+        "enrollment_denied",
+        "enrollment denied",
+    )
 }
 
 fn err(code: StatusCode, body_code: &str, message: &str) -> Response {

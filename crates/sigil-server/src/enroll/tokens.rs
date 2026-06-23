@@ -90,8 +90,8 @@ impl TokenStore {
         expires_at: OffsetDateTime,
         _now: OffsetDateTime,
     ) -> Result<String, RedeemErr> {
-        let _lock = FileLock::acquire_exclusive(path)
-            .map_err(|e| RedeemErr::Io(format!("lock: {e}")))?;
+        let _lock =
+            FileLock::acquire_exclusive(path).map_err(|e| RedeemErr::Io(format!("lock: {e}")))?;
         let plaintext = generate_token();
         let mut store = Self::read(path)?;
         store.tokens.push(TokenEntry {
@@ -113,8 +113,8 @@ impl TokenStore {
         host_id: &str,
         now: OffsetDateTime,
     ) -> Result<(), RedeemErr> {
-        let _lock = FileLock::acquire_exclusive(path)
-            .map_err(|e| RedeemErr::Io(format!("lock: {e}")))?;
+        let _lock =
+            FileLock::acquire_exclusive(path).map_err(|e| RedeemErr::Io(format!("lock: {e}")))?;
         let store = Self::read(path)?;
         let hash = hash_token(plaintext);
         let entry = store
@@ -143,8 +143,8 @@ impl TokenStore {
         host_id: &str,
         now: OffsetDateTime,
     ) -> Result<(), RedeemErr> {
-        let _lock = FileLock::acquire_exclusive(path)
-            .map_err(|e| RedeemErr::Io(format!("lock: {e}")))?;
+        let _lock =
+            FileLock::acquire_exclusive(path).map_err(|e| RedeemErr::Io(format!("lock: {e}")))?;
         let mut store = Self::read(path)?;
         let hash = hash_token(plaintext);
         let entry = store
@@ -191,8 +191,7 @@ fn write_atomic_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
-    tmp.persist(path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    tmp.persist(path).map_err(std::io::Error::other)?;
     Ok(())
 }
 

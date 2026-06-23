@@ -125,11 +125,9 @@ fn ca_cert_is_ca(openssl: &Path, cert: &Path) -> bool {
         .args(["-noout", "-text"])
         .output();
     match out {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout)
-                .to_lowercase()
-                .contains("ca:true")
-        }
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .to_lowercase()
+            .contains("ca:true"),
         _ => false,
     }
 }
@@ -248,13 +246,34 @@ mod tests {
     fn make_ca(openssl: &Path, dir: &Path) -> (PathBuf, PathBuf) {
         let key = dir.join("ca.key");
         let crt = dir.join("ca.crt");
-        run(openssl, &["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", key.to_str().unwrap()]);
         run(
             openssl,
             &[
-                "req", "-x509", "-new", "-key", key.to_str().unwrap(), "-days", "3650",
-                "-subj", "/CN=test-ca", "-addext", "basicConstraints=critical,CA:TRUE",
-                "-out", crt.to_str().unwrap(),
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+                key.to_str().unwrap(),
+            ],
+        );
+        run(
+            openssl,
+            &[
+                "req",
+                "-x509",
+                "-new",
+                "-key",
+                key.to_str().unwrap(),
+                "-days",
+                "3650",
+                "-subj",
+                "/CN=test-ca",
+                "-addext",
+                "basicConstraints=critical,CA:TRUE",
+                "-out",
+                crt.to_str().unwrap(),
             ],
         );
         set_0600(&key);
@@ -264,13 +283,34 @@ mod tests {
     fn make_leaf_cert(openssl: &Path, dir: &Path) -> (PathBuf, PathBuf) {
         let key = dir.join("leaf.key");
         let crt = dir.join("leaf.crt");
-        run(openssl, &["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", key.to_str().unwrap()]);
         run(
             openssl,
             &[
-                "req", "-x509", "-new", "-key", key.to_str().unwrap(), "-days", "3650",
-                "-subj", "/CN=leaf", "-addext", "basicConstraints=critical,CA:FALSE",
-                "-out", crt.to_str().unwrap(),
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+                key.to_str().unwrap(),
+            ],
+        );
+        run(
+            openssl,
+            &[
+                "req",
+                "-x509",
+                "-new",
+                "-key",
+                key.to_str().unwrap(),
+                "-days",
+                "3650",
+                "-subj",
+                "/CN=leaf",
+                "-addext",
+                "basicConstraints=critical,CA:FALSE",
+                "-out",
+                crt.to_str().unwrap(),
             ],
         );
         set_0600(&key);
@@ -279,7 +319,11 @@ mod tests {
 
     fn run(openssl: &Path, args: &[&str]) {
         let o = Command::new(openssl).args(args).output().unwrap();
-        assert!(o.status.success(), "openssl {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        assert!(
+            o.status.success(),
+            "openssl {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
     }
 
     #[cfg(unix)]

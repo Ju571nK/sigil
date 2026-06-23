@@ -100,8 +100,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .tempfile_in(dir)?;
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
-    tmp.persist(path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    tmp.persist(path).map_err(std::io::Error::other)?;
     Ok(())
 }
 
