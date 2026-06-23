@@ -24,6 +24,8 @@ fn state_with_token(dir: &std::path::Path, token: &str) -> Arc<AppState> {
         rule_packs_bundle_path: None,
         artifacts_dir: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     })
 }
 

@@ -67,6 +67,8 @@ async fn boot_rebuild_populates_fleet_hosts() {
         rule_packs_bundle_path: None,
         artifacts_dir: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     });
     let app = build_router(state);
     let req = Request::builder()

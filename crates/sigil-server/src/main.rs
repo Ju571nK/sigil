@@ -21,8 +21,68 @@ fn main() -> Result<()> {
                 .build()?;
             rt.block_on(run(cfg))?;
         }
+        Command::EnrollToken {
+            config,
+            host_id,
+            ttl,
+        } => {
+            let cfg = ServerConfig::load(&config)
+                .with_context(|| format!("load config {}", config.display()))?;
+            enroll_token(&cfg, &host_id, &ttl)?;
+        }
     }
     Ok(())
+}
+
+/// #184 — `sigil-server enroll-token`: issue one single-use, per-host token.
+/// Prints the plaintext to stdout ONCE; only the hash is persisted.
+fn enroll_token(cfg: &ServerConfig, host_id: &str, ttl: &str) -> Result<()> {
+    use sigil_server::enroll::tokens::TokenStore;
+
+    let tokens_path = cfg
+        .enroll_tokens_path
+        .as_ref()
+        .context("enroll_tokens_path not set in config — enrollment is not configured")?;
+    // Validate host_id is a UUID up front (matches the server's check).
+    anyhow::ensure!(
+        uuid::Uuid::parse_str(host_id).is_ok(),
+        "host_id must be a valid UUID"
+    );
+    let ttl = parse_ttl(ttl).with_context(|| format!("invalid --ttl {ttl:?}"))?;
+    let now = time::OffsetDateTime::now_utc();
+    let expires_at = now + ttl;
+    let plaintext = TokenStore::issue(tokens_path, host_id, expires_at, now)
+        .map_err(|e| anyhow::anyhow!("issue token: {e}"))?;
+    // The plaintext is shown exactly once; the store holds only its hash.
+    println!("{plaintext}");
+    eprintln!(
+        "enrollment token issued for host_id={host_id}, expires_at={} (store: {})",
+        expires_at
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default(),
+        tokens_path.display()
+    );
+    eprintln!("note: this token is shown only once; only its blake3 hash is stored.");
+    Ok(())
+}
+
+/// Parse a simple TTL like `1h`, `30m`, `45s`, `2d`. No unit ⇒ error.
+fn parse_ttl(s: &str) -> Result<time::Duration> {
+    let s = s.trim();
+    let (num, unit) = s.split_at(
+        s.find(|c: char| !c.is_ascii_digit())
+            .context("ttl must be <number><unit>, e.g. 1h")?,
+    );
+    let n: i64 = num.parse().context("ttl number")?;
+    anyhow::ensure!(n > 0, "ttl must be positive");
+    let d = match unit {
+        "s" => time::Duration::seconds(n),
+        "m" => time::Duration::minutes(n),
+        "h" => time::Duration::hours(n),
+        "d" => time::Duration::days(n),
+        other => anyhow::bail!("unknown ttl unit {other:?}; use s/m/h/d"),
+    };
+    Ok(d)
 }
 
 fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
@@ -65,6 +125,21 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         None => tracing::warn!("audit signing key unavailable; license audit log disabled"),
     }
 
+    // #184 — enrollment state. Off unless cert+key+tokens AND host_allowlist are
+    // all configured AND boot validation passes (see EnrollState::load).
+    let enroll_audit_path = audit_dir.join("enrollment-audit.jsonl");
+    let enroll = sigil_server::enroll::EnrollState::load(
+        cfg.enroll_ca_cert_path.as_deref(),
+        cfg.enroll_ca_key_path.as_deref(),
+        cfg.enroll_tokens_path.as_deref(),
+        cfg.host_allowlist_path.is_some(),
+        cfg.enroll_cert_days,
+        enroll_audit_path,
+    );
+    if enroll.is_some() {
+        tracing::info!("enrollment endpoint enabled (POST /v1/enroll)");
+    }
+
     Ok(Arc::new(AppState {
         events_out_dir: cfg.events_out_dir.clone(),
         policy_bundle_path: cfg.policy_bundle_path.clone(),
@@ -79,6 +154,8 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         active_window_days,
         audit_key,
         audit_head: Mutex::new(None),
+        allowlist_path: cfg.host_allowlist_path.clone(),
+        enroll,
     }))
 }
 

@@ -62,6 +62,8 @@ async fn ingested_host_meta_appears_in_detail_block() {
         active_window_days: 7,
         audit_key: None,
         audit_head: std::sync::Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     });
     let app = build_router(state);
     let req = Request::builder()

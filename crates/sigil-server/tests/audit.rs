@@ -35,6 +35,8 @@ async fn meta_reports_audit_head_when_signing_enabled() {
             sig: "sigval".into(),
             pubkey_id: "sigil-audit-x".into(),
         })),
+        allowlist_path: None,
+        enroll: None,
     });
 
     let app = build_router(state);
@@ -82,6 +84,8 @@ async fn meta_reports_null_audit_head_when_disabled() {
         active_window_days: 7,
         audit_key: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     });
 
     let app = build_router(state);

@@ -31,6 +31,8 @@ fn state(scratch: &Path, artifacts_dir: Option<PathBuf>, token: Option<&str>) ->
         active_window_days: 7,
         audit_key: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     })
 }
 

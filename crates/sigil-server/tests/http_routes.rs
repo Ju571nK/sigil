@@ -34,6 +34,8 @@ fn state_in_with_rule_packs(
         active_window_days: 7,
         audit_key: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     })
 }
 

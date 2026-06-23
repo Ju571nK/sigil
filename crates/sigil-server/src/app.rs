@@ -42,6 +42,12 @@ pub struct AppState {
     pub audit_key: Option<crate::audit_key::AuditKey>,
     /// Latest signed audit-chain head, updated by the audit task; read by /v1/meta.
     pub audit_head: Mutex<Option<sigil_core::audit::AuditHead>>,
+    /// Path to the optional `hosts.json` allowlist file (for atomic add on
+    /// enroll). `None` ⇒ no on-disk allowlist (and enrollment is disabled). #184
+    pub allowlist_path: Option<PathBuf>,
+    /// #184 — enrollment state (intermediate CA + tokens + mint mutex). `None` ⇒
+    /// every `/v1/enroll*` route 404s (feature off).
+    pub enroll: Option<crate::enroll::EnrollState>,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -116,6 +122,10 @@ pub fn build_router(state: SharedState) -> Router {
             get(crate::routes::artifacts::get_artifact_by_name)
                 .route_layer(from_fn_with_state(token.clone(), require_bearer)),
         )
+        // #184 — B-mint enrollment. NO read-bearer layer: the enroll token in
+        // the body is the credential; mTLS still gates at the TLS layer. Feature
+        // off (enroll == None) ⇒ handler returns 404.
+        .route("/v1/enroll", post(crate::routes::enroll::post_enroll))
         .with_state(state)
 }
 

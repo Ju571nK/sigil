@@ -206,6 +206,53 @@ fn inspect_issued(openssl: &Path, cert_pem: &str, host_id: &str) -> Result<(), S
     Ok(())
 }
 
+/// Derive (serial_hex, not_after_rfc-ish) from the ISSUED cert by re-parsing it
+/// with openssl (`-serial`, `-enddate`). Best-effort: empty strings on failure
+/// (the cert was already validated by `sign_csr`'s inspection). Values are taken
+/// from the issued cert, never assumed.
+pub fn issued_meta(openssl: &Path, cert_pem: &str) -> (String, String) {
+    let Ok(dir) = private_tempdir() else {
+        return (String::new(), String::new());
+    };
+    let p = dir.path().join("issued.crt");
+    if write_0600(&p, cert_pem.as_bytes()).is_err() {
+        return (String::new(), String::new());
+    }
+    let serial = openssl_cmd(openssl)
+        .arg("x509")
+        .arg("-in")
+        .arg(&p)
+        .args(["-noout", "-serial"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .strip_prefix("serial=")
+                .unwrap_or("")
+                .to_string()
+        })
+        .unwrap_or_default();
+    let not_after = openssl_cmd(openssl)
+        .arg("x509")
+        .arg("-in")
+        .arg(&p)
+        .args(["-noout", "-enddate"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .strip_prefix("notAfter=")
+                .unwrap_or("")
+                .to_string()
+        })
+        .unwrap_or_default();
+    (serial, not_after)
+}
+
 /// Parse the `X509v3 Subject Alternative Name:` value line into entries.
 fn extract_san_entries(text: &str) -> Option<Vec<String>> {
     let mut lines = text.lines();
