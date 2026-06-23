@@ -192,7 +192,18 @@ fn write_atomic_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
     tmp.persist(path).map_err(std::io::Error::other)?;
+    // #184 P2: fsync the PARENT directory so the rename is durable — a crash
+    // can't lose the rename and resurrect a used token.
+    fsync_parent_dir(dir);
     Ok(())
+}
+
+/// Best-effort fsync of a directory entry so a preceding rename is durable.
+/// Directory fsync is a no-op / unsupported on some platforms; ignore errors.
+fn fsync_parent_dir(dir: &Path) {
+    if let Ok(f) = std::fs::File::open(dir) {
+        let _ = f.sync_all();
+    }
 }
 
 #[cfg(test)]

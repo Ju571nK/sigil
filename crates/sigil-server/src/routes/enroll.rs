@@ -7,14 +7,17 @@
 //!
 //! COMMIT ORDER (codex-hardened, prevents double-mint):
 //!   lock mint Mutex
+//!   → recompute now/ts (a token that expired while queued is rejected) (fix G)
 //!   → validate (UUID host_id, CSR size/PEM, CSR CN == host_id)
 //!   → RESERVE the token (durably stamp used_at + write) BEFORE signing
 //!   → sign (openssl, fixed profile, random serial, post-sign inspection)
-//!   → allowlist add (atomic file)
-//!   → audit append (signed, fsync, FAIL-CLOSED)
+//!   → audit append (signed, fsync, FAIL-CLOSED) (fix C: BEFORE the durable grant)
+//!   → allowlist add (atomic file) + in-memory allowlist insert (fix F)
 //!   → 200 with cert.
 //! Any failure AFTER reserve ⇒ 500 and NO cert (token is spent; operator
-//! re-issues). The token is never signed against twice.
+//! re-issues). The token is never signed against twice. The signed audit append
+//! happens BEFORE the durable allowlist grant so a failed audit can never leave
+//! a host allowlisted without an issuance record (both still ⇒ 500 + no cert).
 //!
 //! External error generalization: every token failure (expired/used/mismatch/
 //! not-found) returns a single `403 {"error":{"code":"enrollment_denied"}}`.
@@ -64,10 +67,6 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         return err(StatusCode::BAD_REQUEST, "bad_request", "csr too large");
     }
 
-    let now = time::OffsetDateTime::now_utc();
-    let ts = now
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_default();
     let csr_fp = audit::fingerprint(req.csr_pem.as_bytes());
 
     // Serialize the entire mint critical section across requests.
@@ -75,6 +74,13 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         Ok(g) => g,
         Err(p) => p.into_inner(), // poisoned: proceed (no shared mutable state held)
     };
+
+    // fix G: capture `now` AFTER acquiring the mint lock so a token that expired
+    // while queued behind the lock is correctly rejected.
+    let now = time::OffsetDateTime::now_utc();
+    let ts = now
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
 
     // 1. CSR sanity: parse + verify the CSR, extract CN, require CN == host_id.
     let cn = match sign::csr_cn(&en.openssl_path, &req.csr_pem) {
@@ -153,19 +159,9 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
     let cert_fp = audit::fingerprint(cert.as_bytes());
     let (serial, not_after) = sign::issued_meta(&en.openssl_path, &cert);
 
-    // 5. Allowlist add (atomic file). Required — failure ⇒ 500, no cert.
-    if let Some(p) = st.allowlist_path.as_ref() {
-        if let Err(e) = crate::allowlist::add_host_atomic(p, &req.host_id) {
-            tracing::error!(error = %e, "enroll: allowlist add failed (token already spent)");
-            return err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "sign_failed",
-                "allowlist update failed",
-            );
-        }
-    }
-
-    // 6. Audit append — FAIL-CLOSED. No key ⇒ cannot audit ⇒ 500, no cert.
+    // 5. Audit append — FAIL-CLOSED, and BEFORE the durable allowlist grant
+    //    (fix C). No key ⇒ cannot audit ⇒ 500, no cert. A failed audit must
+    //    never leave a host durably allowlisted without an issuance record.
     let Some(key) = st.audit_key.as_ref() else {
         tracing::error!("enroll: no audit key; refusing to issue without an audit trail");
         return err(
@@ -192,6 +188,26 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
             "sign_failed",
             "audit append failed",
         );
+    }
+
+    // 6. Allowlist add (atomic file). Required — failure ⇒ 500, no cert. Runs
+    //    AFTER the audit append so the issuance is always recorded first.
+    if let Some(p) = st.allowlist_path.as_ref() {
+        if let Err(e) = crate::allowlist::add_host_atomic(p, &req.host_id) {
+            tracing::error!(error = %e, "enroll: allowlist add failed (token already spent)");
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "sign_failed",
+                "allowlist update failed",
+            );
+        }
+        // fix F: reflect the file add in the in-memory allowlist so the newly
+        // enrolled host is accepted on POST /v1/events without a restart. If the
+        // in-memory set is permit-all (None) we leave it as-is (still permits).
+        let mut guard = st.allowlist.write();
+        if let Some(set) = guard.as_mut() {
+            set.insert(req.host_id.clone());
+        }
     }
 
     let chain = std::fs::read_to_string(&en.ca_cert_path).unwrap_or_default();

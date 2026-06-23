@@ -194,19 +194,25 @@ fn inspect_issued(openssl: &Path, cert_pem: &str, host_id: &str) -> Result<(), S
             "issued cert missing clientAuth EKU".into(),
         ));
     }
-    // The ONLY SAN entry permitted is DNS:<host_id>. Parse the SAN line.
-    if let Some(sans) = extract_san_entries(&text) {
-        let host_lc = host_id.to_lowercase();
-        for entry in &sans {
-            let e = entry.trim();
-            let dns = e
-                .strip_prefix("DNS:")
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-            if dns != host_lc {
-                return Err(SignError::BadIssued(format!("unexpected SAN entry: {e}")));
-            }
-        }
+    // fix D: a SAN section MUST be present and contain EXACTLY one entry,
+    // `DNS:<host_id>` (case-insensitive). Modern verifiers key on the SAN, so a
+    // no-SAN or multi-SAN cert is rejected fail-closed.
+    let sans = extract_san_entries(&text)
+        .ok_or_else(|| SignError::BadIssued("issued cert has no SAN".into()))?;
+    if sans.len() != 1 {
+        return Err(SignError::BadIssued(format!(
+            "issued cert SAN must have exactly one entry, got {}",
+            sans.len()
+        )));
+    }
+    let host_lc = host_id.to_lowercase();
+    let e = sans[0].trim();
+    let dns = e
+        .strip_prefix("DNS:")
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    if dns != host_lc {
+        return Err(SignError::BadIssued(format!("unexpected SAN entry: {e}")));
     }
     Ok(())
 }
@@ -258,17 +264,52 @@ pub fn issued_meta(openssl: &Path, cert_pem: &str) -> (String, String) {
     (serial, not_after)
 }
 
-/// Parse the `X509v3 Subject Alternative Name:` value line into entries.
+/// Parse the `X509v3 Subject Alternative Name:` value into ALL entries.
+///
+/// The value follows the header on one or more indented continuation lines and
+/// may contain multiple comma-separated entries (e.g. `DNS:a, DNS:b`). We collect
+/// every continuation line (more-indented than the header) until the next
+/// extension header / less-indented line, then split on commas. Returning only
+/// the first line (the old bug) let a wrapped/extra entry like `DNS:evil` slip
+/// past the post-sign SAN check. Returns `None` only if no SAN header is found.
 fn extract_san_entries(text: &str) -> Option<Vec<String>> {
-    let mut lines = text.lines();
-    while let Some(l) = lines.next() {
-        if l.contains("Subject Alternative Name") {
-            // The value is on the following (indented) line.
-            let val = lines.next()?;
-            return Some(val.split(',').map(|s| s.trim().to_string()).collect());
+    let lines: Vec<&str> = text.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].contains("Subject Alternative Name") {
+            let header_indent = indent_of(lines[i]);
+            let mut value = String::new();
+            let mut j = i + 1;
+            while j < lines.len() {
+                let line = lines[j];
+                // A blank or less/equally-indented line ends the SAN value
+                // (next extension or section). Continuation lines are strictly
+                // more indented than the header.
+                if line.trim().is_empty() || indent_of(line) <= header_indent {
+                    break;
+                }
+                if !value.is_empty() {
+                    value.push(',');
+                }
+                value.push_str(line.trim());
+                j += 1;
+            }
+            return Some(
+                value
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+            );
         }
+        i += 1;
     }
     None
+}
+
+/// Number of leading whitespace chars (openssl indents extension values).
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
 }
 
 /// 128-bit random serial as lowercase hex (no leading `0x`). Top bit cleared so
@@ -487,6 +528,173 @@ mod tests {
         let first = u8::from_str_radix(&s[0..2], 16).unwrap();
         assert!(first & 0x80 == 0, "top bit cleared (positive)");
         assert!(first != 0, "high byte non-zero");
+    }
+
+    // fix E: a single-line, single-entry SAN parses to exactly one entry.
+    #[test]
+    fn extract_san_single_entry() {
+        let text = "        X509v3 extensions:\n\
+                    \x20           X509v3 Subject Alternative Name: \n\
+                    \x20               DNS:host-1\n\
+                    \x20       Signature Algorithm: sha256WithRSAEncryption\n";
+        let sans = extract_san_entries(text).expect("SAN present");
+        assert_eq!(sans, vec!["DNS:host-1".to_string()]);
+    }
+
+    // fix E: two comma-separated entries on one value line are BOTH parsed, so
+    // the fix-D check sees count != 1 and rejects.
+    #[test]
+    fn extract_san_multi_entry_same_line() {
+        let text = "            X509v3 Subject Alternative Name: \n\
+                    \x20               DNS:host-1, DNS:evil\n\
+                    \x20       Signature Algorithm: x\n";
+        let sans = extract_san_entries(text).expect("SAN present");
+        assert_eq!(sans, vec!["DNS:host-1".to_string(), "DNS:evil".to_string()]);
+    }
+
+    // fix E: a second entry WRAPPED onto a continuation line is also collected.
+    #[test]
+    fn extract_san_multi_entry_wrapped() {
+        let text = "            X509v3 Subject Alternative Name: \n\
+                    \x20               DNS:host-1,\n\
+                    \x20               DNS:evil\n\
+                    \x20       Signature Algorithm: x\n";
+        let sans = extract_san_entries(text).expect("SAN present");
+        assert_eq!(sans, vec!["DNS:host-1".to_string(), "DNS:evil".to_string()]);
+    }
+
+    #[test]
+    fn extract_san_absent_is_none() {
+        let text = "        X509v3 extensions:\n\
+                    \x20           X509v3 Basic Constraints: critical\n\
+                    \x20               CA:FALSE\n";
+        assert!(extract_san_entries(text).is_none());
+    }
+
+    // fix D + E end-to-end: an issued cert carrying TWO SANs (DNS:host_id +
+    // DNS:evil) must be rejected, not pass because the first entry matched.
+    #[test]
+    fn inspect_issued_rejects_multi_san() {
+        let d = tempfile::tempdir().unwrap();
+        let ssl = openssl();
+        let (ca_cert, ca_key) = make_ca(d.path());
+        // Sign a cert with a hostile two-entry SAN using a raw ext file (bypasses
+        // sign_csr's pinned single-SAN profile to simulate a CA that emitted two).
+        let key = d.path().join("h.key");
+        let csr = d.path().join("h.csr");
+        let ext = d.path().join("h.ext");
+        let crt = d.path().join("h.crt");
+        Command::new(&ssl)
+            .args([
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+            ])
+            .arg(&key)
+            .output()
+            .unwrap();
+        Command::new(&ssl)
+            .args(["req", "-new", "-key"])
+            .arg(&key)
+            .args(["-subj", "/CN=host-1", "-out"])
+            .arg(&csr)
+            .output()
+            .unwrap();
+        std::fs::write(
+            &ext,
+            "basicConstraints=critical,CA:FALSE\n\
+             extendedKeyUsage=clientAuth\n\
+             subjectAltName=DNS:host-1,DNS:evil\n",
+        )
+        .unwrap();
+        let st = Command::new(&ssl)
+            .args(["x509", "-req", "-in"])
+            .arg(&csr)
+            .arg("-CA")
+            .arg(&ca_cert)
+            .arg("-CAkey")
+            .arg(&ca_key)
+            .args(["-set_serial", "0x42", "-days", "30", "-extfile"])
+            .arg(&ext)
+            .arg("-out")
+            .arg(&crt)
+            .output()
+            .unwrap();
+        assert!(
+            st.status.success(),
+            "{}",
+            String::from_utf8_lossy(&st.stderr)
+        );
+        let cert = std::fs::read_to_string(&crt).unwrap();
+        let r = inspect_issued(&ssl, &cert, "host-1");
+        assert!(
+            matches!(r, Err(SignError::BadIssued(_))),
+            "multi-SAN cert must be rejected, got {r:?}"
+        );
+    }
+
+    // fix D: a cert with NO SAN must be rejected (modern verifiers require it).
+    #[test]
+    fn inspect_issued_rejects_no_san() {
+        let d = tempfile::tempdir().unwrap();
+        let ssl = openssl();
+        let (ca_cert, ca_key) = make_ca(d.path());
+        let key = d.path().join("n.key");
+        let csr = d.path().join("n.csr");
+        let ext = d.path().join("n.ext");
+        let crt = d.path().join("n.crt");
+        Command::new(&ssl)
+            .args([
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+            ])
+            .arg(&key)
+            .output()
+            .unwrap();
+        Command::new(&ssl)
+            .args(["req", "-new", "-key"])
+            .arg(&key)
+            .args(["-subj", "/CN=host-1", "-out"])
+            .arg(&csr)
+            .output()
+            .unwrap();
+        // No subjectAltName in the ext file at all.
+        std::fs::write(
+            &ext,
+            "basicConstraints=critical,CA:FALSE\nextendedKeyUsage=clientAuth\n",
+        )
+        .unwrap();
+        let st = Command::new(&ssl)
+            .args(["x509", "-req", "-in"])
+            .arg(&csr)
+            .arg("-CA")
+            .arg(&ca_cert)
+            .arg("-CAkey")
+            .arg(&ca_key)
+            .args(["-set_serial", "0x43", "-days", "30", "-extfile"])
+            .arg(&ext)
+            .arg("-out")
+            .arg(&crt)
+            .output()
+            .unwrap();
+        assert!(
+            st.status.success(),
+            "{}",
+            String::from_utf8_lossy(&st.stderr)
+        );
+        let cert = std::fs::read_to_string(&crt).unwrap();
+        let r = inspect_issued(&ssl, &cert, "host-1");
+        assert!(
+            matches!(r, Err(SignError::BadIssued(_))),
+            "no-SAN cert must be rejected, got {r:?}"
+        );
     }
 
     #[test]

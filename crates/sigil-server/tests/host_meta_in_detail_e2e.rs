@@ -54,7 +54,7 @@ async fn ingested_host_meta_appears_in_detail_block() {
         rule_packs_bundle_path: None,
         artifacts_dir: None,
         high_water_path: dir.path().join(".hw.json"),
-        allowlist: None::<HashSet<String>>,
+        allowlist: parking_lot::RwLock::new(None::<HashSet<String>>),
         high_water: Mutex::new(HighWater::default()),
         fleet_index: idx,
         read_token: ReadToken(Some("tok".into())),

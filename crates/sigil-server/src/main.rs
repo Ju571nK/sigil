@@ -132,7 +132,8 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         cfg.enroll_ca_cert_path.as_deref(),
         cfg.enroll_ca_key_path.as_deref(),
         cfg.enroll_tokens_path.as_deref(),
-        cfg.host_allowlist_path.is_some(),
+        cfg.host_allowlist_path.as_deref(),
+        cfg.mtls_enabled(),
         cfg.enroll_cert_days,
         enroll_audit_path,
     );
@@ -146,7 +147,7 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         rule_packs_bundle_path: cfg.rule_packs_bundle_path.clone(),
         artifacts_dir: cfg.artifacts_dir.clone(),
         high_water_path: cfg.high_water_path(),
-        allowlist,
+        allowlist: parking_lot::RwLock::new(allowlist),
         high_water: Mutex::new(high_water),
         fleet_index,
         read_token,

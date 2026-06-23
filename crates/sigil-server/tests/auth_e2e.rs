@@ -14,7 +14,7 @@ fn state(dir: &std::path::Path, token: ReadToken) -> Arc<AppState> {
         events_out_dir: dir.to_path_buf(),
         policy_bundle_path: dir.join("p.json"),
         high_water_path: dir.join(".hw.json"),
-        allowlist: None::<HashSet<String>>,
+        allowlist: parking_lot::RwLock::new(None::<HashSet<String>>),
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: token,

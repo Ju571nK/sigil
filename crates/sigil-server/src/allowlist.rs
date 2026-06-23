@@ -101,6 +101,11 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
     tmp.persist(path).map_err(std::io::Error::other)?;
+    // #184 P2: fsync the PARENT directory so the rename survives a crash.
+    // Directory fsync is best-effort (unsupported on some platforms) — ignore.
+    if let Ok(f) = std::fs::File::open(dir) {
+        let _ = f.sync_all();
+    }
     Ok(())
 }
 

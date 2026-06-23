@@ -25,8 +25,10 @@ pub struct AppState {
     /// 404s (feature off). #182
     pub artifacts_dir: Option<std::path::PathBuf>,
     pub high_water_path: PathBuf,
-    /// `None` ⇒ every authenticated host is accepted.
-    pub allowlist: Option<HashSet<String>>,
+    /// `None` ⇒ every authenticated host is accepted. Wrapped in a `RwLock` so
+    /// the enroll handler can insert a newly enrolled host at runtime (#184 fix F)
+    /// without a server restart. The events hot path takes a cheap read-lock.
+    pub allowlist: parking_lot::RwLock<Option<HashSet<String>>>,
     /// host_id → highest persisted sequence. Guards the JSONL append + dedup.
     pub high_water: Mutex<HighWater>,
     /// Phase 3b.4 — in-memory per-host summary index. Updated synchronously

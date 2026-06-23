@@ -26,7 +26,7 @@ fn state_in_with_rule_packs(
         rule_packs_bundle_path,
         artifacts_dir: None,
         high_water_path: dir.join(".high-water.json"),
-        allowlist,
+        allowlist: parking_lot::RwLock::new(allowlist),
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: ReadToken(None),

@@ -127,17 +127,23 @@ fn cert_text(dir: &Path, leaf_pem: &str) -> String {
 }
 
 /// Build an AppState with enrollment enabled (or not). `enroll` toggles whether
-/// EnrollState is configured. Uses a fresh audit key in `scratch`.
+/// EnrollState is configured. Uses a fresh audit key in `scratch`. A restrictive
+/// (empty) allowlist file is written so EnrollState::load's fix-B gate passes,
+/// and the in-memory allowlist starts as the same restrictive `Some(set)`.
 fn state(scratch: &Path, with_enroll: bool) -> Arc<AppState> {
     let tokens_path = scratch.join("tokens.json");
     let allowlist_path = scratch.join("hosts.json");
+    // restrictive (empty) on-disk allowlist — required when enrollment is on.
+    std::fs::write(&allowlist_path, r#"{"hosts":[]}"#).unwrap();
+    let in_mem_allowlist = sigil_server::allowlist::load(Some(&allowlist_path)).unwrap();
     let enroll = if with_enroll {
         let (cert, key) = make_ca(scratch);
         EnrollState::load(
             Some(&cert),
             Some(&key),
             Some(&tokens_path),
-            true,
+            Some(&allowlist_path),
+            true, // mtls on (fix A) — tests drive the handler directly
             Some(30),
             scratch.join("enrollment-audit.jsonl"),
         )
@@ -151,7 +157,7 @@ fn state(scratch: &Path, with_enroll: bool) -> Arc<AppState> {
         rule_packs_bundle_path: None,
         artifacts_dir: None,
         high_water_path: scratch.join(".high-water.json"),
-        allowlist: None,
+        allowlist: parking_lot::RwLock::new(in_mem_allowlist),
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: ReadToken(None),
@@ -346,4 +352,71 @@ async fn unknown_token_is_denied_403() {
     let (status, body) = post_enroll(&app, "totally-bogus-token", HOST, &csr).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"]["code"], "enrollment_denied");
+}
+
+/// fix F: after a successful enroll the in-memory allowlist permits the host
+/// WITHOUT a server restart. The in-memory set starts restrictive (empty), so
+/// `permits` would be false before enrollment and must be true after.
+#[tokio::test]
+async fn enroll_updates_in_memory_allowlist() {
+    use sigil_server::allowlist::permits;
+    let dir = tempfile::tempdir().unwrap();
+    let st = state(dir.path(), true);
+    // before: restrictive empty set ⇒ host is NOT permitted.
+    assert!(
+        !permits(&st.allowlist.read(), HOST),
+        "host must be gated out before enroll"
+    );
+    let tokens_path = st.enroll.as_ref().unwrap().tokens_path.clone();
+    let now = OffsetDateTime::now_utc();
+    let token = TokenStore::issue(&tokens_path, HOST, now + Duration::hours(1), now).unwrap();
+    let csr = make_csr(dir.path(), HOST);
+
+    // Keep a handle to state to inspect the in-memory set after the call.
+    let st_for_check = st.clone();
+    let app = build_router(st);
+    let (status, body) = post_enroll(&app, &token, HOST, &csr).await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
+    // after: in-memory set now permits the host (no restart needed).
+    assert!(
+        permits(&st_for_check.allowlist.read(), HOST),
+        "host must be permitted in-memory right after enroll"
+    );
+}
+
+/// fix C: with NO audit key the audit append fails-closed (500) and — because
+/// the audit append now runs BEFORE the durable allowlist grant — the host must
+/// NOT be left allowlisted (neither on disk nor in memory).
+#[tokio::test]
+async fn audit_failure_does_not_grant_allowlist() {
+    use sigil_server::allowlist::permits;
+    let dir = tempfile::tempdir().unwrap();
+    let mut st = state(dir.path(), true);
+    // Drop the audit key so the issued-audit append fails closed.
+    Arc::get_mut(&mut st).unwrap().audit_key = None;
+    let allowlist_path = st.allowlist_path.clone().unwrap();
+    let tokens_path = st.enroll.as_ref().unwrap().tokens_path.clone();
+    let now = OffsetDateTime::now_utc();
+    let token = TokenStore::issue(&tokens_path, HOST, now + Duration::hours(1), now).unwrap();
+    let csr = make_csr(dir.path(), HOST);
+
+    let st_for_check = st.clone();
+    let app = build_router(st);
+    let (status, body) = post_enroll(&app, &token, HOST, &csr).await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "audit-key-absent must 500, body={body}"
+    );
+    // The durable allowlist grant must NOT have happened (audit ran first).
+    let hosts = std::fs::read_to_string(&allowlist_path).unwrap();
+    assert!(
+        !hosts.contains(HOST),
+        "host must NOT be allowlisted on disk when audit failed: {hosts}"
+    );
+    assert!(
+        !permits(&st_for_check.allowlist.read(), HOST),
+        "host must NOT be permitted in-memory when audit failed"
+    );
 }
