@@ -344,17 +344,22 @@ fn write_0600(p: &Path, b: &[u8]) -> Result<(), SignError> {
     f.flush().map_err(SignError::Io)
 }
 
-fn extract_cn(subject: &str) -> Option<String> {
-    // openssl subject lines vary by version:
+fn extract_cn(output: &str) -> Option<String> {
+    // `openssl req -noout -subject -verify` mixes the verify status message
+    // with the subject line, and which STREAM the verify message lands on is
+    // version-dependent: OpenSSL 3.5.1 prints "Certificate request
+    // self-signature verify OK" to STDOUT (ahead of the subject), while other
+    // builds send it to stderr. So scan all lines for the `subject=` line
+    // specifically rather than assuming stdout begins with it.
+    // Subject formats also vary:
     //   "subject=/C=US/CN=host-1"   (legacy, slash-separated)
-    //   "subject=CN=host-1"         (3.x, comma-separated, no leading slash)
+    //   "subject=CN=host-1"         (3.x, no leading slash)
     //   "subject=CN = host-1"       (3.x with spaces)
-    // Strip a leading "subject=" once, then split on `,`/`/` and match a CN field.
-    let body = subject
-        .trim()
-        .strip_prefix("subject=")
-        .unwrap_or(subject)
-        .trim();
+    let line = output
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("subject="))?;
+    let body = line.strip_prefix("subject=").unwrap_or(line).trim();
     body.split([',', '/'])
         .find_map(|f| {
             let f = f.trim();
@@ -706,5 +711,15 @@ mod tests {
             Some("host-3")
         );
         assert_eq!(extract_cn("subject=O=acme"), None);
+        // OpenSSL 3.5.1 (Rocky 9): the `-verify` status prints to STDOUT ahead
+        // of the subject line — the subject= line must still be found. Caught by
+        // real-hardware enroll e2e.
+        assert_eq!(
+            extract_cn(
+                "Certificate request self-signature verify OK\nsubject=CN=597ec667-b843-47dc-af1a-276dc547283e\n"
+            )
+            .as_deref(),
+            Some("597ec667-b843-47dc-af1a-276dc547283e")
+        );
     }
 }
