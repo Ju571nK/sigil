@@ -153,6 +153,70 @@ sender's `server_ca_path` / `client_cert_path` / `client_key_path`). Keep
 > the cert SAN only has a DNS name, the TLS handshake fails. Put the literal
 > `IP:` in the SAN, or give agents a resolvable DNS name.
 
+### 3.1 Automated enrollment (B-mint) — optional
+
+Instead of hand-running `openssl` per host (§3 step 3), the server can mint a
+host's client cert from a CSR, gated by a single-use, TTL, per-host token. A PMS
+(Ansible/Intune) — already enrolled — calls the endpoint on a new host's behalf
+and stages the bundle. Enrollment is **off** unless configured, and the server
+**refuses to enable it without mTLS** (no cleartext cert minting).
+
+**1. Issue an intermediate CA from your offline root** (the server only ever
+holds the intermediate; the root key stays offline):
+
+```sh
+openssl req -new -newkey rsa:2048 -nodes -keyout int.key -out int.csr -subj "/CN=sigil-enroll-intermediate"
+openssl x509 -req -in int.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 1825 \
+  -extfile <(printf "basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign") -out int.crt
+sudo install -m600 int.key /etc/sigil/enroll-int.key
+sudo install -m644 int.crt /etc/sigil/enroll-int.crt
+```
+
+**2. Configure `server.yaml`** (requires a configured `host_allowlist_path` and
+the mTLS triple — both are enforced at boot, else enrollment stays off):
+
+```yaml
+enroll_ca_cert_path: "/etc/sigil/enroll-int.crt"
+enroll_ca_key_path:  "/etc/sigil/enroll-int.key"   # 0600 or enrollment disables
+enroll_tokens_path:  "/var/lib/sigil-server/enroll-tokens.json"
+enroll_cert_days: 30                                # short — re-enroll is the revocation story
+host_allowlist_path: "/etc/sigil/host-allowlist.json"   # REQUIRED (restrictive set)
+```
+
+The server validates the intermediate at boot (CA:TRUE, key⇄cert match, 0600).
+
+**3. Issue a token** (server host; prints the plaintext once — only its hash is
+stored):
+
+```sh
+sigil-server enroll-token --config /etc/sigil/server.yaml --host-id <agent-host_id> --ttl 1h
+#  → enrollment token: <opaque> (give this to the PMS for that host)
+```
+
+**4. Enroll** (the PMS generates the host keypair + CSR with `CN=<host_id>` and
+calls the endpoint over mTLS):
+
+```sh
+openssl req -new -newkey rsa:2048 -nodes -keyout host.key -out host.csr -subj "/CN=<host_id>"
+curl --cert pms.crt --key pms.key --cacert ca.crt \
+  -X POST https://sigil.example.com:8443/v1/enroll \
+  -H 'content-type: application/json' \
+  -d "{\"token\":\"<opaque>\",\"host_id\":\"<host_id>\",\"csr_pem\":\"$(awk '{printf "%s\\n",$0}' host.csr)\"}"
+#  → {"client_cert_pem":"...", "ca_chain_pem":"...", "host_id":"...", "not_after":"...", "serial":"..."}
+```
+
+The server signs with a **fixed client-cert profile** (`CA:FALSE`, `clientAuth`,
+`subjectAltName=DNS:<host_id>`), re-inspects the issued cert, adds the host to
+the allowlist, and writes a signed line to `enrollment-audit.jsonl`. The host
+installs `client_cert_pem` + its own `host.key` + `ca_chain_pem` as the sender's
+mTLS material (§7). Tokens are single-use; a failed mint spends the token (issue
+a fresh one). Every token failure returns a generic `403 enrollment_denied`.
+
+> Enrollment **mints** certs (Part B). Read-only **artifact** serving (Part A,
+> §5.1) is separate. Per-host cert↔host_id binding, CRL/OCSP revocation, and
+> on-host keygen attestation are follow-ups; short cert lifetimes are the MVP's
+> revocation substitute.
+
 ---
 
 ## 4. Signed policy bundle
