@@ -21,6 +21,7 @@ pub mod auth;
 pub mod boot_rebuild;
 pub mod cli;
 pub mod config;
+pub mod enroll;
 pub mod events_route;
 pub mod fleet_index;
 pub mod fleet_index_update;

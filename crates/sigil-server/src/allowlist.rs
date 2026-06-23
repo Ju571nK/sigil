@@ -59,6 +59,52 @@ pub fn permits(allowlist: &Option<HashSet<String>>, host_id: &str) -> bool {
     }
 }
 
+/// #184 — atomically add `host_id` to the on-disk allowlist file. Idempotent:
+/// a host already present is a no-op success. Creates the file (with just this
+/// host) if absent. Write is atomic (tmp-in-same-dir + rename). Does NOT touch
+/// the in-memory set — the enroll handler updates that separately.
+pub fn add_host_atomic(path: &Path, host_id: &str) -> Result<(), AllowlistError> {
+    let mut file: HostAllowlistFile = match std::fs::read(path) {
+        Ok(b) => serde_json::from_slice(&b).map_err(|source| AllowlistError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HostAllowlistFile::default(),
+        Err(source) => {
+            return Err(AllowlistError::Io {
+                path: path.to_path_buf(),
+                source,
+            })
+        }
+    };
+    if file.hosts.iter().any(|h| h == host_id) {
+        return Ok(()); // idempotent
+    }
+    file.hosts.push(host_id.to_string());
+    let bytes = serde_json::to_vec_pretty(&file).map_err(|source| AllowlistError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    write_atomic(path, &bytes).map_err(|source| AllowlistError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Atomic write: tmp file in the same directory, then rename over `path`.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".hosts-")
+        .tempfile_in(dir)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +143,30 @@ mod tests {
         let p = dir.path().join("hosts.json");
         std::fs::write(&p, "not json").unwrap();
         assert!(load(Some(&p)).is_err());
+    }
+
+    #[test]
+    fn add_host_atomic_creates_file_when_absent() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("hosts.json");
+        add_host_atomic(&p, "host-a").unwrap();
+        let al = load(Some(&p)).unwrap().unwrap();
+        assert!(al.contains("host-a"));
+    }
+
+    #[test]
+    fn add_host_atomic_appends_and_is_idempotent() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("hosts.json");
+        std::fs::write(&p, r#"{"hosts":["existing"]}"#).unwrap();
+        add_host_atomic(&p, "host-b").unwrap();
+        add_host_atomic(&p, "host-b").unwrap(); // idempotent: no dup
+        let al = load(Some(&p)).unwrap().unwrap();
+        assert!(al.contains("existing"));
+        assert!(al.contains("host-b"));
+        // exactly two hosts (no duplicate)
+        let raw = std::fs::read_to_string(&p).unwrap();
+        let f: HostAllowlistFile = serde_json::from_str(&raw).unwrap();
+        assert_eq!(f.hosts.len(), 2);
     }
 }
