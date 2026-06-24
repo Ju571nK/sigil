@@ -44,7 +44,26 @@ pub struct ServerConfig {
     /// Absent ⇒ `GET /v1/artifacts*` returns 404 (feature off). #182
     #[serde(default)]
     pub artifacts_dir: Option<PathBuf>,
+    /// #184 — operator-provided INTERMEDIATE CA cert (PEM). Returned in the
+    /// enroll chain and used to sign host CSRs. Root stays offline. Absent ⇒
+    /// enrollment off (404).
+    #[serde(default)]
+    pub enroll_ca_cert_path: Option<PathBuf>,
+    /// #184 — intermediate CA private key (PEM, 0600). Online signing key.
+    /// Absent ⇒ enrollment off.
+    #[serde(default)]
+    pub enroll_ca_key_path: Option<PathBuf>,
+    /// #184 — enrollment token store (JSON, blake3-hashed tokens).
+    /// Absent ⇒ enrollment off.
+    #[serde(default)]
+    pub enroll_tokens_path: Option<PathBuf>,
+    /// #184 — issued client-cert validity in days (default 30; short by design,
+    /// re-enroll replaces revocation in the MVP).
+    #[serde(default)]
+    pub enroll_cert_days: Option<u32>,
     /// Optional allowlist of `host_id`s. Absent ⇒ accept all authenticated hosts.
+    /// REQUIRED for enrollment (#184): without it, auto-add is meaningless, so
+    /// enrollment stays off (404) when this is unset.
     #[serde(default)]
     pub host_allowlist_path: Option<PathBuf>,
     /// Path to the persisted per-host high-water-sequence map (for dedup

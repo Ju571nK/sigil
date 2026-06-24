@@ -68,7 +68,7 @@ pub async fn post_events(
     State(state): State<SharedState>,
     Json(req): Json<EventsRequest>,
 ) -> impl IntoResponse {
-    if !allowlist::permits(&state.allowlist, &req.envelope.host_id) {
+    if !allowlist::permits(&state.allowlist.read(), &req.envelope.host_id) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "host_unknown", "host_id": req.envelope.host_id})),

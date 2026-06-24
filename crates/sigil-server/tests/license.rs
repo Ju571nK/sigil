@@ -32,7 +32,7 @@ async fn meta_reports_over_limit_for_free_tier_above_200_active_hosts() {
         events_out_dir: dir.path().to_path_buf(),
         policy_bundle_path: dir.path().join("p.json"),
         high_water_path: dir.path().join(".hw.json"),
-        allowlist: None::<HashSet<String>>,
+        allowlist: parking_lot::RwLock::new(None::<HashSet<String>>),
         high_water: Mutex::new(HighWater::default()),
         fleet_index,
         read_token: ReadToken(Some("tok".into())),
@@ -42,6 +42,8 @@ async fn meta_reports_over_limit_for_free_tier_above_200_active_hosts() {
         rule_packs_bundle_path: None,
         artifacts_dir: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     });
 
     let app = build_router(state);
@@ -97,7 +99,7 @@ async fn meta_reports_ok_for_valid_license_under_its_limit() {
         events_out_dir: dir.path().to_path_buf(),
         policy_bundle_path: dir.path().join("p.json"),
         high_water_path: dir.path().join(".hw.json"),
-        allowlist: None::<HashSet<String>>,
+        allowlist: parking_lot::RwLock::new(None::<HashSet<String>>),
         high_water: Mutex::new(HighWater::default()),
         fleet_index,
         read_token: ReadToken(Some("tok".into())),
@@ -107,6 +109,8 @@ async fn meta_reports_ok_for_valid_license_under_its_limit() {
         rule_packs_bundle_path: None,
         artifacts_dir: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     });
 
     let app = build_router(state);
@@ -163,7 +167,7 @@ async fn meta_reports_expired_falls_back_to_free_tier() {
         events_out_dir: dir.path().to_path_buf(),
         policy_bundle_path: dir.path().join("p.json"),
         high_water_path: dir.path().join(".hw.json"),
-        allowlist: None::<HashSet<String>>,
+        allowlist: parking_lot::RwLock::new(None::<HashSet<String>>),
         high_water: Mutex::new(HighWater::default()),
         fleet_index,
         read_token: ReadToken(Some("tok".into())),
@@ -173,6 +177,8 @@ async fn meta_reports_expired_falls_back_to_free_tier() {
         rule_packs_bundle_path: None,
         artifacts_dir: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     });
 
     let app = build_router(state);

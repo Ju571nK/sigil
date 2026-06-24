@@ -37,9 +37,13 @@ parking_lot = { workspace = true }
 ed25519-dalek = { workspace = true }
 data-encoding = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
+# #184 — enrollment: runtime temp files (CSR/ext/cert, atomic writes) + flock.
+tempfile = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 tower = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true }

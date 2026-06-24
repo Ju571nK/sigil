@@ -25,8 +25,10 @@ pub struct AppState {
     /// 404s (feature off). #182
     pub artifacts_dir: Option<std::path::PathBuf>,
     pub high_water_path: PathBuf,
-    /// `None` ⇒ every authenticated host is accepted.
-    pub allowlist: Option<HashSet<String>>,
+    /// `None` ⇒ every authenticated host is accepted. Wrapped in a `RwLock` so
+    /// the enroll handler can insert a newly enrolled host at runtime (#184 fix F)
+    /// without a server restart. The events hot path takes a cheap read-lock.
+    pub allowlist: parking_lot::RwLock<Option<HashSet<String>>>,
     /// host_id → highest persisted sequence. Guards the JSONL append + dedup.
     pub high_water: Mutex<HighWater>,
     /// Phase 3b.4 — in-memory per-host summary index. Updated synchronously
@@ -42,6 +44,12 @@ pub struct AppState {
     pub audit_key: Option<crate::audit_key::AuditKey>,
     /// Latest signed audit-chain head, updated by the audit task; read by /v1/meta.
     pub audit_head: Mutex<Option<sigil_core::audit::AuditHead>>,
+    /// Path to the optional `hosts.json` allowlist file (for atomic add on
+    /// enroll). `None` ⇒ no on-disk allowlist (and enrollment is disabled). #184
+    pub allowlist_path: Option<PathBuf>,
+    /// #184 — enrollment state (intermediate CA + tokens + mint mutex). `None` ⇒
+    /// every `/v1/enroll*` route 404s (feature off).
+    pub enroll: Option<crate::enroll::EnrollState>,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -116,6 +124,10 @@ pub fn build_router(state: SharedState) -> Router {
             get(crate::routes::artifacts::get_artifact_by_name)
                 .route_layer(from_fn_with_state(token.clone(), require_bearer)),
         )
+        // #184 — B-mint enrollment. NO read-bearer layer: the enroll token in
+        // the body is the credential; mTLS still gates at the TLS layer. Feature
+        // off (enroll == None) ⇒ handler returns 404.
+        .route("/v1/enroll", post(crate::routes::enroll::post_enroll))
         .with_state(state)
 }
 

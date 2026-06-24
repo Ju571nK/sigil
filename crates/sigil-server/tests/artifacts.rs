@@ -23,7 +23,7 @@ fn state(scratch: &Path, artifacts_dir: Option<PathBuf>, token: Option<&str>) ->
         rule_packs_bundle_path: None,
         artifacts_dir,
         high_water_path: scratch.join(".high-water.json"),
-        allowlist: None,
+        allowlist: parking_lot::RwLock::new(None),
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: ReadToken(token.map(str::to_string)),
@@ -31,6 +31,8 @@ fn state(scratch: &Path, artifacts_dir: Option<PathBuf>, token: Option<&str>) ->
         active_window_days: 7,
         audit_key: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     })
 }
 

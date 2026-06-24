@@ -22,7 +22,7 @@ async fn meta_reports_audit_head_when_signing_enabled() {
         rule_packs_bundle_path: None,
         artifacts_dir: None,
         high_water_path: dir.path().join(".hw.json"),
-        allowlist: None::<HashSet<String>>,
+        allowlist: parking_lot::RwLock::new(None::<HashSet<String>>),
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: ReadToken(Some("tok".into())),
@@ -35,6 +35,8 @@ async fn meta_reports_audit_head_when_signing_enabled() {
             sig: "sigval".into(),
             pubkey_id: "sigil-audit-x".into(),
         })),
+        allowlist_path: None,
+        enroll: None,
     });
 
     let app = build_router(state);
@@ -74,7 +76,7 @@ async fn meta_reports_null_audit_head_when_disabled() {
         rule_packs_bundle_path: None,
         artifacts_dir: None,
         high_water_path: dir.path().join(".hw.json"),
-        allowlist: None::<HashSet<String>>,
+        allowlist: parking_lot::RwLock::new(None::<HashSet<String>>),
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: ReadToken(Some("tok".into())),
@@ -82,6 +84,8 @@ async fn meta_reports_null_audit_head_when_disabled() {
         active_window_days: 7,
         audit_key: None,
         audit_head: Mutex::new(None),
+        allowlist_path: None,
+        enroll: None,
     });
 
     let app = build_router(state);

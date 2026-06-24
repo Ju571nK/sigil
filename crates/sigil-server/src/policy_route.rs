@@ -21,7 +21,7 @@ pub async fn get_policy(
     Query(q): Query<PolicyQuery>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if !allowlist::permits(&state.allowlist, &q.host_id) {
+    if !allowlist::permits(&state.allowlist.read(), &q.host_id) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "host_unknown", "host_id": q.host_id})),
