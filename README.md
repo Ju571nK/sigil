@@ -1,745 +1,134 @@
-# Sigil — fleet AI security posture management for AI coding agents
+# Sigil
 
-> Sigil gives security teams a **fleet-wide view of what their AI coding agents
-> are allowed to do.** A lightweight **client agent** on every developer machine
-> scores the guard surfaces of Claude Code, Cursor, Codex, and Gemini CLI —
-> permissions, hooks, sandbox boundaries, and `mcp.json` servers — and ships
-> **hash-anchored events** over mTLS to a central **`sigil-server`**, which feeds
-> your **SIEM** and the optional **`sigil-manager`** fleet dashboard and pushes
-> **signed policy** back down. It **measures** posture across the fleet; it does
-> not block. Host-side **AI Security Posture Management (AI-SPM)**, in Rust.
+**Your Claude Code, Codex, and Cursor can run whatever their config allows. Sigil scores what that is — in one command, before something does.**
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![macOS](https://img.shields.io/badge/macOS-supported-success)
-![Windows](https://img.shields.io/badge/Windows-supported-success)
 ![Linux](https://img.shields.io/badge/Linux-supported-success)
-![MSRV](https://img.shields.io/badge/MSRV-1.78-orange)
+![Windows](https://img.shields.io/badge/Windows-supported-success)
+![Rust](https://img.shields.io/badge/Rust-1.78-orange)
 ![Status](https://img.shields.io/badge/status-alpha-yellow)
 
-**EDR sees the command that ran. Sigil sees the permission that let it run** —
-the config that decided what your AI coding agent was allowed to do in the
-first place. Sigil measures that surface; it does not block.
-
-## What it detects
-
-⚠️ **TrustFall-style AI agent attacks** — and the misconfigurations that enable
-them: project-scoped MCP servers set to **auto-execute**, **prompt-injection
-directives** planted in agent instruction files, **disabled sandboxes**, silent
-**auto-approve**, overly broad tool permissions, and **remote / shell-launcher
-MCP servers** — scored across the AI coding agents your developers actually run.
-
-**Agents covered**
-&nbsp;&nbsp;✅ Claude Code&nbsp;&nbsp;✅ Codex&nbsp;&nbsp;✅ Cursor&nbsp;&nbsp;✅ Gemini CLI&nbsp;&nbsp;✅ Antigravity&nbsp;&nbsp;✅ Continue.dev&nbsp;&nbsp;✅ Claude Desktop
-
-**Built in**
-&nbsp;&nbsp;✅ SIEM integration&nbsp;&nbsp;✅ MCP support (read-only — host + fleet)&nbsp;&nbsp;✅ fleet monitoring&nbsp;&nbsp;✅ signed policy distribution
-
-## See it
-
-A security team's view first: **`sigil-manager`** renders the fleet's posture as
-a triage console — every AI Guard risk event across every host and agent, with
-severity, status, and assignee, the way a SOC already works. (The dashboard is a
-separate project: [`sigil-manager`](https://github.com/Ju571nK/sigil-manager).)
-
-![sigil-manager fleet dashboard — an Alerts console listing AI Guard risk events across multiple hosts: Sandbox Disabled on Codex and No Sandbox on Claude Code flagged CRITICAL, an MCP Server Local Command on Cursor at MEDIUM, plus lower-severity findings across Gemini, Continue.dev, and Claude Desktop, each with host, severity, and status](docs/sigil-manager01.png)
-
-Underneath that dashboard the same posture is **queryable** over plain MCP, in
-two read-only surfaces: **`sigil-check`** on a developer's own machine (this host
-only — the default an AI coding agent registers), and **`sigil-fleet`** for
-operators, exposing the whole fleet through `sigil-server`. The demo below is the
-operator `sigil-fleet` view: a real Codex (`gpt-5.5`) session asks it to find the
-riskiest host in the fleet and explain it — no config is touched, the model just
-*reads* posture and reasons over it:
-
-![A Codex session calls Sigil's fleet_risk and get_host MCP tools, identifies dev-mbp-01 as the top risk at critical 10.0, and explains why Claude Code and Codex are dangerous with three prioritized mitigations](docs/sigil-mcp-codex01-en.gif)
-
-The agent calls Sigil's MCP server (here registered as `sigil-fleet`), gets back
-`dev-mbp-01` at **critical / 10.0**, and the reasons are concrete: `no_sandbox`
-on a host shell, a `.*` `PreToolUse` matcher that allows `Bash`, an external
-`rm -rf` hook, and a remote MCP server — for both Claude Code and Codex.
-
-And it isn't Codex-specific. Here's the **same fleet** read from **Claude Code**
-(Opus 4.7) instead — same tools, same posture (its prompt and answer happen to
-be in Japanese; the tool calls and scoring are in English):
-
-![A Claude Code session calls Sigil's MCP tools, surveys the fleet risk index, finds dev-mbp-01 is the top risk at critical 10.0, pulls its full posture, and explains why Claude Code and Codex are dangerous with the top mitigations](docs/sigil-mcp-myscreen03.gif)
-
-Same posture, different agent — because Sigil exposes it as plain MCP, not a
-vendor-specific plugin.
-
-Want the raw tool output behind that? It's produced by
-[`docs/sigil-mcp-demo.sh`](docs/sigil-mcp-demo.sh) (every number is a real tool
-response, not mocked):
-
-![sigil-mcp queried over MCP: fleet_risk ranks host-alpha at critical 10.0, and get_host breaks the score down per agent — claude_code 10.0, codex 9.50, the rest low — with the reasons behind it](docs/sigil-mcp-demo.gif)
-
-`fleet_risk` ranks hosts, `get_host` breaks one host's score down per agent
-(`claude_code` 10.0, `codex` 9.50, the rest `low`) and lists exactly why. That's
-nine read-only GET tools in total — no write or remediation path, by construction.
-
-To watch the underlying file-posture scoring happen locally — a clean repo config
-scoring **0 / low** until a `.*` `PreToolUse` hook running `rm -rf $HOME` lands
-and Sigil re-scores that project **7.5 / critical**
-(`destructive_in_inline_command`, `no_sandbox`, `broad_matcher`) — run
-[`docs/aiguard-demo.sh`](docs/aiguard-demo.sh) from the repo root (fully
-sandboxed; it never touches your real `~/.claude`).
-
-### Enforce in action (opt-in, Stage 2)
-
-Sigil's core **measures; it does not block** — but `sigil-hook` Stage 2 adds an
-**opt-in, in-domain advisory** layer: the same `PreToolUse` hook can **deny** a
-tool call when an agent-local deny rule matches. Both **Codex** and **Claude
-Code** honor the hook's `permissionDecision: deny`, so the matched tool call
-never runs. Here the same mechanism blocks a shell command in **Codex** first,
-then in **Claude Code**:
-
-![A Codex (gpt-5.5) terminal session: the agent issues a Bash tool call, and a registered PreToolUse deny hook blocks it — Codex surfaces the hook's deny reason and the command never runs](docs/sigil-hook-codex-block01.gif)
-
-![A Claude Code terminal session: the agent attempts a Bash tool call, and a registered PreToolUse deny hook blocks it — the command never runs and Claude surfaces the hook's deny reason](docs/sigil-hook-claude-block01.gif)
-
-You wire it the way Claude Code registers any hook — a `PreToolUse` command in
-`.claude/settings.json` pointing at `sigil-hook … --enforce`
-(or `sigil-hook install --agent claude-code --enforce --write`):
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Bash",
-        "hooks": [
-          { "type": "command",
-            "command": "sigil-hook claude-code --enforce --on-failure open" }
-        ]
-      }
-    ]
-  }
-}
-```
-
-The deny rules live in the agent's policy — e.g. block a destructive shell pattern:
-
-```yaml
-hook_deny_rules:
-  - id: no-rm-rf-root
-    match: { kind: bash, command: { kind: regex, pattern: "rm\\s+-rf\\s+/" } }
-on_failure: open    # fail open: if Sigil can't decide, the tool call proceeds
-```
-
-This is **advisory** — it blocks ordinary calls *when the agent honors the
-registered hook*, and **fails open by default**. It is *agent-intent policy +
-tamper-evidence*, **not** tamper-resistant runtime command security (the agent
-owns the config that registers its own hook). Claude Code and Codex share this
-mechanism today; other agents are added as their hook engines are verified.
-
-## Why now
-
-Through 2025–2026, the AI coding agent's *configuration* became the attack
-surface. **[TrustFall](https://www.theregister.com/security/2026/05/07/claude-code-trust-prompt-can-trigger-one-click-rce/5235319)**
-(May 2026; [research](https://adversa.ai/blog/trustfall-coding-agent-security-flaw-rce-claude-cursor-gemini-cli-copilot/))
-showed that a cloned repo shipping a `.claude/settings.json`
-(`enableAllProjectMcpServers`) plus a `.mcp.json` auto-approves an unsandboxed
-MCP server — one "trust this folder" click is full RCE, across Claude Code,
-Cursor, Gemini CLI, and Copilot. A year earlier,
-**[AWS Kiro](https://aws.amazon.com/security/security-bulletins/AWS-2025-019/)**
-([writeup](https://embracethered.com/blog/posts/2025/aws-kiro-aribtrary-command-execution-with-indirect-prompt-injection/))
-could be steered by indirect prompt injection into rewriting its *own*
-`.vscode/settings.json` (`"kiroAgent.trustedCommands": ["*"]`) and MCP config to
-run arbitrary commands. Same root in both: the files that decide what an agent
-may do — `settings.json`, `.mcp.json`, command allowlists, sandbox flags.
-
-That surface is exactly what Sigil watches. It can't stop the prompt injection,
-and doesn't try to — it **measures**: it scores those configs (no sandbox, broad
-matcher, auto-approved MCP, destructive hook) and emits a hash-anchored event
-the moment one changes, so a dangerous config — whether a cloned repo dropped it
-or an agent rewrote its own — reaches your SIEM instead of staying silent.
-
-## The problem
-
-Claude Code, Codex, Gemini CLI, Cursor — each AI coding agent ships its own
-guard surface (`hooks`, `permissions`, `[sandbox]`, MCP allowlists) across
-user-global, per-project, and per-session scopes. The autonomy ratchet keeps
-moving: hooks run in the host shell, matchers can be `.*`, and a `PreToolUse`
-hook containing `rm -rf` is treated by these tools the same as one that just
-logs. Security teams have no fleet view, no drift alert, no risk index.
-
-## What Sigil does
-
-**Sigil measures. It does not block.** It watches the guard surfaces of every
-supported AI agent, scores their risk against a transparent rubric (sandbox
-boundary × hook content × matcher scope × source provenance), and emits the
-score plus the underlying reasons as a hash-anchored JSONL event your SIEM
-can ingest. Enforcement stays where it belongs — in your MDM, your EDR, or
-your operator's hands. Sigil's job is to make sure those decisions are
-informed.
-
-Underneath the AI-SPM layer is a generic file-posture sensor: a small Rust
-agent that watches policy-defined files on macOS, Windows, and Linux, hashes
-every change with blake3, and ships the events through a signed-policy
-pipeline (mTLS, ed25519). The risk scoring is layered on top — it parses AI
-agent config files, applies the rubric, and emits richer evidence variants
-alongside the raw `file_change` events.
-
-Each event is one JSON object on its own line:
-
-```json
-{
-  "schema_version": 1,
-  "event_id": "019e0cea-42f1-7ef3-9a6a-1721e98ee2ba",
-  "ts": "2026-05-10T07:14:32.512Z",
-  "host_id": "a2e1f4c9b8d7",
-  "agent_version": "0.1.0",
-  "severity": "warn",
-  "source": {"kind": "file_system"},
-  "subject": {"kind": "path", "value": "/Users/alice/.cursor/mcp.json"},
-  "evidence": {
-    "kind": "file_change",
-    "change_kind": "modified",
-    "before_hash": "blake3:a31f1c7e9d8b…",
-    "after_hash":  "blake3:0d72f8a4c6e8…",
-    "size_after": 2148,
-    "evidence_quality": "definitive"
-  },
-  "target_id": "team-mcp-allowlist"
-}
-```
-
-And — a richer evidence variant for AI guard surfaces (Claude Code + Codex
-shipped in Phase 3b.1; Claude Desktop + Continue.dev in 3b.6; Gemini + Cursor
-in 3b.8):
-
-```json
-{
-  "evidence": {
-    "kind": "ai_guard_risk_assessed",
-    "tool": "claude_code",
-    "scope": {"kind": "user_global"},
-    "score": 7.5,
-    "bucket": "critical",
-    "reasons": [
-      {"kind": "destructive_in_inline_command", "pattern": "rm -rf",
-       "hook_event": "PreToolUse", "snippet": "..."},
-      {"kind": "no_sandbox", "executor": "host_shell"},
-      {"kind": "broad_matcher", "hook_event": "PreToolUse", "matcher": ".*"}
-    ],
-    "is_reattestation": false
-  }
-}
-```
-
-## Why Sigil?
-
-- **Measures, doesn't block.** AI guard surfaces are scored, not enforced.
-  Enforcement is left to MDM/EDR; Sigil's job is to make sure those decisions
-  are informed.
-- **Tiny, honest, host-only.** Pure user-space. No kernel module, no eBPF, no
-  phone-home. A single binary plus a YAML policy file.
-- **Hash-anchored events.** Every observation carries blake3 hashes (before /
-  after) and an `evidence_quality` marker, so a SIEM can tell a clean
-  observation apart from one that was coalesced or delayed.
-- **Versioned schema.** `schema_version` is part of the contract; rename = break.
-- **AI-aware defaults.** Built-in policies cover the paths AI coding agents
-  actually touch on macOS, Windows, and Linux — including Claude Code, Codex,
-  Gemini CLI, and Cursor guard files.
-
-### What it monitors
-
-Out of the box, with built-in defaults plus your policy YAML:
-
-- **AI agent guard surfaces** — Claude Code (`~/.claude/settings*.json`,
-  `<repo>/.claude/`), Codex (`~/.codex/config.toml`, `<repo>/.codex/`),
-  **Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`
-  on macOS, `%APPDATA%\Claude\…` on Windows, `~/.config/Claude/…` on Linux),
-  **Continue.dev** (`~/.continue/config.json`), `~/.gemini/` and
-  `<repo>/.gemini/`, `~/.cursor/mcp.json`. Hash-anchored events on every
-  change; risk score on the contents (Claude Code + Codex shipped 3b.1;
-  Claude Desktop + Continue shipped 3b.6; Gemini + Cursor parsers shipped 3b.8).
-- **Hook scripts** — convention dirs (`~/.claude/hooks/**`,
-  `<repo>/.claude/hooks/**`) watched recursively, so a hook script silently
-  going from "deny" to "exit 0" is visible.
-- **MCP & launch surfaces** — `~/.cursor/mcp.json`, new `.plist` in
-  `~/Library/LaunchAgents/`, etc.
-- **Credential & shell startup** — `~/.aws/credentials`, `~/.ssh/`,
-  `.zshrc`, `.bashrc`, `.profile`.
-- **Anything you list** under `targets:` in your policy YAML.
-
-## Architecture
-
-Sigil is a Rust workspace with nine crates: three long-running binaries,
-one operator CLI, one read-only MCP server, one runtime hook, and three
-workspace libraries.
-
-**Long-running binaries**
-
-- `sigil-agent` — the host daemon (`sigil` binary). Owns the `tokio`
-  runtime, the `notify`-based filesystem watcher, the event pipeline, CLI
-  commands, and platform glue. Writes JSONL posture events to the local
-  event log.
-- `sigil-sender` — the uploader (`sigil-sender` binary). Reads JSONL
-  batches from the local event log, ships them to a SIEM endpoint over HTTPS
-  (rustls), and hands signed policy responses back to the agent over IPC.
-- `sigil-server` — OSS reference receiver (`sigil-server` binary). Accepts
-  events from `sigil-sender` over mTLS, persists JSONL, and serves
-  ed25519-signed policy envelopes back to clients. The simplest possible
-  SIEM-shaped endpoint operators can stand up for an end-to-end test or as
-  the upstream for [`sigil-manager`](https://github.com/Ju571nK/sigil-manager).
-
-**Operator CLI**
-
-- `sigil-signer` — keystore + envelope tool (`sigil-sign` binary).
-  `keygen` / `sign` / `verify` / `inspect` for the ed25519 keys that
-  authenticate signed policy responses. One-shot — not a daemon.
-
-**MCP server**
-
-- `sigil-mcp` — read-only MCP server (`sigil-mcp` binary), two auto-detected
-  modes that register under distinct names. **`sigil-check`** (default, no server
-  URL) reads the local `sigil-agent` control socket to surface *only this
-  machine's* AI Guard posture — no server, no fleet; this is what an AI coding
-  agent (Claude Desktop/Code, Codex) registers. **`sigil-fleet`** (operators)
-  exposes a `sigil-server`'s bearer-gated read API as Model Context Protocol
-  tools for fleet-wide posture, run beside `sigil-server` / `sigil-manager`.
-  Read-only by construction: no write or remediation tools.
-  See [`crates/sigil-mcp/README.md`](crates/sigil-mcp/README.md).
-
-**Runtime hook**
-
-- `sigil-hook` — runtime observer at the AI agent **tool boundary**
-  (`sigil-hook` binary). A short-lived process the agent spawns per tool call
-  (Claude Code `PreToolUse` first; the per-agent adapter shape generalizes to
-  Codex/Gemini/Cursor). It normalizes and redacts the call (blake3 hash over
-  the raw text + masked preview) and emits one event to `sigil-agent` over a
-  dedicated `hook.sock`, reusing the JSONL event log → sender pipeline. The agent
-  stamps the kernel peer-uid for attribution. The *runtime* companion to AI Guard's
-  *static* config scoring (#64, Stage 1).
-- **Enforce (Stage 2, #100)** — the same Claude Code hook can also **deny** a tool
-  call when an agent-local deny rule matches, over a synchronous `hook-decide.sock`;
-  the agent records a `HookDecision` event and returns the verdict, which the hook
-  translates to a `permissionDecision: deny`. This is **in-domain, advisory
-  enforcement** — it blocks ordinary tool calls when the agent honors the registered
-  hook, **fails open by default**, and is *agent-intent policy + tamper-evidence*,
-  **not** tamper-resistant runtime command security (the agent owns the config that
-  registers its own hook). Always exits 0, latency-bounded.
-- **Tamper-evidence — `sigil-hook verify` (#100)** — the detection counterweight to
-  advisory enforcement: compares the recorded install **baseline** against the live
-  agent settings file and reports registration **drift** (entry removed, binary
-  repointed, capture/fail-closed flipped, matcher narrowed, or the baseline itself
-  missing). It prints a result + exit code and emits a `HookConfigDrift` event over
-  `hook.sock`. This is **detection, not prevention** — a fully-neutralized hook
-  silences the check too; that blind spot (agent-side silence detection) is tracked
-  separately. Tamper-*evidence* raises the cost and visibility of in-domain tampering;
-  it does not stop it.
-
-**Libraries**
-
-- `sigil-core` — pure domain library (event, policy, state, hashing, …).
-  No OS, `tokio`, or filesystem-watcher dependencies. Consumed by every
-  binary.
-- `sigil-spool` — standalone JSONL=IPC primitive (`Producer` / `Consumer` /
-  `Checkpoint` / `Retention`). Durable, crash-recoverable, domain-neutral.
-  The current `sigil-agent` → `sigil-sender` runtime path uses the simpler
-  `sigil-core::sink::jsonl::JsonlSink` plus `sigil-sender`'s `batch_reader`
-  over local `events-*.jsonl` files; `sigil-spool` is kept as a workspace
-  library rather than a live box in that path.
-- `sigil-rules-basic` — compile-time-embedded baseline rulesets (macOS,
-  Linux, and Windows defaults). The OSS fallback when no operator policy
-  is supplied; extended rule packs ship separately.
-
-The diagram below is a **runtime view** — where each component runs and how data
-and signed policy flow between machines. The pure libraries (`sigil-core`,
-`sigil-rules-basic`) compile into the binaries above, and `sigil-spool` is not
-currently wired into the agent/sender runtime path, so those libraries are not
-drawn as separate boxes.
-
-```mermaid
-flowchart LR
-    %% ============ CLIENT — the developer's machine ============
-    subgraph host["User side — runs on every machine"]
-        FS[("Filesystem<br/>policy targets")]
-
-        subgraph agent["sigil-agent (bin: sigil)"]
-            direction TB
-            a_pipe["watcher · debouncer · normalizer<br/>hasher · sink_task · state_task"]
-            a_aiguard["ai_guard<br/>parsers · rule_packs · ext_script<br/>per-repo discovery · rubric"]
-            a_ctrl["supervisor · policy_apply · hook_listener<br/>policy_reload · doctor · show"]
-        end
-
-        events[("Local event log<br/>events-*.jsonl")]
-
-        subgraph sender["sigil-sender (bin: sigil-sender)"]
-            s_pipe["batch_reader · manifest · transport (HTTPS + rustls)<br/>control_task · agent_ipc · dead_letter · heartbeat"]
-        end
-
-        aiagent(["AI coding agent<br/>Claude Code · Codex · …"])
-        subgraph hook["sigil-hook (bin: sigil-hook)"]
-            hookmods["PreToolUse adapter · redact<br/>one-shot per tool call · observe-only"]
-        end
-    end
-
-    %% ============ SERVER SIDE — operator + backend infra ============
-    subgraph backend["Server side — operator + backend infra"]
-        operator(["Operator"])
-
-        subgraph signer["sigil-signer (bin: sigil-sign)"]
-            signermods["keygen · sign · verify · inspect"]
-        end
-
-        subgraph server["sigil-server (bin: sigil-server)"]
-            servermods["mTLS event ingest<br/>signed envelope serve<br/>bearer-gated read API"]
-        end
-
-        manager["sigil-manager<br/>fleet UI<br/>(optional)"]:::optional
-    end
-
-    %% External sink — your existing system (not part of Sigil)
-    SIEM[("Your SIEM<br/>endpoint")]
-
-    %% Optional, exploratory — an internal or external LLM for deeper analysis
-    llm["LLM analysis<br/>internal or external<br/>(optional · exploratory)"]:::optional
-
-    %% Optional MCP views. sigil-check is the default local view; sigil-fleet
-    %% is the operator view backed by sigil-server's read API.
-    mcplocal["sigil-mcp<br/>sigil-check: this host only<br/>(local · default · optional)"]:::optional
-    mcpfleet["sigil-mcp<br/>sigil-fleet: read-only fleet view<br/>(operator · GET only · optional)"]:::optional
-    mcpclient(["MCP client<br/>(Claude Desktop / Code / Codex)"]):::optional
-
-    %% Data plane
-    FS --> a_pipe
-    FS --> a_aiguard
-    a_pipe -- "JsonlSink writes JSONL" --> events
-    a_aiguard -- "JsonlSink writes JSONL" --> events
-
-    %% Runtime observe plane (#64) — the agent spawns sigil-hook per tool call;
-    %% it emits a redacted HookInvocation into the agent's sink over hook.sock.
-    aiagent -- "PreToolUse spawns" --> hookmods
-    hookmods -- "HookInvocation<br/>hook.sock" --> a_pipe
-    events -- "batch_reader reads JSONL" --> s_pipe
-    s_pipe -- "HTTPS" --> SIEM
-    s_pipe -- "mTLS (alt)" --> server
-
-    %% Control plane
-    s_pipe -. "apply_policy IPC" .-> a_ctrl
-    operator -- "signs envelope" --> signer
-    signer -. "envelope deployed" .-> server
-    server -. "signed envelope" .-> sender
-
-    %% Optional consumers
-    server -. "read API" .-> manager
-    manager -. "deeper analysis · governance" .-> llm
-    a_ctrl -. "control socket<br/>my_risk · my_findings" .-> mcplocal
-    server -. "read API (GET)" .-> mcpfleet
-    mcplocal -. "MCP tools (stdio)" .-> mcpclient
-    mcpfleet -. "MCP tools (stdio)" .-> mcpclient
-
-    classDef optional stroke-dasharray: 5 5,fill:#f5f5f5,stroke:#999,color:#666
-
-    %% Components (crates) in green so they stand out from the location boxes
-    style agent  fill:#d1fae5,stroke:#059669,color:#064e3b
-    style sender fill:#d1fae5,stroke:#059669,color:#064e3b
-    style signer fill:#d1fae5,stroke:#059669,color:#064e3b
-    style server fill:#d1fae5,stroke:#059669,color:#064e3b
-    style mcplocal fill:#d1fae5,stroke:#059669,color:#064e3b
-    style mcpfleet fill:#d1fae5,stroke:#059669,color:#064e3b
-    style hook   fill:#d1fae5,stroke:#059669,color:#064e3b
-```
-
-## Status
-
-- **0.x — alpha.** Pre-1.0: the CLI surface and config can still change between
-  minor releases. The event **`schema_version`** is the stable contract — it is
-  versioned independently of the crate version (still `1`), so downstream
-  consumers detect wire changes regardless of the release.
-- **Platforms.** macOS, Windows, and Linux at runtime. The Linux runtime
-  landed as a minimal foundation (Phase 3a) and is exercised in CI; some
-  refinements are marked `TODO(community)` in `platform/linux.rs` — see
-  [CONTRIBUTING.md](CONTRIBUTING.md).
-- **Schema.** Version `1`.
-
-## Roadmap
-
-**Shipped:** filesystem posture sensor with hash-anchored JSONL events
-(Phase 1) · split-process, signed-policy pipeline over mTLS with an OSS
-reference server (Phase 2) · Linux runtime (Phase 3a) · the **AI Agent Risk
-Index** — a transparent scoring rubric for Claude Code, Codex, Claude Desktop,
-Continue.dev, Gemini CLI, and Cursor guard surfaces (Phase 3b) · declarative
-rule packs operators ship without recompiling · license-enforcement structure
-(measures, doesn't block).
-
-**Planned:** reproducible-build attestation, additional posture signals.
-
-See **[ROADMAP.md](ROADMAP.md)** for the full phase-by-phase log with merge SHAs.
-
-## Ecosystem
-
-The agent in this repo is the OSS core. A separate, companion project extends
-it with a fleet view:
-
-- **[`sigil-manager`](https://github.com/Ju571nK/sigil-manager)** —
-  self-hostable web console for fleet visibility. Reads from `sigil-server`
-  and renders dashboards (AI Guard risk by host, events over time, policy
-  compliance per host). Public repo, developed separately from this one;
-  early stages.
-
-The OSS agent works standalone — point `sigil-sender` at any SIEM endpoint and
-you're done. `sigil-manager` is an additive convenience layer for teams that
-want a built-in dashboard rather than rolling their own queries in their SIEM,
-not a requirement.
-
-## Design principles
-
-- **No kernel module, no eBPF.** OS-provided file-event APIs only.
-- **`forbid(unsafe_code)`** in the core domain crate.
-- **Reproducible release builds.** `lto = "thin"`, `codegen-units = 1`,
-  `strip = "symbols"`, `panic = "unwind"`.
-- **Host-only telemetry.** The agent never opens an outbound connection on
-  its own. Shipping events anywhere is a separate, explicit component.
-- **The event schema is a public contract.** Wire-string renames and field
-  removals are breaking changes and bump the major version.
-
-## Installation
-
-### Quick install (macOS / Linux)
+A coding agent doesn't ask before it runs a hook, launches an MCP server, or
+skips its sandbox. Those decisions live in config files you never open. Sigil
+reads them and tells you how exposed you are.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
-```
-
-Installs the **personal** profile by default (`sigil`, `sigil-mcp`,
-`sigil-hook`) to `~/.local/bin` — local self-assessment, no server. Add the
-server components with `SIGIL_PROFILE=fleet` (see [Install profiles](#install-profiles)
-below). Pin a release with `SIGIL_VERSION`, or change the location with
-`SIGIL_INSTALL_DIR`. Every release ships a `SHA256SUMS` file
-(the installer verifies it) plus a build-provenance attestation you can check:
-
-```sh
-gh attestation verify <archive> --repo Ju571nK/sigil
-```
-
-### Quick install (Windows)
-
-```powershell
-irm https://raw.githubusercontent.com/Ju571nK/sigil/main/install.ps1 | iex
-```
-
-Same defaults as the shell installer — **personal** profile to
-`%LOCALAPPDATA%\Programs\sigil` (added to your user PATH), checksum-verified,
-`SIGIL_PROFILE` / `SIGIL_VERSION` / `SIGIL_INSTALL_DIR` honored. Both x64 and
-ARM64 Windows are prebuilt. (Intel Macs aren't shipped as prebuilt binaries —
-build from source below.)
-
-### Install profiles
-
-| Profile | Binaries | Use |
-|---------|----------|-----|
-| `personal` (default) | `sigil`, `sigil-mcp`, `sigil-hook` | Local self-assessment, no server |
-| `fleet` | + `sigil-sender`, `sigil-server`, `sigil-sign` | Central server + signed rule-pack push |
-
-`SIGIL_PROFILE=fleet curl … | sh` installs the fleet set. See [docs/install-personal.md](docs/install-personal.md).
-
-### Build from source
-
-Install the Rust toolchain listed in `rust-toolchain.toml`, then build the
-workspace:
-
-```sh
-cargo build --release
-```
-
-The agent binary is produced at:
-
-```sh
-target/release/sigil
-```
-
-For development builds, run:
-
-```sh
-cargo build
-```
-
-### Linux packages (`.deb` / `.rpm`)
-
-Four packages (agent, sender, server, signer) are built for Debian/Ubuntu and
-RHEL/Rocky/Fedora. The **agent** package (`sigil`) bundles `sigil-mcp` and
-`sigil-hook` too, so installing it is the **personal** profile. Daemons install
-a (disabled-by-default) systemd unit + `/etc/sigil/<binary>.yaml.example`;
-`sigil-signer` is an operator CLI so it ships just the `/usr/bin/sigil-sign`
-binary.
-
-```sh
-cargo install cargo-deb cargo-generate-rpm   # one-time
-packaging/build.sh                            # all 4 packages, both formats
-packaging/build.sh sender rpm                 # or: just one package, one format
-
-# Agent (host daemon).
-sudo dnf install ./target/generate-rpm/sigil-0.5.0-1.x86_64.rpm
-sudo systemctl enable --now sigil
-
-# Sender (uploads the JSONL event log to a sigil-server over mTLS).
-sudo dnf install ./target/generate-rpm/sigil-sender-0.5.0-1.x86_64.rpm
-sudo cp /etc/sigil/sender.yaml.example /etc/sigil/sender.yaml && sudo $EDITOR /etc/sigil/sender.yaml
-sudo systemctl enable --now sigil-sender
-
-# Server (OSS reference: receives events, serves signed policy).
-sudo dnf install ./target/generate-rpm/sigil-server-0.5.0-1.x86_64.rpm
-sudo cp /etc/sigil/server.yaml.example /etc/sigil/server.yaml && sudo $EDITOR /etc/sigil/server.yaml
-sudo systemctl enable --now sigil-server
-
-# Signer (operator CLI: keygen / sign / verify / inspect).
-sudo dnf install ./target/generate-rpm/sigil-signer-0.5.0-1.x86_64.rpm
-sigil-sign --help
-```
-
-See [`packaging/README.md`](packaging/README.md) for details.
-
-### Full deployment guides
-
-End-to-end production walkthroughs (PKI/mTLS, config, firewall, systemd, verification):
-
-- [**Server install & operations (Linux)**](docs/install-server.md) — deploy `sigil-server` to receive events over mTLS and serve signed policy.
-- [**Agent install (macOS)**](docs/install-macos-agent.md) — run the `sigil` agent and optionally ship events to a server.
-
-## Usage
-
-### Scan your machine (one command, no daemon)
-
-The fastest way to see your posture — reads the installed agents' configs once
-(`~/.claude`, `~/.codex`, `~/.cursor`, …, plus the current directory if it's a
-project), prints a score, and exits. No daemon, no policy, no setup:
-
-```sh
 sigil scan
 ```
 
-```text
-Sigil scan — HIGH (5.8)
-3 tools assessed · 7 findings
+```
+overall  CRITICAL 7.5 · 7 tools · 14 findings
 
-TOOL         SCOPE         SCORE  BUCKET    TOP FINDINGS
-claude-code  user-global     5.8  high      no_sandbox, broad_matcher (+1 more)
-codex        user-global     5.6  high      mcp_server_local_command, no_sandbox
-cursor       user-global     2.5  medium    mcp_server_local_command
+TOOL          SCOPE         SCORE  BUCKET     TOP FINDINGS
+claude-code   user-global    7.5   critical   no_sandbox · broad_matcher (.* PreToolUse) · destructive_in_inline_command
+codex         user-global    5.6   high       no_sandbox · mcp_server_local_command
+cursor        application    2.5   medium     mcp_server_local_command
+antigravity   user-global    0.0   low        clean
 
-2 tools not configured: continue-dev, gemini
+not configured: continue-dev, gemini      ·      run `sigil scan --json` for every finding
 ```
 
-Add `--json` for the full machine-readable report. `sigil scan` always exits 0
-— it's a read-out, not a gate. For continuous monitoring (file-change events,
-SIEM export, enforcement), run the daemon below.
+![Sigil scoring a config: a clean repo sits at 0 / low until a wildcard PreToolUse hook running rm -rf $HOME lands, and Sigil re-scores it 7.5 / critical](https://raw.githubusercontent.com/Ju571nK/sigil/main/docs/sigil-risky-config-demo.gif)
 
-### Run the agent (daemon)
+> Your EDR sees the command that ran. Sigil sees the permission that let it run.
+
+Runs on your machine · no account · nothing leaves the box · macOS / Linux / Windows · Rust · Apache-2.0
+
+[**Try the 60-second tour →**](https://sigil-landing-one.vercel.app/)
+
+---
+
+## What it catches
+
+The misconfigurations that turn a helpful agent into a foothold:
+
+- **No sandbox** — the agent runs with full reach into your host. `no_sandbox`
+- **Wildcard hooks** — a `.*` `PreToolUse` matcher that lets any tool call through, or a hook that runs a destructive inline command. `broad_matcher` · `destructive_in_inline_command`
+- **Local-command MCP servers** — an `mcp.json` server set to auto-launch a shell or binary. `mcp_server_local_command`
+- **Empty deny lists** — permissions that look configured but block nothing. `permissions_deny_empty`
+- **Prompt-injection in instruction files** — directives planted to steer the agent off-task.
+
+Across the agents you actually run: **Claude Code, Codex, Cursor, Gemini CLI, Antigravity, Continue.dev, Claude Desktop.**
+
+It re-scores the moment a config changes — a clean repo at `0 / low` jumps to
+`critical` the instant a risky hook lands.
+
+---
+
+## Why your linter and EDR miss this
+
+- A **linter / SAST** reads *your* source. It says nothing about what your agent is *allowed* to do.
+- An **EDR** flags the process *after* it launches. By then the permission that allowed it already existed.
+- **Sigil** reads that permission surface — sandbox, hooks, MCP, instruction files — and scores it *before* anything runs.
+
+It measures. It doesn't block. (Blocking exists, but it's opt-in and off by default — your agent keeps working.)
+
+---
+
+## Running agents on several machines?
+
+If you've got Claude Code and Codex grinding away unattended on a rack of Mac
+minis, each box has its own posture and you can't eyeball them all. The same scan
+rolls up across machines, so one view tells you which host is riskiest and why —
+optionally shipped to your SIEM and a fleet dashboard.
+
+That's the **fleet** side: a client agent on every machine, hash-anchored events
+over mTLS to a central server, signed policy pushed back down, read-only MCP for
+operators. It's there when you need it and invisible when you don't.
+
+→ [Fleet setup](docs/install-server.md) · [sigil-manager dashboard](https://github.com/Ju571nK/sigil-manager) · [architecture](#how-it-works)
+
+---
+
+## Install
 
 ```sh
-cargo run -p sigil-agent -- run
+# personal (default): sigil + sigil-mcp + sigil-hook, no server
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
+
+# fleet: adds sigil-sender + sigil-server + sigil-sign
+SIGIL_PROFILE=fleet curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Ju571nK/sigil/main/install.sh | sh
 ```
 
-Inspect the effective configuration:
+Linux `.deb`/`.rpm` and Windows `.zip` are on the [releases page](https://github.com/Ju571nK/sigil/releases/latest).
+Every release ships a `SHA256SUMS` (the installer verifies it) and a build-provenance attestation.
+Full guide: [docs/install-personal.md](docs/install-personal.md).
 
-```sh
-cargo run -p sigil-agent -- show config
-```
+---
 
-Inspect expanded watch paths:
+## Ask your agent about its own risk
 
-```sh
-cargo run -p sigil-agent -- show paths
-```
+`sigil-mcp` exposes the score over plain MCP, so an AI client can read its own
+posture and explain it:
 
-Run diagnostics without starting the daemon:
+- `sigil-check` — this host only (the default a coding agent registers): `my_risk`, `my_guard_detail`, `my_findings`
+- `sigil-fleet` — read-only fleet view for operators (GET only)
 
-```sh
-cargo run -p sigil-agent -- doctor
-```
+No vendor plugin, no write path by construction.
 
-Print version information:
+---
 
-```sh
-cargo run -p sigil-agent -- version
-```
+## How it works
 
-## Configuration
+A small Rust agent watches the config and posture files on each machine, hashes
+them, and emits JSONL posture events. Locally that's all you need. For a fleet,
+`sigil-sender` ships those events over mTLS to `sigil-server`, which feeds your
+SIEM and the optional `sigil-manager` dashboard and pushes signed policy back.
 
-Sigil uses built-in defaults plus an optional YAML policy file.
+Nine crates with clear roles (`sigil-agent`, `sigil-sender`, `sigil-server`,
+`sigil-mcp`, `sigil-hook`, `sigil-signer`, `sigil-core`, …); `sigil-core` is
+`forbid(unsafe_code)`. Built on rustls, ed25519, blake3, notify, and axum.
 
-Example policy:
+---
 
-```yaml
-version: 1
-host_id_strategy: machine_id
+## Status — read this
 
-overrides:
-  - id: shadow-ai-binaries-macos
-    tier: standard
+Sigil is **alpha**, built and maintained by one person. It **measures posture; it
+does not block** by default. [`SECURITY.md`](SECURITY.md) is honest that there's
+no SLA. The Linux runtime is a working foundation with rough edges (watch limits,
+coverage signaling) still on the [roadmap](ROADMAP.md). Use it to *see* your
+exposure today; don't treat it as a managed enterprise control yet.
 
-targets:
-  - id: team-mcp-allowlist
-    description: Example MCP allowlist file
-    tier: critical
-    platform: any
-    paths:
-      - "~/.config/example/mcp-allowlist.json"
-    recursive: false
-    follow_symlinks: false
-```
-
-An example policy file is available at `config/policy.example.yaml`.
-
-You can override runtime paths from the command line:
-
-```sh
-cargo run -p sigil-agent -- \
-  --policy config/policy.example.yaml \
-  --state-db ./state.db \
-  --events-dir ./events \
-  run
-```
-
-Default production policy locations are platform-specific. The example policy
-can be adapted for `/etc/sigil/policy.yaml` on Unix-like systems or
-`%ProgramData%\Sigil\policy.yaml` on Windows.
-
-## Security
-
-For responsible disclosure of vulnerabilities, see [SECURITY.md](SECURITY.md).
-
-## Contributing
-
-Bug reports, policy suggestions, and patches are welcome. See
-[CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
-
-Questions, ideas, or "is this the right approach?" — open a thread in
-[**GitHub Discussions**](https://github.com/Ju571nK/sigil/discussions) (Q&A)
-rather than an issue; issues are for actionable bugs and concrete proposals.
-
-## License
-
-This project is licensed under the Apache License 2.0.
-
-You may use this software for personal, internal, and commercial purposes,
-subject to the terms of the Apache License 2.0.
-
-See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
-
-## Disclaimer
-
-This software is provided "as is", without warranties or guarantees of any kind.
-
-The author does not guarantee correctness, availability, reliability, security,
-compatibility, or fitness for any particular purpose.
-
-The author is not responsible for any direct, indirect, incidental,
-consequential, special, exemplary, or other damages, including but not limited to
-outages, data loss, security incidents, business interruption, incorrect
-results, compatibility problems, or other problems arising from the use of this
-software.
-
-Use this software at your own risk.
-
-## Commercial Support and Future Offerings
-
-Commercial support, hosted services, enterprise features, paid add-ons,
-consulting, or professional services may be offered separately in the future.
-
-Some future commercial features, hosted components, enterprise modules, or
-binary-only add-ons may be distributed under separate commercial terms.
-
-The open-source version remains available under the Apache License 2.0.
+Apache-2.0 · issues and discussions welcome · [landing](https://sigil-landing-one.vercel.app/)
