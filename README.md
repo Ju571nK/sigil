@@ -30,7 +30,7 @@ antigravity   user-global    0.0   low        clean
 not configured: continue-dev, gemini      ·      run `sigil scan --json` for every finding
 ```
 
-![Sigil scoring a config: a clean repo sits at 0 / low until a wildcard PreToolUse hook running rm -rf $HOME lands, and Sigil re-scores it 7.5 / critical](https://raw.githubusercontent.com/Ju571nK/sigil/main/docs/sigil-risky-config-demo.gif)
+![Sigil scoring a config: a clean repo sits at 0 / low until a wildcard PreToolUse hook running rm -rf $HOME lands, and Sigil re-scores it 7.5 / critical](https://raw.githubusercontent.com/Ju571nK/sigil/main/docs/sigil-mcp-codex01-en.gif)
 
 > Your EDR sees the command that ran. Sigil sees the permission that let it run.
 
