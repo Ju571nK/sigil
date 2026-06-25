@@ -743,20 +743,20 @@ mod tests {
     /// DANGEROUS_TOGGLE_KINDS and kind_key()).
     #[test]
     fn dangerous_toggle_kinds_match_kind_key_outputs() {
-        assert!(DANGEROUS_TOGGLE_KINDS.contains(&kind_key(
-            &AiGuardReason::AutoApprovalEnabled { mode: "m".into() }
-        )));
+        assert!(
+            DANGEROUS_TOGGLE_KINDS.contains(&kind_key(&AiGuardReason::AutoApprovalEnabled {
+                mode: "m".into()
+            }))
+        );
         assert!(DANGEROUS_TOGGLE_KINDS.contains(&kind_key(&AiGuardReason::SandboxDisabled)));
-        assert!(
-            DANGEROUS_TOGGLE_KINDS.contains(&kind_key(&AiGuardReason::PermissionsAllowBroad {
-                rule: "r".into()
-            }))
-        );
-        assert!(
-            DANGEROUS_TOGGLE_KINDS.contains(&kind_key(&AiGuardReason::ProjectMcpAutoEnabled {
+        assert!(DANGEROUS_TOGGLE_KINDS.contains(&kind_key(
+            &AiGuardReason::PermissionsAllowBroad { rule: "r".into() }
+        )));
+        assert!(DANGEROUS_TOGGLE_KINDS.contains(&kind_key(
+            &AiGuardReason::ProjectMcpAutoEnabled {
                 mechanism: "x".into()
-            }))
-        );
+            }
+        )));
     }
 
     /// #127 — the two shapes are independently tunable kind_keys.

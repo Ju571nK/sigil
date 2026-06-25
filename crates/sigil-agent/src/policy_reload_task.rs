@@ -928,6 +928,7 @@ mod tests {
                     reasons_blake3: [0u8; 32],
                     reasons_count: 1,
                     last_assessed_ts: time::OffsetDateTime::now_utc(),
+                    dangerous_toggles: std::collections::BTreeSet::new(),
                 },
             );
         }
@@ -1299,6 +1300,7 @@ mod tests {
                         reasons_blake3: [0u8; 32],
                         reasons_count: 1,
                         last_assessed_ts: time::OffsetDateTime::now_utc(),
+                        dangerous_toggles: std::collections::BTreeSet::new(),
                     },
                 );
             }
