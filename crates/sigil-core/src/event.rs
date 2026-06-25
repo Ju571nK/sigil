@@ -571,6 +571,19 @@ pub enum Evidence {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tool_label: Option<String>,
     },
+    /// #147 — a dangerous self-config toggle flipped OFF→ON between snapshots
+    /// (auto-approve / sandbox-off / broad-allow / project-MCP-autorun). One-time
+    /// change event; the standing state rides the normal AiGuardRiskAssessed reasons.
+    AiGuardToggleDrift {
+        tool: AiTool,
+        scope: AiGuardScope,
+        /// The dangerous-toggle kind that turned on, e.g. "auto_approval_enabled".
+        toggle: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule_pack_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_label: Option<String>,
+    },
     /// Phase 3b.4-pre — periodic snapshot of host identity + network + OS
     /// metadata. Emitted by host_meta_snapshot_task on boot, every 24h, and
     /// whenever the snapshot's canonical hash differs from the last
@@ -922,6 +935,41 @@ mod tests {
         assert!(s.contains("\"executor\":\"host_shell\""));
         let back: Evidence = serde_json::from_str(&s).unwrap();
         assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn ai_guard_toggle_drift_serializes_with_kind_and_round_trips() {
+        let ev = Evidence::AiGuardToggleDrift {
+            tool: AiTool::ClaudeCode,
+            scope: AiGuardScope::UserGlobal,
+            toggle: "auto_approval_enabled".into(),
+            rule_pack_id: None,
+            tool_label: None,
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"kind\":\"ai_guard_toggle_drift\""), "got: {s}");
+        assert!(s.contains("\"tool\":\"claude_code\""));
+        assert!(s.contains("\"toggle\":\"auto_approval_enabled\""));
+        // Optional fields omitted when None.
+        assert!(!s.contains("rule_pack_id"));
+        assert!(!s.contains("tool_label"));
+        let back: Evidence = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn ai_guard_toggle_drift_round_trips_optional_fields() {
+        let ev = Evidence::AiGuardToggleDrift {
+            tool: AiTool::Other,
+            scope: AiGuardScope::Project { path: "/r".into() },
+            toggle: "sandbox_disabled".into(),
+            rule_pack_id: Some("my-pack".into()),
+            tool_label: Some("acme-ai".into()),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains(r#""rule_pack_id":"my-pack""#));
+        assert!(s.contains(r#""tool_label":"acme-ai""#));
+        assert_eq!(ev, serde_json::from_str::<Evidence>(&s).unwrap());
     }
 
     #[test]
