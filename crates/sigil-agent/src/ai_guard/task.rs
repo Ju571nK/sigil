@@ -190,6 +190,19 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
     // previous cached set and emit a one-time event for each toggle that
     // appeared (OFF→ON). The standing state still rides the normal
     // AiGuardRiskAssessed reasons; this is an ADDITIONAL change event.
+    //
+    // MVP limitations (codex-review, all P2, none a current bug):
+    //  1. Baseline is keyed by the full StateMap key (tool, scope, rule_pack_id),
+    //     so a toggle first seen under a *renamed* rule pack id is baselined (no
+    //     drift) — consistent with how every assessment is keyed. Built-in
+    //     toggles (rule_pack_id = None) are unaffected.
+    //  2. The prev-read / new-write below are not one atomic critical section.
+    //     Safe today because the eval loop is serialized per key; if parser eval
+    //     ever runs concurrently for the same key, fold read+compare+write into a
+    //     single `state.write()` to avoid a double-fire.
+    //  3. The cache advances before the drift send, so a send that fails during
+    //     shutdown drops that one alert (at-most-once). The standing reason still
+    //     re-establishes posture, so nothing about *state* is lost.
     let new_toggles: std::collections::BTreeSet<String> = rubric::dangerous_toggles(&reasons)
         .into_iter()
         .map(|s| s.to_string())
