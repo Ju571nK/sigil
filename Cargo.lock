@@ -3050,7 +3050,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "sigil-agent"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3084,7 +3084,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-core"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "blake3",
  "data-encoding",
@@ -3110,7 +3110,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-hook"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "blake3",
  "clap",
@@ -3125,7 +3125,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-mcp"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "httpmock",
@@ -3145,11 +3145,11 @@ dependencies = [
 
 [[package]]
 name = "sigil-rules-basic"
-version = "0.6.2"
+version = "0.7.0"
 
 [[package]]
 name = "sigil-sender"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3177,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-server"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3210,7 +3210,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-signer"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3228,7 +3228,7 @@ dependencies = [
 
 [[package]]
 name = "sigil-spool"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "notify",
  "parking_lot",
