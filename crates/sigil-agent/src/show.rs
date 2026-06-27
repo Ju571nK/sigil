@@ -506,6 +506,10 @@ fn evidence_summary(e: &sigil_core::event::Evidence) -> (&'static str, String) {
             "ai_guard_risk_assessed",
             format!("tool={tool:?} bucket={bucket:?}"),
         ),
+        Evidence::AiGuardToggleDrift { tool, toggle, .. } => (
+            "ai_guard_toggle_drift",
+            format!("{tool:?} {toggle} turned on (drift)"),
+        ),
         Evidence::HostMetaSnapshot { .. } => ("host_meta_snapshot", String::new()),
         Evidence::HookInvocation(_) => ("hook_invocation", String::new()),
         Evidence::HookDecision(d) => (

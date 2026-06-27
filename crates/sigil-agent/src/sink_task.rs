@@ -67,6 +67,7 @@ fn evidence_kind_str(e: &sigil_core::event::Evidence) -> &'static str {
         ServerProtocolViolation { .. } => "server_protocol_violation",
         SenderLagCritical { .. } => "sender_lag_critical",
         AiGuardRiskAssessed { .. } => "ai_guard_risk_assessed",
+        AiGuardToggleDrift { .. } => "ai_guard_toggle_drift",
         HostMetaSnapshot { .. } => "host_meta_snapshot",
         HookInvocation(_) => "hook_invocation",
         HookDecision(_) => "hook_decision",

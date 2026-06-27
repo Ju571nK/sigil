@@ -14,6 +14,7 @@ pub(crate) fn alerts_definition_default() -> serde_json::Value {
         "evidence_kinds": ["ai_guard_risk_assessed"],
         "ai_guard_buckets": ["high", "critical"],
         "additional_kinds": [
+            "ai_guard_toggle_drift",
             "policy_signature_invalid", "tls_failure",
             "host_id_fingerprint_drift", "agent_dying", "sender_lag_critical"
         ]

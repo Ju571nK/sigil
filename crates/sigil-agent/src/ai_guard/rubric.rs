@@ -61,6 +61,23 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
     }
 }
 
+/// #147 — the dangerous self-escalation toggle kinds tracked for drift.
+pub const DANGEROUS_TOGGLE_KINDS: &[&str] = &[
+    "auto_approval_enabled",
+    "sandbox_disabled",
+    "permissions_allow_broad",
+    "project_mcp_auto_enabled",
+];
+
+/// The set of dangerous-toggle kind keys present in a reason set.
+pub fn dangerous_toggles(reasons: &[AiGuardReason]) -> std::collections::BTreeSet<&'static str> {
+    reasons
+        .iter()
+        .map(kind_key)
+        .filter(|k| DANGEROUS_TOGGLE_KINDS.contains(k))
+        .collect()
+}
+
 /// Phase 3b.5 — operator-tunable rubric. Holds the active weights and
 /// metadata about which entries came from operator overrides. Built once
 /// at boot and on each policy reload; consulted by the score() pipeline.
@@ -670,6 +687,76 @@ mod tests {
         });
         assert_eq!(score(&shell_destructive), 9.5);
         assert_eq!(bucket(score(&shell_destructive)), AiGuardBucket::Critical);
+    }
+
+    /// #147 — only the four dangerous-toggle kinds are returned, regardless of
+    /// other (non-dangerous) reasons present in the set.
+    #[test]
+    fn dangerous_toggles_returns_only_dangerous_kinds() {
+        let reasons = vec![
+            // dangerous
+            AiGuardReason::AutoApprovalEnabled {
+                mode: "auto_edit".into(),
+            },
+            AiGuardReason::SandboxDisabled,
+            AiGuardReason::PermissionsAllowBroad {
+                rule: "Bash:.*".into(),
+            },
+            AiGuardReason::ProjectMcpAutoEnabled {
+                mechanism: "enableAllProjectMcpServers".into(),
+            },
+            // non-dangerous noise
+            AiGuardReason::PermissionsDenyEmpty,
+            AiGuardReason::NoSandbox {
+                executor: "host_shell".into(),
+            },
+            AiGuardReason::TrustedMcpServer {
+                server_name: "x".into(),
+            },
+        ];
+        let got = dangerous_toggles(&reasons);
+        let expected: std::collections::BTreeSet<&'static str> = [
+            "auto_approval_enabled",
+            "sandbox_disabled",
+            "permissions_allow_broad",
+            "project_mcp_auto_enabled",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(got, expected);
+    }
+
+    /// #147 — a reason set with no dangerous toggles yields an empty set.
+    #[test]
+    fn dangerous_toggles_empty_when_none_present() {
+        let reasons = vec![
+            AiGuardReason::PermissionsDenyEmpty,
+            AiGuardReason::NoSandbox {
+                executor: "host_shell".into(),
+            },
+        ];
+        assert!(dangerous_toggles(&reasons).is_empty());
+    }
+
+    /// #147 — the four declared dangerous kinds match the kind_key() outputs of
+    /// their corresponding reason variants exactly (guards against drift between
+    /// DANGEROUS_TOGGLE_KINDS and kind_key()).
+    #[test]
+    fn dangerous_toggle_kinds_match_kind_key_outputs() {
+        assert!(
+            DANGEROUS_TOGGLE_KINDS.contains(&kind_key(&AiGuardReason::AutoApprovalEnabled {
+                mode: "m".into()
+            }))
+        );
+        assert!(DANGEROUS_TOGGLE_KINDS.contains(&kind_key(&AiGuardReason::SandboxDisabled)));
+        assert!(DANGEROUS_TOGGLE_KINDS.contains(&kind_key(
+            &AiGuardReason::PermissionsAllowBroad { rule: "r".into() }
+        )));
+        assert!(DANGEROUS_TOGGLE_KINDS.contains(&kind_key(
+            &AiGuardReason::ProjectMcpAutoEnabled {
+                mechanism: "x".into()
+            }
+        )));
     }
 
     /// #127 — the two shapes are independently tunable kind_keys.

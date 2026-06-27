@@ -13,7 +13,8 @@ fn is_alert_evidence(ev: &Evidence) -> bool {
         Evidence::AiGuardRiskAssessed {
             bucket: AiGuardBucket::High | AiGuardBucket::Critical,
             ..
-        } | Evidence::PolicySignatureInvalid { .. }
+        } | Evidence::AiGuardToggleDrift { .. }
+            | Evidence::PolicySignatureInvalid { .. }
             | Evidence::TlsFailure { .. }
             | Evidence::HostIdFingerprintDrift { .. }
             | Evidence::AgentDying { .. }
@@ -125,6 +126,7 @@ pub fn apply_event(host: &mut HostSummary, event: &Event) {
         // entire update. Listed explicitly so future variant additions raise
         // a non-exhaustive match warning until decided where to map them.
         Evidence::FileChange { .. }
+        | Evidence::AiGuardToggleDrift { .. }
         | Evidence::PermissionMissing { .. }
         | Evidence::AgentDying { .. }
         | Evidence::RateLimitExceeded { .. }
@@ -186,6 +188,13 @@ mod tests {
         for k in def["additional_kinds"].as_array().unwrap() {
             let kind = k.as_str().unwrap();
             let ev = match kind {
+                "ai_guard_toggle_drift" => Evidence::AiGuardToggleDrift {
+                    tool: AiTool::ClaudeCode,
+                    scope: AiGuardScope::UserGlobal,
+                    toggle: "auto_approval_enabled".into(),
+                    rule_pack_id: None,
+                    tool_label: None,
+                },
                 "policy_signature_invalid" => Evidence::PolicySignatureInvalid {
                     reason: PolicySignatureInvalidReason::SignatureInvalid,
                     signing_pubkey_id: "k".into(),
