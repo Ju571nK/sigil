@@ -9,6 +9,26 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ### Added
 
+- **Dangerous-toggle drift detection** (#147). When a coding agent's config
+  silently flips a self-escalation toggle on — auto-approve, sandbox-off,
+  broad-allow, or project-MCP-autorun — the daemon emits a one-time
+  `AiGuardToggleDrift` security event (the CVE-2025-53773 `chat.tools.autoApprove`
+  class). Fires only on the OFF→ON transition vs the previous hashed snapshot
+  (baseline-safe across restarts; re-arms on off→on→off→on); classified as a
+  fleet alert. Works over reason kinds, so rule-pack-emitted toggles are covered.
+- **`sigil-server` enrollment endpoint (B-mint)** (#184). `POST /v1/enroll` signs
+  a host CSR into a per-host mTLS client cert using an operator-provided
+  intermediate CA (root stays offline), gated by a single-use, TTL, per-host
+  token (`sigil-server enroll-token`). Fixed client-cert profile + post-sign
+  inspection, allowlist auto-add, signed enrollment audit; enrollment refuses to
+  run without mTLS + a restrictive allowlist. Lets a PMS bootstrap host identity
+  without hand-running openssl per host. Hardware-verified on Rocky 9 aarch64.
+- **`sigil-server` signed-artifact serving** (#182). `GET /v1/artifacts[/<file>]`
+  serves the release binaries (tarballs/zips, `.deb`/`.rpm`, `SHA256SUMS`,
+  build-manifest) read-only from an operator-populated `artifacts_dir`, so an
+  air-gapped fleet/PMS can pull from the server instead of GitHub. Bearer-gated,
+  path-traversal-hardened; `install.sh`/`install.ps1` gained `SIGIL_BASE_URL` +
+  `SIGIL_BASE_TOKEN` to fetch from it.
 - **`sigil scan` — one-shot, daemon-free posture score** (#174). The fastest
   personal read: it reads each installed agent's user-global config once
   (`~/.claude`, `~/.codex`, `~/.cursor`, …) plus the current directory if it is a
