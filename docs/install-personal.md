@@ -63,6 +63,29 @@ mkdir -p ~/.config/sigil
 
 For a packaged install the directory is `/etc/sigil` (created by the package).
 
+### Agent permission prompts (optional, opt-in)
+
+If you drive sigil from inside an AI coding agent (Claude Code), the agent
+improvises `sigil` commands with varying flags, so each distinct command string
+is a fresh approval and "don't ask again" never sticks — a first-run prompt
+storm. The **personal** `install.sh` / `install.ps1` therefore *offers* (opt-in,
+only when a terminal is present) to add a read-only allowlist to
+`~/.claude/settings.json`:
+
+```json
+{ "permissions": {
+    "allow": ["Bash(sigil:*)"],
+    "deny": ["Bash(sigil run:*)", "Bash(sigil-hook:*)"]
+} }
+```
+
+The broad `Bash(sigil:*)` allow stops the storm; the explicit **deny** keeps the
+privileged `sigil run` (daemon) and `sigil-hook` (enforce) from being silently
+granted to the agent — Claude Code evaluates deny before allow. Decline and the
+installer just prints the snippet; it never edits silently, and the fleet profile
+never offers it. (A posture tool editing agent config must be opt-in, read-only,
+and transparent.)
+
 ---
 
 ## Run the daemon

@@ -49,6 +49,77 @@ if ($env:SIGIL_PROFILE_DRYRUN -eq '1') {
   exit 0
 }
 
+# --- #188: personal-profile Claude Code allowlist offer (mirrors install.sh) ---
+# Broad `Bash(sigil:*)` allow stops the per-command prompt storm; an explicit
+# deny keeps `sigil run` (daemon) and `sigil-hook` (enforce) from being silently
+# granted to the agent (Claude Code evaluates deny before allow).
+$SigilAllowRule = 'Bash(sigil:*)'
+$SigilDenyRules = @('Bash(sigil run:*)', 'Bash(sigil-hook:*)')
+
+function Get-ClaudeSettingsPath { Join-Path $env:USERPROFILE '.claude\settings.json' }
+
+function Show-AllowlistSnippet {
+  $s = Get-ClaudeSettingsPath
+  [Console]::Error.WriteLine(@"
+sigil-install: to stop your AI agent prompting on every sigil command, add this
+sigil-install: read-only allowlist to $s ('sigil run'/'sigil-hook' stay denied):
+
+  { "permissions": {
+      "allow": ["$SigilAllowRule"],
+      "deny": ["Bash(sigil run:*)", "Bash(sigil-hook:*)"]
+  } }
+"@)
+}
+
+# Idempotent, order-preserving merge into permissions.allow/deny via native JSON.
+function Merge-SigilAllowlist($path) {
+  $dir = Split-Path -Parent $path
+  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+  $cfg = $null
+  if (Test-Path $path) {
+    $raw = Get-Content -Raw -Path $path -ErrorAction SilentlyContinue
+    if ($raw -and $raw.Trim()) { try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = $null } }
+  }
+  if ($null -eq $cfg) { $cfg = [pscustomobject]@{} }
+  if (-not $cfg.PSObject.Properties['permissions'] -or $null -eq $cfg.permissions) {
+    $cfg | Add-Member -NotePropertyName permissions -NotePropertyValue ([pscustomobject]@{}) -Force
+  }
+  $perm = $cfg.permissions
+  if (-not $perm.PSObject.Properties['allow']) { $perm | Add-Member -NotePropertyName allow -NotePropertyValue @() }
+  if (-not $perm.PSObject.Properties['deny'])  { $perm | Add-Member -NotePropertyName deny  -NotePropertyValue @() }
+  $a = @($perm.allow); if ($a -notcontains $SigilAllowRule) { $a += $SigilAllowRule }; $perm.allow = $a
+  $dn = @($perm.deny); foreach ($r in $SigilDenyRules) { if ($dn -notcontains $r) { $dn += $r } }; $perm.deny = $dn
+  $json = $cfg | ConvertTo-Json -Depth 10
+  # PS 5.1 unwraps single-element arrays on serialize; force allow/deny to arrays.
+  $json = [regex]::Replace($json, '("(?:allow|deny)"\s*:\s*)("(?:[^"\\]|\\.)*")(\s*[,\r\n}])', '$1[$2]$3')
+  Set-Content -Path $path -Value $json -Encoding UTF8
+}
+
+function Invoke-AllowlistOffer {
+  if ($profileName -ne 'personal') { return }
+  $s = Get-ClaudeSettingsPath
+  if (-not [Environment]::UserInteractive) { Show-AllowlistSnippet; return }
+  [Console]::Error.Write("sigil-install: add a read-only sigil allowlist to $s so your AI agent doesn't prompt on every sigil command? ('sigil run'/'sigil-hook' stay denied) [y/N] ")
+  $ans = Read-Host
+  if ($ans -match '^(y|yes)$') {
+    try {
+      Merge-SigilAllowlist $s
+      Say "added read-only sigil allowlist to $s (allow Bash(sigil:*); deny sigil run + sigil-hook)"
+    } catch {
+      Say "could not edit $s; add the allowlist manually:"; Show-AllowlistSnippet
+    }
+  } else {
+    Say "skipped the allowlist; add it later if you want:"; Show-AllowlistSnippet
+  }
+}
+
+# dry-run hook: show what the offer would add (personal) without prompt/edit.
+if ($env:SIGIL_ALLOWLIST_DRYRUN -eq '1') {
+  if ($profileName -eq 'personal') { Show-AllowlistSnippet }
+  else { [Console]::Error.WriteLine("allowlist offer: skipped (profile=$profileName)") }
+  exit 0
+}
+
 # --- detect platform -------------------------------------------------------
 # SIGIL_ARCH_OVERRIDE lets the tests drive arch detection without spoofing the
 # OS; unset in normal use. Values match RuntimeInformation.OSArchitecture.
@@ -167,3 +238,6 @@ try {
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
+
+# #188 — personal profile only: opt-in Claude Code allowlist (defined above).
+Invoke-AllowlistOffer

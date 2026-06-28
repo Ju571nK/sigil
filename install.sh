@@ -41,6 +41,89 @@ if [ "${SIGIL_PROFILE_DRYRUN:-}" = "1" ]; then
   exit 0
 fi
 
+# --- #188: personal-profile Claude Code allowlist offer ---------------------
+# An AI agent (Claude Code) driving sigil improvises flagged commands, so each
+# distinct command string is a fresh approval and "don't ask again" never
+# sticks. Offer (opt-in) to add a read-only allowlist to ~/.claude/settings.json.
+# Broad `Bash(sigil:*)` allow kills the prompt storm; an explicit deny keeps the
+# privileged `sigil run` (daemon) and `sigil-hook` (enforce) from being silently
+# granted to the agent — Claude Code evaluates deny before allow, so deny wins.
+SIGIL_ALLOW_RULE='Bash(sigil:*)'
+
+claude_settings_path() { printf '%s/.claude/settings.json' "$HOME"; }
+
+print_allowlist_snippet() {
+  _s="$(claude_settings_path)"
+  cat >&2 <<EOF
+sigil-install: to stop your AI agent prompting on every sigil command, add this
+sigil-install: read-only allowlist to $_s ('sigil run'/'sigil-hook' stay denied):
+
+  { "permissions": {
+      "allow": ["$SIGIL_ALLOW_RULE"],
+      "deny": ["Bash(sigil run:*)", "Bash(sigil-hook:*)"]
+  } }
+
+sigil-install: with jq (creates the file if missing):
+  S="$_s"; mkdir -p "\$(dirname "\$S")"; [ -f "\$S" ] || echo '{}' > "\$S"; \\
+  jq '.permissions.allow=((.permissions.allow//[])+["$SIGIL_ALLOW_RULE"]-(.permissions.allow//[])) | .permissions.deny=((.permissions.deny//[])+["Bash(sigil run:*)","Bash(sigil-hook:*)"]-(.permissions.deny//[]))' "\$S" > "\$S.tmp" && mv "\$S.tmp" "\$S"
+EOF
+}
+
+# Idempotent, order-preserving merge into permissions.allow/deny via jq.
+merge_allowlist() {
+  _s="$1"
+  mkdir -p "$(dirname "$_s")" || return 1
+  _existing='{}'
+  [ -f "$_s" ] && _existing="$(cat "$_s")"
+  printf '%s' "$_existing" | jq \
+    --arg allow "$SIGIL_ALLOW_RULE" \
+    '.permissions = (.permissions // {})
+     | .permissions.allow = ((.permissions.allow // []) + ([$allow] - (.permissions.allow // [])))
+     | .permissions.deny  = ((.permissions.deny  // []) + (["Bash(sigil run:*)","Bash(sigil-hook:*)"] - (.permissions.deny // [])))' \
+    > "$_s.tmp.$$" 2>/dev/null && mv "$_s.tmp.$$" "$_s"
+}
+
+offer_claude_allowlist() {
+  [ "$PROFILE" = "personal" ] || return 0
+  _s="$(claude_settings_path)"
+  # Consent needs a real terminal. curl | sh has no stdin TTY, so read /dev/tty;
+  # if there's no controlling terminal (CI/cron), never edit — just print.
+  if ! { exec 3</dev/tty; } 2>/dev/null; then
+    print_allowlist_snippet
+    return 0
+  fi
+  printf 'sigil-install: add a read-only sigil allowlist to %s so your AI agent\n' "$_s" >&2
+  printf "sigil-install: doesn't prompt on every sigil command? ('sigil run'/'sigil-hook' stay denied) [y/N] " >&2
+  _ans=''
+  read -r _ans <&3 || _ans=''
+  exec 3<&- 2>/dev/null || true
+  case "$_ans" in
+    y | Y | yes | YES)
+      if ! command -v jq >/dev/null 2>&1; then
+        say "jq not found ($(pkg_hint jq)); add the allowlist manually:"
+        print_allowlist_snippet
+      elif merge_allowlist "$_s"; then
+        say "added read-only sigil allowlist to $_s (allow Bash(sigil:*); deny sigil run + sigil-hook)"
+      else
+        say "could not edit $_s; add the allowlist manually:"
+        print_allowlist_snippet
+      fi
+      ;;
+    *) say "skipped the allowlist; add it later if you want:" && print_allowlist_snippet ;;
+  esac
+}
+
+# dry-run hook: show what the allowlist offer would add (personal) without any
+# prompt/edit. Used by tests/install_profile_test.sh.
+if [ "${SIGIL_ALLOWLIST_DRYRUN:-}" = "1" ]; then
+  if [ "$PROFILE" = "personal" ]; then
+    print_allowlist_snippet
+  else
+    printf 'allowlist offer: skipped (profile=%s)\n' "$PROFILE" >&2
+  fi
+  exit 0
+fi
+
 # --- tooling ---------------------------------------------------------------
 # Minimal RHEL-family / container images often ship without `tar` (and even
 # `curl`); a bare "missing required tool" leaves the user guessing. Suggest the
@@ -175,3 +258,6 @@ case ":$PATH:" in
   *) say "note: add $INSTALL_DIR to your PATH to run 'sigil' directly" ;;
 esac
 say "next: sigil doctor"
+
+# #188 — personal profile only: opt-in Claude Code allowlist (defined above).
+offer_claude_allowlist
