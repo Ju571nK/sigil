@@ -85,4 +85,46 @@ if ($LASTEXITCODE -eq 0) { Write-Host 'FAIL: SIGIL_BASE_URL without SIGIL_VERSIO
 else { Write-Host 'ok: SIGIL_BASE_URL requires SIGIL_VERSION' }
 Remove-Item Env:SIGIL_ARCH_OVERRIDE, Env:SIGIL_BASE_URL, Env:SIGIL_URL_DRYRUN -ErrorAction SilentlyContinue
 
+# #188 — Claude allowlist offer (personal only), via SIGIL_ALLOWLIST_DRYRUN.
+function Allowlist-Snip($prof) {
+  $env:SIGIL_PROFILE = $prof; $env:SIGIL_ALLOWLIST_DRYRUN = '1'
+  try { (& pwsh -NoProfile -File $ps1 2>&1 | Out-String) } finally {
+    Remove-Item Env:SIGIL_PROFILE, Env:SIGIL_ALLOWLIST_DRYRUN -ErrorAction SilentlyContinue
+  }
+}
+$snip = Allowlist-Snip 'personal'
+if ($snip -match '"allow": \["Bash\(sigil:\*\)"\]' -and $snip -match 'Bash\(sigil run:\*\)' -and $snip -match 'Bash\(sigil-hook:\*\)') {
+  Write-Host 'ok: personal allowlist snippet (broad allow + deny run/hook)'
+} else { Write-Host 'FAIL: personal allowlist snippet missing expected rules'; Write-Host $snip; $fail = 1 }
+$fsnip = Allowlist-Snip 'fleet'
+if ($fsnip -match 'skipped \(profile=fleet\)') { Write-Host 'ok: fleet profile does not offer allowlist' }
+else { Write-Host 'FAIL: fleet should skip the allowlist offer'; $fail = 1 }
+
+# #188 — Merge-SigilAllowlist must be idempotent, order-preserving, non-clobbering.
+# Dot-source only the function block by extracting it is overkill; instead exercise
+# the same native-JSON merge logic the installer uses, asserting array output.
+$td = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Force -Path $td | Out-Null
+$sj = Join-Path $td 'settings.json'
+'{"permissions":{"allow":["Bash(ls:*)"]},"keep":1}' | Set-Content -Path $sj -Encoding UTF8
+$merge = {
+  param($path)
+  $cfg = (Get-Content -Raw $path | ConvertFrom-Json)
+  if (-not $cfg.PSObject.Properties['permissions']) { $cfg | Add-Member -NotePropertyName permissions -NotePropertyValue ([pscustomobject]@{}) -Force }
+  $perm = $cfg.permissions
+  if (-not $perm.PSObject.Properties['allow']) { $perm | Add-Member -NotePropertyName allow -NotePropertyValue @() }
+  if (-not $perm.PSObject.Properties['deny'])  { $perm | Add-Member -NotePropertyName deny  -NotePropertyValue @() }
+  $a = @($perm.allow); if ($a -notcontains 'Bash(sigil:*)') { $a += 'Bash(sigil:*)' }; $perm.allow = $a
+  $dn = @($perm.deny); foreach ($r in @('Bash(sigil run:*)','Bash(sigil-hook:*)')) { if ($dn -notcontains $r) { $dn += $r } }; $perm.deny = $dn
+  $json = $cfg | ConvertTo-Json -Depth 10
+  $json = [regex]::Replace($json, '("(?:allow|deny)"\s*:\s*)("(?:[^"\\]|\\.)*")(\s*[,\r\n}])', '$1[$2]$3')
+  Set-Content -Path $path -Value $json -Encoding UTF8
+}
+& $merge $sj; & $merge $sj   # twice → idempotent
+$res = (Get-Content -Raw $sj | ConvertFrom-Json)
+if (@($res.permissions.allow).Count -eq 2 -and @($res.permissions.deny).Count -eq 2 -and $res.keep -eq 1 -and @($res.permissions.allow)[0] -eq 'Bash(ls:*)') {
+  Write-Host 'ok: native merge idempotent + preserves existing allow/keys'
+} else { Write-Host "FAIL: native merge (allow=$(@($res.permissions.allow).Count) deny=$(@($res.permissions.deny).Count))"; $fail = 1 }
+Remove-Item -Recurse -Force $td -ErrorAction SilentlyContinue
+
 exit $fail

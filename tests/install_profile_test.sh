@@ -56,4 +56,32 @@ if SIGIL_UNAME_S=Linux SIGIL_UNAME_M=x86_64 \
   echo "FAIL: SIGIL_BASE_URL without SIGIL_VERSION should exit non-zero"; fail=1
 else echo "ok: SIGIL_BASE_URL requires SIGIL_VERSION"; fi
 
+# #188 — Claude allowlist offer (personal only), via SIGIL_ALLOWLIST_DRYRUN.
+snip="$(SIGIL_PROFILE=personal SIGIL_ALLOWLIST_DRYRUN=1 sh "$SH" 2>&1)"
+case "$snip" in
+  *'"allow": ["Bash(sigil:*)"]'*'Bash(sigil run:*)'*'Bash(sigil-hook:*)'*)
+    echo "ok: personal allowlist snippet (broad allow + deny run/hook)" ;;
+  *) echo "FAIL: personal allowlist snippet missing expected rules"; printf '%s\n' "$snip"; fail=1 ;;
+esac
+fleet_snip="$(SIGIL_PROFILE=fleet SIGIL_ALLOWLIST_DRYRUN=1 sh "$SH" 2>&1)"
+case "$fleet_snip" in
+  *"skipped (profile=fleet)"*) echo "ok: fleet profile does not offer allowlist" ;;
+  *) echo "FAIL: fleet should skip the allowlist offer"; fail=1 ;;
+esac
+
+# #188 — the jq merge must be idempotent + order-preserving + non-clobbering.
+if command -v jq >/dev/null 2>&1; then
+  jqd="$(mktemp -d)"; sj="$jqd/settings.json"
+  echo '{"permissions":{"allow":["Bash(ls:*)"]},"keep":1}' > "$sj"
+  JQM='.permissions = (.permissions // {}) | .permissions.allow = ((.permissions.allow // []) + (["Bash(sigil:*)"] - (.permissions.allow // []))) | .permissions.deny = ((.permissions.deny // []) + (["Bash(sigil run:*)","Bash(sigil-hook:*)"] - (.permissions.deny // [])))'
+  jq "$JQM" "$sj" > "$sj.t" && mv "$sj.t" "$sj"
+  jq "$JQM" "$sj" > "$sj.t" && mv "$sj.t" "$sj"   # twice → idempotent
+  a="$(jq '.permissions.allow|length' "$sj")"; d="$(jq '.permissions.deny|length' "$sj")"; k="$(jq -r '.keep' "$sj")"
+  first="$(jq -r '.permissions.allow[0]' "$sj")"
+  if [ "$a" = 2 ] && [ "$d" = 2 ] && [ "$k" = 1 ] && [ "$first" = "Bash(ls:*)" ]; then
+    echo "ok: jq merge idempotent + preserves existing allow/keys"
+  else echo "FAIL: jq merge (allow=$a deny=$d keep=$k first=$first)"; fail=1; fi
+  rm -rf "$jqd"
+else echo "ok: jq absent — merge test skipped"; fi
+
 exit $fail
