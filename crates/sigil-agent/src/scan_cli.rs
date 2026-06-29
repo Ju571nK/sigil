@@ -197,14 +197,19 @@ fn round1(x: f32) -> f64 {
     (x as f64 * 10.0).round() / 10.0
 }
 
+/// The serde `kind` tag of a single reason (e.g. "no_sandbox").
+fn reason_kind(reason: &AiGuardReason) -> String {
+    serde_json::to_value(reason)
+        .ok()
+        .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 /// Distinct reason kinds (the serde `kind` tag) for a row, in first-seen order.
 fn reason_kinds(reasons: &[AiGuardReason]) -> Vec<String> {
     let mut seen: Vec<String> = Vec::new();
     for r in reasons {
-        let kind = serde_json::to_value(r)
-            .ok()
-            .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string))
-            .unwrap_or_else(|| "unknown".to_string());
+        let kind = reason_kind(r);
         if !seen.contains(&kind) {
             seen.push(kind);
         }
@@ -317,6 +322,27 @@ fn render_human(report: &Report) -> String {
     }
 
     if !report.rows.is_empty() {
+        // How to reduce: the distinct finding kinds across all rows (rows are
+        // score-descending, so higher-impact fixes surface first), each with a
+        // one-line advisory hint. Advisory only — Sigil suggests, never edits.
+        // Keyed by the wire `kind` for the label; the hint comes from the reason
+        // variant (general per variant), so per-kind dedup is unambiguous.
+        let mut seen: Vec<(String, &'static str)> = Vec::new();
+        for r in &report.rows {
+            for reason in &r.reasons {
+                let kind = reason_kind(reason);
+                if kind != "unknown" && !seen.iter().any(|(k, _)| k == &kind) {
+                    seen.push((kind, crate::ai_guard::remediation::hint_for_reason(reason)));
+                }
+            }
+        }
+        if !seen.is_empty() {
+            let kcol = seen.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+            let _ = writeln!(out, "\nHow to reduce");
+            for (kind, hint) in &seen {
+                let _ = writeln!(out, "  {kind:<kcol$}  {hint}");
+            }
+        }
         let _ = writeln!(out, "\nRun `sigil scan --json` for full detail.");
     }
     out
@@ -337,7 +363,20 @@ fn report_json(report: &Report) -> serde_json::Value {
             "scope": scope_str(&r.scope),
             "score": round1(r.score),
             "bucket": bucket_wire(r.bucket),
-            "reasons": r.reasons,
+            // Each reason is the serialized AiGuardReason with an advisory
+            // `hint` derived from the reason variant (#188-followup A).
+            "reasons": r.reasons.iter().map(|reason| {
+                let mut v = serde_json::to_value(reason).unwrap_or(serde_json::Value::Null);
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "hint".to_string(),
+                        serde_json::Value::String(
+                            crate::ai_guard::remediation::hint_for_reason(reason).to_string(),
+                        ),
+                    );
+                }
+                v
+            }).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "not_configured": report.not_configured.iter()
             .map(|t| tool_cli_label(*t)).collect::<Vec<_>>(),

@@ -9,6 +9,7 @@ pub mod assess;
 pub mod command_scan;
 pub mod ext_script;
 pub mod parser;
+pub mod remediation;
 pub mod rubric;
 pub mod rule_pack;
 pub mod task;

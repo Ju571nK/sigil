@@ -113,3 +113,45 @@ fn human_output_has_headline_and_not_configured_footer() {
     assert!(out.contains("Sigil scan —"), "{out}");
     assert!(out.contains("tools not configured"), "{out}");
 }
+
+#[test]
+fn remediation_hint_in_json_and_human_for_a_finding() {
+    // #188-followup A — a local-command MCP finding must carry an advisory hint
+    // in --json (per reason) and surface in the human "How to reduce" section.
+    let home = tempdir().unwrap();
+    write(
+        &home.path().join(".cursor").join("mcp.json"),
+        r#"{"mcpServers":{"x":{"command":"npx","args":["-y","evil"]}}}"#,
+    );
+
+    let v = report_json_for(home.path(), None);
+    let cursor = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tool"] == "cursor")
+        .expect("cursor row present");
+    let reason = cursor["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "mcp_server_local_command")
+        .expect("local-command reason present");
+    let hint = reason["hint"].as_str().expect("reason has a hint field");
+    assert!(
+        hint.contains("auto-launches a local command"),
+        "hint: {hint}"
+    );
+
+    let out = render_human_for(home.path(), None);
+    assert!(out.contains("How to reduce"), "{out}");
+    assert!(out.contains("auto-launches a local command"), "{out}");
+}
+
+#[test]
+fn no_how_to_reduce_section_when_clean() {
+    // Empty HOME ⇒ no rows ⇒ no "How to reduce" section.
+    let home = tempdir().unwrap();
+    let out = render_human_for(home.path(), None);
+    assert!(!out.contains("How to reduce"), "{out}");
+}
