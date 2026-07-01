@@ -149,6 +149,35 @@ fn remediation_hint_in_json_and_human_for_a_finding() {
 }
 
 #[test]
+fn claude_default_mode_bypass_shows_auto_approval_in_scan_and_hint() {
+    // #191 signal 1 — a user-global `permissions.defaultMode: "bypassPermissions"`
+    // reuses the AutoApprovalEnabled reason, so it must surface in the scan JSON
+    // reasons AND the human "How to reduce" section must carry the auto-approval hint.
+    let home = tempdir().unwrap();
+    write(
+        &home.path().join(".claude").join("settings.json"),
+        r#"{"permissions":{"defaultMode":"bypassPermissions"}}"#,
+    );
+
+    let v = report_json_for(home.path(), None);
+    let claude = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tool"] == "claude-code")
+        .expect("claude-code row present");
+    assert!(
+        kinds(&claude["reasons"]).contains(&"auto_approval_enabled".to_string()),
+        "claude reasons: {:?}",
+        claude["reasons"]
+    );
+
+    let out = render_human_for(home.path(), None);
+    assert!(out.contains("How to reduce"), "{out}");
+    assert!(out.contains("Auto-approval is on"), "{out}");
+}
+
+#[test]
 fn no_how_to_reduce_section_when_clean() {
     // Empty HOME ⇒ no rows ⇒ no "How to reduce" section.
     let home = tempdir().unwrap();
