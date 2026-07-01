@@ -59,12 +59,13 @@ impl AiGuardParser for ClaudeCodeParser {
         let local = super::read_json_optional(&local_path)?;
 
         // Missing primary file with no overlay → operator hasn't enabled tool.
-        // #191 — a `scheduled-tasks/` dir alone is still evidence of use, so it
-        // must not be short-circuited by this "tool not enabled" guard.
+        // #191 — a real unattended task (a `scheduled-tasks/<name>/SKILL.md`) is
+        // still evidence of use, so it must not be short-circuited here. An empty
+        // `scheduled-tasks/` dir is NOT evidence and stays short-circuited.
         if base.is_none()
             && local.is_none()
             && !claude.join("CLAUDE.md").is_file()
-            && !claude.join("scheduled-tasks").is_dir()
+            && !has_scheduled_task(&claude)
         {
             return Ok(Vec::new());
         }
@@ -354,6 +355,24 @@ const MAX_SCHEDULED_TASK_REASONS: usize = 20;
 ///
 /// `claude_dir` is the parser's configured `<home>/.claude` (temp home in
 /// tests) — never a hardcoded `~`.
+/// True iff `<claude_dir>/scheduled-tasks/<name>/SKILL.md` exists for at least
+/// one task. Short-circuits on the first hit — the actual signal is a `SKILL.md`,
+/// not a bare (possibly empty) `scheduled-tasks/` dir, so the "tool enabled"
+/// guard uses this rather than `.is_dir()`.
+pub(crate) fn has_scheduled_task(claude_dir: &Path) -> bool {
+    let sched_dir = claude_dir.join("scheduled-tasks");
+    let Ok(entries) = std::fs::read_dir(&sched_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.join("SKILL.md").is_file() {
+            return true;
+        }
+    }
+    false
+}
+
 pub(crate) fn emit_scheduled_task_reasons(claude_dir: &Path, out: &mut Vec<AiGuardReason>) {
     let sched_dir = claude_dir.join("scheduled-tasks");
     let entries = match std::fs::read_dir(&sched_dir) {
@@ -1562,6 +1581,25 @@ mod tests {
             )),
             "got {reasons:?}"
         );
+    }
+
+    #[test]
+    fn empty_scheduled_tasks_dir_is_short_circuited() {
+        // #191 (codex) — a bare `scheduled-tasks/` dir with no `<name>/SKILL.md`
+        // is NOT evidence of use: with no settings/CLAUDE.md the parser must
+        // still short-circuit to no findings (not treat Claude Code as enabled).
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude").join("scheduled-tasks")).unwrap();
+        // Also a subdir without a SKILL.md — still not a real task.
+        std::fs::create_dir_all(
+            dir.path()
+                .join(".claude")
+                .join("scheduled-tasks")
+                .join("empty"),
+        )
+        .unwrap();
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(reasons.is_empty(), "expected no findings, got {reasons:?}");
     }
 
     #[test]
