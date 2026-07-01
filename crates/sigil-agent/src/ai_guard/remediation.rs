@@ -60,6 +60,9 @@ pub fn hint_for_reason(reason: &AiGuardReason) -> &'static str {
         InstructionFileDirective { .. } => {
             "An instruction file contains a flagged directive (fetch-pipe, destructive, obfuscated, or an override marker) — review it for prompt injection."
         }
+        UnattendedScheduledTask { .. } => {
+            "An unattended scheduled task runs Claude Code on a recurring basis — review its prompt and permissions, or remove it if unexpected."
+        }
     }
 }
 

@@ -58,6 +58,7 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
             directive_kind: InstructionDirectiveKind::OverrideMarker,
             ..
         } => "instruction_override_marker",
+        AiGuardReason::UnattendedScheduledTask { .. } => "unattended_scheduled_task",
     }
 }
 
@@ -67,6 +68,9 @@ pub const DANGEROUS_TOGGLE_KINDS: &[&str] = &[
     "sandbox_disabled",
     "permissions_allow_broad",
     "project_mcp_auto_enabled",
+    // #191 — a newly-appeared unattended scheduled task is an OFF→ON drift:
+    // it means an autonomous loop/goal is now running without a human present.
+    "unattended_scheduled_task",
 ];
 
 /// The set of dangerous-toggle kind keys present in a reason set.
@@ -84,7 +88,7 @@ pub fn dangerous_toggles(reasons: &[AiGuardReason]) -> std::collections::BTreeSe
 #[derive(Debug, Clone)]
 pub struct Rubric {
     /// kind_key → weight. Keys are static strings owned by the rubric
-    /// module (returned by `kind_key()`). Defaults populate all 20 known
+    /// module (returned by `kind_key()`). Defaults populate all 21 known
     /// kinds; with_overrides() may replace values but never adds keys.
     pub weights: HashMap<&'static str, f32>,
     /// Subset of `weights` whose value came from an operator override
@@ -99,7 +103,7 @@ pub struct Rubric {
 impl Rubric {
     /// Build the canonical hardcoded weights — single source of truth for
     /// defaults. Must match the historical `weight_for()` match arms for
-    /// all 20 kinds.
+    /// all 21 kinds.
     pub fn defaults() -> Self {
         let mut w: HashMap<&'static str, f32> = HashMap::new();
         w.insert("destructive_in_inline_command", 4.0);
@@ -122,6 +126,9 @@ impl Rubric {
         w.insert("instruction_override_marker", 2.0);
         w.insert("trusted_mcp_server", 1.5);
         w.insert("auto_approval_enabled", 2.0);
+        // #191 — an unattended recurring task is serious (autonomous loop
+        // without guardrails) but not max.
+        w.insert("unattended_scheduled_task", 2.5);
         Rubric {
             weights: w,
             overridden: HashSet::new(),
@@ -459,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn rubric_defaults_all_20_kinds_present() {
+    fn rubric_defaults_all_21_kinds_present() {
         let r = Rubric::defaults();
         assert_eq!(r.weights.get("destructive_in_inline_command"), Some(&4.0));
         assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&4.0));
@@ -481,7 +488,8 @@ mod tests {
         assert_eq!(r.weights.get("instruction_destructive"), Some(&3.0));
         assert_eq!(r.weights.get("instruction_obfuscation"), Some(&2.5));
         assert_eq!(r.weights.get("instruction_override_marker"), Some(&2.0));
-        assert_eq!(r.weights.len(), 20);
+        assert_eq!(r.weights.get("unattended_scheduled_task"), Some(&2.5));
+        assert_eq!(r.weights.len(), 21);
     }
 
     #[test]
@@ -757,6 +765,32 @@ mod tests {
                 mechanism: "x".into()
             }
         )));
+        assert!(DANGEROUS_TOGGLE_KINDS.contains(&kind_key(
+            &AiGuardReason::UnattendedScheduledTask { name: "x".into() }
+        )));
+    }
+
+    /// #191 — an unattended scheduled task weighs 2.5.
+    #[test]
+    fn unattended_scheduled_task_weighs_2_5() {
+        let r = vec![AiGuardReason::UnattendedScheduledTask {
+            name: "mytask".into(),
+        }];
+        assert_eq!(score(&r), 2.5);
+    }
+
+    /// #191 — the drift set includes the new unattended-scheduled-task kind so
+    /// a newly-appeared task is caught as OFF→ON drift (#147).
+    #[test]
+    fn unattended_scheduled_task_is_a_dangerous_toggle() {
+        let reasons = vec![AiGuardReason::UnattendedScheduledTask {
+            name: "mytask".into(),
+        }];
+        let got = dangerous_toggles(&reasons);
+        assert!(
+            got.contains("unattended_scheduled_task"),
+            "expected unattended_scheduled_task in drift set, got {got:?}"
+        );
     }
 
     /// #127 — the two shapes are independently tunable kind_keys.
