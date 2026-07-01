@@ -25,6 +25,9 @@ impl AiGuardParser for ClaudeCodeParser {
             home_dir.join(".claude").join("settings.local.json"),
             home_dir.join(".claude").join("hooks"),
             home_dir.join(".claude").join("CLAUDE.md"),
+            // #191 — watch the scheduled-tasks dir so the daemon re-assesses
+            // when an unattended task appears/changes (OFF->ON drift).
+            home_dir.join(".claude").join("scheduled-tasks"),
         ]
     }
 
@@ -56,7 +59,14 @@ impl AiGuardParser for ClaudeCodeParser {
         let local = super::read_json_optional(&local_path)?;
 
         // Missing primary file with no overlay → operator hasn't enabled tool.
-        if base.is_none() && local.is_none() && !claude.join("CLAUDE.md").is_file() {
+        // #191 — a real unattended task (a `scheduled-tasks/<name>/SKILL.md`) is
+        // still evidence of use, so it must not be short-circuited here. An empty
+        // `scheduled-tasks/` dir is NOT evidence and stays short-circuited.
+        if base.is_none()
+            && local.is_none()
+            && !claude.join("CLAUDE.md").is_file()
+            && !has_scheduled_task(&claude)
+        {
             return Ok(Vec::new());
         }
 
@@ -66,6 +76,10 @@ impl AiGuardParser for ClaudeCodeParser {
         let mut out = Vec::new();
         emit_hook_reasons(&merged, &hooks_dir, &mut out)?;
         emit_permission_reasons(&merged, &mut out);
+        // #191 signal 1 — `permissions.defaultMode` auto-approval posture.
+        emit_default_mode_reason(&merged, &mut out);
+        // #191 signal 2 — unattended recurring Claude Code scheduled tasks.
+        emit_scheduled_task_reasons(&claude, &mut out);
         emit_mcp_reasons(&merged, &mut out);
         // #145 (codex C8) — a user-global `enableAllProjectMcpServers: true`
         // blanket-approves project MCP servers across EVERY repo. No single
@@ -304,6 +318,99 @@ pub(crate) fn emit_permission_reasons(settings: &Value, out: &mut Vec<AiGuardRea
                 }
             }
         }
+    }
+}
+
+/// #191 signal 1 — `permissions.defaultMode` in `~/.claude/settings.json` sets
+/// the standing auto-approval posture. `"auto"`, `"bypassPermissions"`, and
+/// `"acceptEdits"` all approve tool calls without a human prompt, so each is an
+/// auto-approval posture reusing the existing `AutoApprovalEnabled` reason
+/// (which already flows into scan / #147 drift / remediation hints / rubric).
+/// `"dontAsk"` is deliberately excluded: it only runs PRE-APPROVED tools, so it
+/// is not a blanket auto-approval. `mode` carries the raw config value verbatim.
+pub(crate) fn emit_default_mode_reason(settings: &Value, out: &mut Vec<AiGuardReason>) {
+    let Some(mode) = settings
+        .get("permissions")
+        .and_then(|p| p.get("defaultMode"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    if matches!(mode, "auto" | "bypassPermissions" | "acceptEdits") {
+        out.push(AiGuardReason::AutoApprovalEnabled {
+            mode: mode.to_string(),
+        });
+    }
+}
+
+/// Max number of `UnattendedScheduledTask` reasons emitted per assessment, to
+/// bound output; tasks beyond this are logged and ignored.
+const MAX_SCHEDULED_TASK_REASONS: usize = 20;
+
+/// #191 signal 2 — an unattended, recurring Claude Code task is configured when
+/// `<home>/.claude/scheduled-tasks/<name>/SKILL.md` exists. This is the
+/// readable, persistent equivalent of an autonomous loop/goal. Emits one
+/// `UnattendedScheduledTask { name }` per task subdir that carries a `SKILL.md`
+/// (`name` = the subdir name), capped at `MAX_SCHEDULED_TASK_REASONS`.
+///
+/// `claude_dir` is the parser's configured `<home>/.claude` (temp home in
+/// tests) — never a hardcoded `~`.
+/// True iff `<claude_dir>/scheduled-tasks/<name>/SKILL.md` exists for at least
+/// one task. Short-circuits on the first hit — the actual signal is a `SKILL.md`,
+/// not a bare (possibly empty) `scheduled-tasks/` dir, so the "tool enabled"
+/// guard uses this rather than `.is_dir()`.
+pub(crate) fn has_scheduled_task(claude_dir: &Path) -> bool {
+    let sched_dir = claude_dir.join("scheduled-tasks");
+    let Ok(entries) = std::fs::read_dir(&sched_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.join("SKILL.md").is_file() {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn emit_scheduled_task_reasons(claude_dir: &Path, out: &mut Vec<AiGuardReason>) {
+    let sched_dir = claude_dir.join("scheduled-tasks");
+    let entries = match std::fs::read_dir(&sched_dir) {
+        Ok(e) => e,
+        // Absent dir (the common case) or unreadable → no findings.
+        Err(_) => return,
+    };
+    // Sort task names for deterministic emission order across platforms.
+    let mut names: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let skill_md = path.join("SKILL.md");
+        // Phase 2 (#191): analyze SKILL.md content via InstructionFileDirective
+        // (prompts that read files / pipe to shell / run repeated destructive
+        // shell). For now, presence of the file is the signal; `skill_md` is
+        // the path Phase 2 will feed to content analysis.
+        if !skill_md.is_file() {
+            continue;
+        }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            names.push(name.to_string());
+        }
+    }
+    names.sort();
+    let total = names.len();
+    for name in names.into_iter().take(MAX_SCHEDULED_TASK_REASONS) {
+        out.push(AiGuardReason::UnattendedScheduledTask { name });
+    }
+    if total > MAX_SCHEDULED_TASK_REASONS {
+        tracing::warn!(
+            dir = %sched_dir.display(),
+            total,
+            cap = MAX_SCHEDULED_TASK_REASONS,
+            "claude scheduled-tasks: capping UnattendedScheduledTask reasons"
+        );
     }
 }
 
@@ -1338,6 +1445,201 @@ mod tests {
                 .any(|r| matches!(r, AiGuardReason::InstructionFileDirective { .. })),
             "got {out:?}"
         );
+    }
+
+    // ---- #191 signal 1: permissions.defaultMode auto-approval ----
+
+    fn default_mode_reasons(mode_json: &str) -> Vec<AiGuardReason> {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            &format!(r#"{{"permissions": {{"defaultMode": {mode_json}}}}}"#),
+        );
+        ClaudeCodeParser.assess(dir.path()).unwrap()
+    }
+
+    #[test]
+    fn default_mode_bypass_permissions_emits_auto_approval_with_raw_mode() {
+        let reasons = default_mode_reasons(r#""bypassPermissions""#);
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::AutoApprovalEnabled { mode } if mode == "bypassPermissions"
+            )),
+            "got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn default_mode_auto_and_accept_edits_emit_auto_approval() {
+        for m in ["auto", "acceptEdits"] {
+            let reasons = default_mode_reasons(&format!("\"{m}\""));
+            assert!(
+                reasons.iter().any(|r| matches!(
+                    r,
+                    AiGuardReason::AutoApprovalEnabled { mode } if mode == m
+                )),
+                "mode {m}: got {reasons:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_mode_dont_ask_does_not_emit_auto_approval() {
+        // "dontAsk" only runs pre-approved tools — not a blanket auto-approval.
+        let reasons = default_mode_reasons(r#""dontAsk""#);
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })),
+            "dontAsk must not emit auto-approval; got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn absent_default_mode_does_not_emit_auto_approval() {
+        let dir = tempdir().unwrap();
+        write_settings(dir.path(), r#"{"permissions": {"allow": ["Read"]}}"#);
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })),
+            "got {reasons:?}"
+        );
+    }
+
+    // ---- #191 signal 2: unattended scheduled tasks ----
+
+    #[test]
+    fn scheduled_task_with_skill_md_emits_one_unattended_reason() {
+        let dir = tempdir().unwrap();
+        write_file(
+            &dir.path().join(".claude"),
+            "scheduled-tasks/mytask/SKILL.md",
+            "# do stuff\n",
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        let names: Vec<&str> = reasons
+            .iter()
+            .filter_map(|r| match r {
+                AiGuardReason::UnattendedScheduledTask { name } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["mytask"], "got {reasons:?}");
+    }
+
+    #[test]
+    fn scheduled_tasks_absent_dir_emits_none() {
+        let dir = tempdir().unwrap();
+        write_settings(dir.path(), r#"{"permissions": {"deny": ["Bash"]}}"#);
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::UnattendedScheduledTask { .. })),
+            "got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn scheduled_tasks_subdir_without_skill_md_emits_none() {
+        let dir = tempdir().unwrap();
+        // An empty task subdir (no SKILL.md) is not an unattended task.
+        std::fs::create_dir_all(
+            dir.path()
+                .join(".claude")
+                .join("scheduled-tasks")
+                .join("empty"),
+        )
+        .unwrap();
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::UnattendedScheduledTask { .. })),
+            "empty scheduled-tasks subdir must emit nothing; got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn scheduled_tasks_alone_are_not_short_circuited_by_missing_settings() {
+        // A `scheduled-tasks/` dir with no settings.json / CLAUDE.md must still
+        // be assessed (the "tool not enabled" guard must not swallow it).
+        let dir = tempdir().unwrap();
+        write_file(
+            &dir.path().join(".claude"),
+            "scheduled-tasks/loop/SKILL.md",
+            "# loop\n",
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::UnattendedScheduledTask { name } if name == "loop"
+            )),
+            "got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn empty_scheduled_tasks_dir_is_short_circuited() {
+        // #191 (codex) — a bare `scheduled-tasks/` dir with no `<name>/SKILL.md`
+        // is NOT evidence of use: with no settings/CLAUDE.md the parser must
+        // still short-circuit to no findings (not treat Claude Code as enabled).
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude").join("scheduled-tasks")).unwrap();
+        // Also a subdir without a SKILL.md — still not a real task.
+        std::fs::create_dir_all(
+            dir.path()
+                .join(".claude")
+                .join("scheduled-tasks")
+                .join("empty"),
+        )
+        .unwrap();
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(reasons.is_empty(), "expected no findings, got {reasons:?}");
+    }
+
+    #[test]
+    fn scheduled_tasks_multiple_are_all_emitted() {
+        let dir = tempdir().unwrap();
+        for t in ["alpha", "beta", "gamma"] {
+            write_file(
+                &dir.path().join(".claude"),
+                &format!("scheduled-tasks/{t}/SKILL.md"),
+                "# x\n",
+            );
+        }
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        let mut names: Vec<&str> = reasons
+            .iter()
+            .filter_map(|r| match r {
+                AiGuardReason::UnattendedScheduledTask { name } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["alpha", "beta", "gamma"], "got {reasons:?}");
+    }
+
+    #[test]
+    fn scheduled_tasks_capped_at_20() {
+        let dir = tempdir().unwrap();
+        for i in 0..25 {
+            write_file(
+                &dir.path().join(".claude"),
+                &format!("scheduled-tasks/task{i:02}/SKILL.md"),
+                "# x\n",
+            );
+        }
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        let n = reasons
+            .iter()
+            .filter(|r| matches!(r, AiGuardReason::UnattendedScheduledTask { .. }))
+            .count();
+        assert_eq!(n, 20, "must cap at 20; got {n}");
     }
 
     #[test]

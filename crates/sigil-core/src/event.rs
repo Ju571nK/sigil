@@ -242,6 +242,11 @@ pub enum AiGuardReason {
         directive_kind: InstructionDirectiveKind,
         snippet: String,
     },
+    /// #191 — an unattended, recurring Claude Code scheduled task is configured
+    /// (`~/.claude/scheduled-tasks/<name>/SKILL.md` exists). The readable,
+    /// persistent equivalent of a loop/goal running without a human in the
+    /// loop. POSTURE only; `name` is the task subdir name.
+    UnattendedScheduledTask { name: String },
 }
 
 /// #146 — category of instruction-file directive. Stable wire strings
