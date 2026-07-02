@@ -7,6 +7,34 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-02
+
+### Added
+
+- **Autonomous / unattended Claude Code config is flagged** (#191). Loop/goal-style
+  features run repeated work unattended; if the agent runs without guardrails the
+  blast radius grows, so the readable signals are now measured:
+  `permissions.defaultMode` of `auto` / `bypassPermissions` / `acceptEdits` in
+  `~/.claude/settings.json` surfaces as `auto_approval_enabled` (flowing into
+  scan, #147 toggle-drift, and remediation hints), and each
+  `~/.claude/scheduled-tasks/<name>/SKILL.md` — the readable, persistent
+  equivalent of a loop — emits a new `unattended_scheduled_task` finding.
+  Session-only state (an active `/loop`, `/goal` conditions, cloud `/schedule`
+  routines) leaves no on-disk trace and is documented as out of scope.
+- **`sigil scan` remediation hints** (#188 follow-up). Every finding now carries a
+  one-line advisory "how to reduce it": the human output gains a `How to reduce`
+  section after the table (distinct finding kinds, highest-impact first) and
+  `--json` adds a `hint` field per reason. Advisory only — Sigil measures, it
+  does not block or auto-edit.
+- **Personal install offers a read-only Claude Code allowlist** (#188). Driving
+  sigil from inside an AI agent caused a per-command permission-prompt storm.
+  The personal `install.sh` / `install.ps1` now offer (opt-in, terminal consent
+  only, never silent) to add `Bash(sigil:*)` to `~/.claude/settings.json`
+  permissions.allow with an explicit deny of `sigil run` and `sigil-hook`, so
+  the daemon and hook-enforce are never silently granted to the agent.
+
+## [0.7.0] - 2026-06-28
+
 ### Added
 
 - **Dangerous-toggle drift detection** (#147). When a coding agent's config
@@ -29,6 +57,10 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
   air-gapped fleet/PMS can pull from the server instead of GitHub. Bearer-gated,
   path-traversal-hardened; `install.sh`/`install.ps1` gained `SIGIL_BASE_URL` +
   `SIGIL_BASE_TOKEN` to fetch from it.
+## [0.6.2] - 2026-06-21
+
+### Added
+
 - **`sigil scan` — one-shot, daemon-free posture score** (#174). The fastest
   personal read: it reads each installed agent's user-global config once
   (`~/.claude`, `~/.codex`, `~/.cursor`, …) plus the current directory if it is a
@@ -43,6 +75,26 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
   Linux **aarch64** (the musl tarball it had been wrongly rejecting), so the
   one-liner works on Graviton/Ampere and RHEL/Rocky 9 aarch64. Script installs
   avoid code-signing friction (Gatekeeper/SmartScreen) by design.
+### Fixed
+
+- **`sigil doctor` no longer warns about a control socket on a non-root install**
+  (#178). The check hardcoded `/var/run/sigil/control.sock` and expected it
+  root-owned, so a non-root personal user got a spurious `Permission denied`
+  warning (and a non-zero exit) about a socket the non-root daemon never binds.
+  Doctor now resolves the same XDG/tmp fallback path the daemon uses and expects
+  ownership by the invoking user.
+- **`install.sh` suggests how to install a missing tool** (#179). On a minimal
+  RHEL-family / container host without `tar` (or `curl`), the bare "missing
+  required tool" message now appends the host package manager's one-liner
+  (`sudo dnf install -y tar`, `sudo apt-get install -y …`, etc.).
+- **macOS install guide corrected** (#176). It claimed `install.sh` installs all
+  six binaries; the personal default is three. Added a 30-second personal
+  quickstart and framed the rest as the operator deployment.
+
+## [0.6.0] - 2026-06-16
+
+### Added
+
 - **OpenClaw / Hermes integration glue for `assess`** (#151). `sigil-mcp
   --print-config` now emits ready-to-paste blocks for `hermes` (a `config.yaml`
   `mcp_servers:` entry) and `openclaw` (a `~/.openclaw/openclaw.json` `mcpServers`
@@ -68,19 +120,6 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ### Fixed
 
-- **`sigil doctor` no longer warns about a control socket on a non-root install**
-  (#178). The check hardcoded `/var/run/sigil/control.sock` and expected it
-  root-owned, so a non-root personal user got a spurious `Permission denied`
-  warning (and a non-zero exit) about a socket the non-root daemon never binds.
-  Doctor now resolves the same XDG/tmp fallback path the daemon uses and expects
-  ownership by the invoking user.
-- **`install.sh` suggests how to install a missing tool** (#179). On a minimal
-  RHEL-family / container host without `tar` (or `curl`), the bare "missing
-  required tool" message now appends the host package manager's one-liner
-  (`sudo dnf install -y tar`, `sudo apt-get install -y …`, etc.).
-- **macOS install guide corrected** (#176). It claimed `install.sh` installs all
-  six binaries; the personal default is three. Added a 30-second personal
-  quickstart and framed the rest as the operator deployment.
 - **The local `rule-packs.yaml` watcher re-arms when the config dir is recreated
   at runtime** (#135). The dedicated hot-reload watcher previously gave up
   permanently if its config directory was absent at start, and a by-inode watch
