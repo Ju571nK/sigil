@@ -1,8 +1,8 @@
 //! #194.2 — `POST /v1/events` cert↔host_id binding, driven in-process via
 //! `tower::ServiceExt::oneshot` with a `PeerIdentity` request extension —
 //! exactly what `tls_accept::PeerCertAcceptor` injects on a live mTLS
-//! connection. (The acceptor itself is covered by unit tests; a live-TLS
-//! round trip is a hardware e2e item.)
+//! connection. (The acceptor itself is covered by unit tests and by the
+//! live-TLS round trip in `tests/mtls_acceptor_e2e.rs`.)
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
