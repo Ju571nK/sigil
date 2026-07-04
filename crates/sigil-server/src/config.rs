@@ -57,6 +57,12 @@ pub struct ServerConfig {
     /// Absent ⇒ enrollment off.
     #[serde(default)]
     pub enroll_tokens_path: Option<PathBuf>,
+    /// #194.1 — optional allowlist of TLS client-cert fingerprints (blake3 hex
+    /// of the leaf cert DER) permitted to call `POST /v1/enroll` (the
+    /// PMS/issuer box). Absent ⇒ any mTLS fleet member may redeem an enroll
+    /// token (pre-#194 behavior). Present-but-empty ⇒ deny-all.
+    #[serde(default)]
+    pub enroll_issuer_fingerprints: Option<Vec<String>>,
     /// #184 — issued client-cert validity in days (default 30; short by design,
     /// re-enroll replaces revocation in the MVP).
     #[serde(default)]
@@ -162,6 +168,32 @@ host_allowlist_path: "/d/hosts.json"
         let cfg = ServerConfig::load(&p).unwrap();
         assert!(cfg.mtls_enabled());
         assert!(cfg.host_allowlist_path.is_some());
+    }
+
+    /// #194.1 — enroll_issuer_fingerprints parses; absent stays None.
+    #[test]
+    fn parses_enroll_issuer_fingerprints() {
+        let yaml = r#"
+bind: "127.0.0.1:8443"
+events_out_dir: "/d/events"
+policy_bundle_path: "/d/signed-policy.json"
+enroll_issuer_fingerprints:
+  - "aabb01"
+  - "ccdd02"
+"#;
+        let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            cfg.enroll_issuer_fingerprints,
+            Some(vec!["aabb01".to_string(), "ccdd02".to_string()])
+        );
+
+        let yaml_absent = r#"
+bind: "127.0.0.1:8443"
+events_out_dir: "/d/events"
+policy_bundle_path: "/d/signed-policy.json"
+"#;
+        let cfg: ServerConfig = serde_yaml::from_str(yaml_absent).unwrap();
+        assert_eq!(cfg.enroll_issuer_fingerprints, None);
     }
 
     #[test]

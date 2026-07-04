@@ -136,6 +136,7 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         cfg.mtls_enabled(),
         cfg.enroll_cert_days,
         enroll_audit_path,
+        cfg.enroll_issuer_fingerprints.clone(),
     );
     if enroll.is_some() {
         tracing::info!("enrollment endpoint enabled (POST /v1/enroll)");
