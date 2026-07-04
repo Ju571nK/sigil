@@ -31,3 +31,4 @@ pub mod persist;
 pub mod policy_route;
 pub mod routes;
 pub mod rule_packs_route;
+pub mod tls_accept;

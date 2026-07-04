@@ -263,7 +263,11 @@ async fn run(cfg: ServerConfig) -> Result<()> {
     if cfg.mtls_enabled() {
         let tls = build_mtls(&cfg)?;
         tracing::info!(bind = %cfg.bind, "starting sigil-server (mTLS)");
-        axum_server::bind_rustls(cfg.bind, tls)
+        // #194 — PeerCertAcceptor wraps axum-server's rustls acceptor (same
+        // handshake + timeout) and exposes the verified client cert to
+        // handlers as an `Extension<Arc<PeerIdentity>>` on every request.
+        axum_server::bind(cfg.bind)
+            .acceptor(sigil_server::tls_accept::PeerCertAcceptor::new(tls))
             .serve(app.into_make_service())
             .await
             .context("axum_server serve (mTLS)")?;

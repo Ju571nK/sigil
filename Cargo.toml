@@ -41,6 +41,11 @@ data-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2"
+# #194 — peer-cert plumbing: names axum-server's TlsStream type (no default
+# features so the crypto backend stays the workspace rustls/ring choice).
+tokio-rustls = { version = "0.26", default-features = false }
+# #194 — pure-Rust X.509 parsing (CN + SAN DNS) of TLS-verified peer certs.
+x509-parser = "0.18"
 http = "1"
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
 tower = "0.5"

@@ -32,6 +32,10 @@ axum = { workspace = true, features = ["query"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
+# #194 — peer-cert identity plumbing (custom Accept + per-request Extension).
+tokio-rustls = { workspace = true }
+tower = { workspace = true }
+x509-parser = { workspace = true }
 blake3 = { workspace = true }
 parking_lot = { workspace = true }
 ed25519-dalek = { workspace = true }
@@ -44,7 +48,6 @@ tempfile = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
-tower = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true }
 
