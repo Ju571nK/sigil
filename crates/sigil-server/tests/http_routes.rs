@@ -36,6 +36,7 @@ fn state_in_with_rule_packs(
         audit_head: Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     })
 }
 

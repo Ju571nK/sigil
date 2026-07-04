@@ -33,6 +33,7 @@ fn state(scratch: &Path, artifacts_dir: Option<PathBuf>, token: Option<&str>) ->
         audit_head: Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     })
 }
 

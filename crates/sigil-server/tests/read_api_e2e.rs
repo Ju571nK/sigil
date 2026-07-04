@@ -26,6 +26,7 @@ fn state_with_token(dir: &std::path::Path, token: &str) -> Arc<AppState> {
         audit_head: Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     })
 }
 

@@ -178,6 +178,7 @@ fn state_with_issuers(
         audit_head: Mutex::new(None),
         allowlist_path: Some(allowlist_path),
         enroll,
+        events_require_cert_host_match: false,
     })
 }
 

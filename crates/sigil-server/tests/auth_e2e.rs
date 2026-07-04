@@ -26,6 +26,7 @@ fn state(dir: &std::path::Path, token: ReadToken) -> Arc<AppState> {
         audit_head: Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     })
 }
 

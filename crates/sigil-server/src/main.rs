@@ -158,6 +158,10 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         audit_head: Mutex::new(None),
         allowlist_path: cfg.host_allowlist_path.clone(),
         enroll,
+        // #194.2 — ServerConfig::load refused to start if this is set
+        // without mTLS, so `true` here implies the mTLS listener (and thus
+        // PeerIdentity injection) is active.
+        events_require_cert_host_match: cfg.events_require_cert_host_match,
     }))
 }
 

@@ -72,6 +72,12 @@ pub struct ServerConfig {
     /// enrollment stays off (404) when this is unset.
     #[serde(default)]
     pub host_allowlist_path: Option<PathBuf>,
+    /// #194.2 — when true, `POST /v1/events` additionally requires the TLS
+    /// client cert to match the envelope `host_id` (subject CN == host_id, or
+    /// host_id ∈ SAN DNS). Requires mTLS: the server refuses to start if this
+    /// is set without the full TLS triple. Default false (pre-#194 behavior).
+    #[serde(default)]
+    pub events_require_cert_host_match: bool,
     /// Path to the persisted per-host high-water-sequence map (for dedup
     /// across restarts). Defaults to `<events_out_dir>/.high-water.json`.
     #[serde(default)]
@@ -87,10 +93,28 @@ impl ServerConfig {
             path: path.to_path_buf(),
             source,
         })?;
-        serde_yaml::from_slice(&bytes).map_err(|source| ConfigError::Parse {
+        let cfg: Self = serde_yaml::from_slice(&bytes).map_err(|source| ConfigError::Parse {
             path: path.to_path_buf(),
             source,
-        })
+        })?;
+        cfg.validate(path)?;
+        Ok(cfg)
+    }
+
+    /// Cross-field boot validation. #194.2: `events_require_cert_host_match`
+    /// is meaningless over plain HTTP (there is no client cert to match), so
+    /// setting it without the full mTLS triple is a refuse-to-start error —
+    /// never a silently-ignored gate.
+    fn validate(&self, path: &Path) -> Result<(), ConfigError> {
+        if self.events_require_cert_host_match && !self.mtls_enabled() {
+            return Err(ConfigError::Invalid {
+                path: path.to_path_buf(),
+                reason: "events_require_cert_host_match requires mTLS \
+                         (tls_cert_path + tls_key_path + client_ca_path)"
+                    .to_string(),
+            });
+        }
+        Ok(())
     }
 
     /// Effective high-water path: explicit, or `<events_out_dir>/.high-water.json`.
@@ -118,6 +142,8 @@ pub enum ConfigError {
         path: PathBuf,
         source: serde_yaml::Error,
     },
+    #[error("invalid config {path}: {reason}")]
+    Invalid { path: PathBuf, reason: String },
 }
 
 #[cfg(test)]
@@ -194,6 +220,69 @@ policy_bundle_path: "/d/signed-policy.json"
 "#;
         let cfg: ServerConfig = serde_yaml::from_str(yaml_absent).unwrap();
         assert_eq!(cfg.enroll_issuer_fingerprints, None);
+    }
+
+    /// #194.2 — events_require_cert_host_match parses; default false.
+    #[test]
+    fn parses_events_require_cert_host_match() {
+        let yaml = r#"
+bind: "127.0.0.1:8443"
+tls_cert_path: "/e/server.crt"
+tls_key_path: "/e/server.key"
+client_ca_path: "/e/client-ca.pem"
+events_out_dir: "/d/events"
+policy_bundle_path: "/d/signed-policy.json"
+events_require_cert_host_match: true
+"#;
+        let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.events_require_cert_host_match);
+
+        let yaml_absent = r#"
+bind: "127.0.0.1:8443"
+events_out_dir: "/d/events"
+policy_bundle_path: "/d/signed-policy.json"
+"#;
+        let cfg: ServerConfig = serde_yaml::from_str(yaml_absent).unwrap();
+        assert!(!cfg.events_require_cert_host_match, "default is false");
+    }
+
+    /// #194.2 — the flag without mTLS is a refuse-to-start config error; with
+    /// the full mTLS triple the same config loads.
+    #[test]
+    fn cert_host_match_without_mtls_refuses_to_load() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("server.yaml");
+        std::fs::write(
+            &p,
+            r#"
+bind: "127.0.0.1:8443"
+events_out_dir: "/d/events"
+policy_bundle_path: "/d/signed-policy.json"
+events_require_cert_host_match: true
+"#,
+        )
+        .unwrap();
+        let err = ServerConfig::load(&p).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Invalid { .. }),
+            "flag without mTLS must refuse to start, got: {err}"
+        );
+
+        std::fs::write(
+            &p,
+            r#"
+bind: "127.0.0.1:8443"
+tls_cert_path: "/e/server.crt"
+tls_key_path: "/e/server.key"
+client_ca_path: "/e/client-ca.pem"
+events_out_dir: "/d/events"
+policy_bundle_path: "/d/signed-policy.json"
+events_require_cert_host_match: true
+"#,
+        )
+        .unwrap();
+        let cfg = ServerConfig::load(&p).unwrap();
+        assert!(cfg.events_require_cert_host_match && cfg.mtls_enabled());
     }
 
     #[test]

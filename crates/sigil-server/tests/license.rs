@@ -44,6 +44,7 @@ async fn meta_reports_over_limit_for_free_tier_above_200_active_hosts() {
         audit_head: Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     });
 
     let app = build_router(state);
@@ -111,6 +112,7 @@ async fn meta_reports_ok_for_valid_license_under_its_limit() {
         audit_head: Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     });
 
     let app = build_router(state);
@@ -179,6 +181,7 @@ async fn meta_reports_expired_falls_back_to_free_tier() {
         audit_head: Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     });
 
     let app = build_router(state);

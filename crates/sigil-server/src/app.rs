@@ -50,6 +50,10 @@ pub struct AppState {
     /// #184 — enrollment state (intermediate CA + tokens + mint mutex). `None` ⇒
     /// every `/v1/enroll*` route 404s (feature off).
     pub enroll: Option<crate::enroll::EnrollState>,
+    /// #194.2 — when true, `POST /v1/events` requires the TLS client cert to
+    /// match the envelope host_id (CN == host_id or host_id ∈ SAN DNS). Boot
+    /// validation guarantees mTLS is on whenever this is set.
+    pub events_require_cert_host_match: bool,
 }
 
 pub type SharedState = Arc<AppState>;
