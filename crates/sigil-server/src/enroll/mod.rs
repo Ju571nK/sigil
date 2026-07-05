@@ -129,14 +129,33 @@ impl EnrollState {
             return None;
         }
         // #194.1 — normalize issuer fingerprints to lowercase hex once, at
-        // boot. `Some([])` is kept as-is: deny-all, so an operator typo (an
-        // empty list in the config) surfaces immediately rather than silently
-        // disabling the gate.
-        let issuer_fingerprints = issuer_fingerprints.map(|list| {
-            list.iter()
-                .map(|f| f.trim().to_ascii_lowercase())
-                .collect::<Vec<_>>()
-        });
+        // boot, and VALIDATE them (codex review): a blake3 fingerprint is
+        // exactly 64 hex chars, so a typo'd entry can never match anything —
+        // it would silently lock the operator out. Malformed entries disable
+        // enrollment loudly instead. Duplicates are removed. `Some([])` is
+        // kept as-is: deny-all, so an empty list in the config surfaces
+        // immediately rather than silently disabling the gate.
+        let issuer_fingerprints = match issuer_fingerprints {
+            None => None,
+            Some(list) => {
+                let mut norm: Vec<String> = Vec::with_capacity(list.len());
+                for raw in &list {
+                    let f = raw.trim().to_ascii_lowercase();
+                    if f.len() != 64 || !f.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        tracing::error!(
+                            entry = %raw,
+                            "enroll: enroll_issuer_fingerprints entry is not 64 hex chars \
+                             (blake3 of the client cert DER); enrollment disabled"
+                        );
+                        return None;
+                    }
+                    if !norm.contains(&f) {
+                        norm.push(f);
+                    }
+                }
+                Some(norm)
+            }
+        };
         match issuer_fingerprints.as_deref() {
             Some([]) => tracing::warn!(
                 "enroll: enroll_issuer_fingerprints is EMPTY — every /v1/enroll caller will be denied"
@@ -398,16 +417,28 @@ mod tests {
                 issuers,
             )
         };
-        let s = load(Some(vec!["  ABCDEF0123  ".to_string()])).unwrap();
+        let hexfp = "AB".repeat(32); // 64 hex chars, uppercase
+        let s = load(Some(vec![format!("  {hexfp}  "), hexfp.to_lowercase()])).unwrap();
         assert_eq!(
             s.issuer_fingerprints,
-            Some(vec!["abcdef0123".to_string()]),
-            "trimmed + lowercased"
+            Some(vec!["ab".repeat(32)]),
+            "trimmed + lowercased + deduped"
         );
         let s = load(Some(vec![])).unwrap();
         assert_eq!(s.issuer_fingerprints, Some(vec![]), "empty kept = deny-all");
         let s = load(None).unwrap();
         assert_eq!(s.issuer_fingerprints, None, "absent stays permissive");
+        // codex review — malformed entries (wrong length / non-hex) can never
+        // match a blake3 fingerprint; they disable enrollment loudly instead
+        // of silently locking the operator out.
+        assert!(
+            load(Some(vec!["abcdef0123".to_string()])).is_none(),
+            "short entry rejected"
+        );
+        assert!(
+            load(Some(vec!["zz".repeat(32)])).is_none(),
+            "non-hex entry rejected"
+        );
     }
 
     /// A non-CA (CA:FALSE) cert must be rejected.

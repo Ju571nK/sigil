@@ -78,11 +78,19 @@ pub async fn post_events(
     // is byte-identical to the allowlist rejection (no oracle distinguishing
     // "not allowlisted" from "wrong cert"); the fingerprint is logged for
     // operators. Boot validation guarantees mTLS is on when this flag is set.
+    // Matching is ASCII-case-insensitive (codex review): DNS names are
+    // case-insensitive and UUID host_ids appear in both hex cases in the wild;
+    // hex case carries no identity, so folding removes false rejects without
+    // weakening the binding. (Known limit, deliberate: this gate runs after
+    // axum's Json extraction, so a malformed body still 400s before the 404 —
+    // a parser-level oracle only, not a token/allowlist oracle.)
     if state.events_require_cert_host_match {
         let peer = peer.as_ref().map(|Extension(p)| p);
+        let host_id = req.envelope.host_id.as_str();
         let matches = peer.is_some_and(|p| {
-            p.cn.as_deref() == Some(req.envelope.host_id.as_str())
-                || p.san_dns.iter().any(|d| d == &req.envelope.host_id)
+            p.cn.as_deref()
+                .is_some_and(|cn| cn.eq_ignore_ascii_case(host_id))
+                || p.san_dns.iter().any(|d| d.eq_ignore_ascii_case(host_id))
         });
         if !matches {
             tracing::warn!(
