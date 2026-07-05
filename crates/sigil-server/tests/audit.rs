@@ -37,6 +37,7 @@ async fn meta_reports_audit_head_when_signing_enabled() {
         })),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     });
 
     let app = build_router(state);
@@ -86,6 +87,7 @@ async fn meta_reports_null_audit_head_when_disabled() {
         audit_head: Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     });
 
     let app = build_router(state);

@@ -8,6 +8,9 @@
 //! COMMIT ORDER (codex-hardened, prevents double-mint):
 //!   lock mint Mutex
 //!   → recompute now/ts (a token that expired while queued is rejected) (fix G)
+//!   → issuer gate (#194.1): when `enroll_issuer_fingerprints` is configured,
+//!     the TLS caller's cert fingerprint must be on the list — checked BEFORE
+//!     any CSR parsing or token access
 //!   → validate (UUID host_id, CSR size/PEM, CSR CN == host_id)
 //!   → RESERVE the token (durably stamp used_at + write) BEFORE signing
 //!   → sign (openssl, fixed profile, random serial, post-sign inspection)
@@ -20,20 +23,22 @@
 //! a host allowlisted without an issuance record (both still ⇒ 500 + no cert).
 //!
 //! External error generalization: every token failure (expired/used/mismatch/
-//! not-found) returns a single `403 {"error":{"code":"enrollment_denied"}}`.
-//! The specific reason is logged + audited internally. 404 (off) and 400
-//! (malformed) stay distinct.
+//! not-found) AND every issuer-gate failure returns the single generic
+//! `403 {"error":{"code":"enrollment_denied"}}`. The specific reason is logged
+//! + audited internally. 404 (off) and 400 (malformed) stay distinct.
 
 use crate::app::SharedState;
 use crate::enroll::audit;
 use crate::enroll::sign::{self, SignError};
 use crate::enroll::tokens::{RedeemErr, TokenStore};
+use crate::tls_accept::PeerIdentity;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 pub struct EnrollReq {
@@ -42,7 +47,20 @@ pub struct EnrollReq {
     pub csr_pem: String,
 }
 
-pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollReq>) -> Response {
+pub async fn post_enroll(
+    State(st): State<SharedState>,
+    // #194 — injected per-connection by `tls_accept::PeerCertAcceptor`.
+    // Absent over plain HTTP (dev mode) or if rustls reported no peer cert.
+    peer: Option<Extension<Arc<PeerIdentity>>>,
+    Json(req): Json<EnrollReq>,
+) -> Response {
+    let peer = peer.map(|Extension(p)| p);
+    // Real caller fingerprint for ALL audit outcomes ("" when absent). #194
+    let caller_fp = peer
+        .as_ref()
+        .map(|p| p.fingerprint.clone())
+        .unwrap_or_default();
+
     // Feature off ⇒ 404 (indistinguishable from "route absent").
     let Some(en) = st.enroll.as_ref() else {
         return err(
@@ -82,6 +100,34 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default();
 
+    // 0. #194.1 — issuer gate. When configured, the TLS caller must present a
+    //    client cert whose fingerprint is on the operator's issuer list.
+    //    Runs BEFORE any CSR parsing (openssl on attacker input) or token
+    //    access; answered with the same generic 403 as token failures so an
+    //    unauthorized caller learns nothing (no oracle).
+    if let Some(allowed) = en.issuer_fingerprints.as_deref() {
+        let permitted = peer
+            .as_ref()
+            .is_some_and(|p| allowed.iter().any(|f| f == &p.fingerprint));
+        if !permitted {
+            tracing::warn!(
+                host_id = %req.host_id,
+                caller_fingerprint = %caller_fp,
+                "enroll: caller cert not in enroll_issuer_fingerprints"
+            );
+            record_denied(
+                &st,
+                en,
+                &req.host_id,
+                "issuer_not_allowed",
+                &csr_fp,
+                &caller_fp,
+                &ts,
+            );
+            return enrollment_denied();
+        }
+    }
+
     // 1. CSR sanity: parse + verify the CSR, extract CN, require CN == host_id.
     let cn = match sign::csr_cn(&en.openssl_path, &req.csr_pem) {
         Ok(c) => c,
@@ -99,14 +145,22 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
     };
     if cn != req.host_id {
         // CN mismatch is a token-scope denial → generic enrollment_denied.
-        record_denied(&st, en, &req.host_id, "cn_mismatch", &csr_fp, &ts);
+        record_denied(
+            &st,
+            en,
+            &req.host_id,
+            "cn_mismatch",
+            &csr_fp,
+            &caller_fp,
+            &ts,
+        );
         return enrollment_denied();
     }
 
     // 2. Pre-check the token (cheap, gives the specific internal reason).
     if let Err(e) = TokenStore::check(&en.tokens_path, &req.token, &req.host_id, now) {
         let reason = denial_reason(&e);
-        record_denied(&st, en, &req.host_id, reason, &csr_fp, &ts);
+        record_denied(&st, en, &req.host_id, reason, &csr_fp, &caller_fp, &ts);
         // I/O errors are a server fault (500); everything else is a denial.
         if let RedeemErr::Io(msg) = &e {
             tracing::error!(error = %msg, "enroll: token store read failed");
@@ -123,7 +177,7 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
     //    point the token is spent; any failure ⇒ 500 + no cert (safe re-issue).
     if let Err(e) = TokenStore::mark_used(&en.tokens_path, &req.token, &req.host_id, now) {
         let reason = denial_reason(&e);
-        record_denied(&st, en, &req.host_id, reason, &csr_fp, &ts);
+        record_denied(&st, en, &req.host_id, reason, &csr_fp, &caller_fp, &ts);
         if matches!(e, RedeemErr::Io(_)) {
             tracing::error!(error = %e, "enroll: token reserve write failed");
             return err(
@@ -148,7 +202,15 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, host_id = %req.host_id, "enroll: signing failed (token already spent)");
-            record_denied(&st, en, &req.host_id, "sign_failed", &csr_fp, &ts);
+            record_denied(
+                &st,
+                en,
+                &req.host_id,
+                "sign_failed",
+                &csr_fp,
+                &caller_fp,
+                &ts,
+            );
             return err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "sign_failed",
@@ -180,6 +242,7 @@ pub async fn post_enroll(State(st): State<SharedState>, Json(req): Json<EnrollRe
         &cert_fp,
         &serial,
         &not_after,
+        &caller_fp,
         &ts,
     ) {
         tracing::error!(error = %e, "enroll: audit append failed (token already spent)");
@@ -243,6 +306,7 @@ fn record_denied(
     host_id: &str,
     reason: &str,
     csr_fp: &str,
+    caller_fp: &str,
     ts: &str,
 ) {
     let Some(key) = st.audit_key.as_ref() else {
@@ -259,6 +323,7 @@ fn record_denied(
         "",
         "",
         "",
+        caller_fp,
         ts,
     ) {
         tracing::error!(error = %e, host_id, reason, "enroll: failed to audit denial");

@@ -36,8 +36,12 @@ pub struct EnrollState {
     /// Absolute path to the openssl binary, resolved once at boot.
     pub openssl_path: PathBuf,
     pub cert_days: u32,
+    /// #194.1 — optional allowlist of caller (TLS client-cert) fingerprints
+    /// permitted to enroll, normalized to lowercase hex at load. `None` ⇒ any
+    /// mTLS fleet member may redeem a token; `Some([])` ⇒ deny-all.
+    pub issuer_fingerprints: Option<Vec<String>>,
     /// Serializes the whole mint critical section:
-    /// CN-check → reserve(token) → sign → allowlist → audit.
+    /// issuer-check → CN-check → reserve(token) → sign → allowlist → audit.
     pub mint: Mutex<()>,
 }
 
@@ -56,6 +60,7 @@ impl EnrollState {
         mtls_enabled: bool,
         cert_days: Option<u32>,
         audit_path: PathBuf,
+        issuer_fingerprints: Option<Vec<String>>,
     ) -> Option<EnrollState> {
         // fix A: never expose token-only cert minting over cleartext HTTP.
         if !mtls_enabled {
@@ -123,6 +128,44 @@ impl EnrollState {
             tracing::error!("enroll: CA key does not match CA cert; enrollment disabled");
             return None;
         }
+        // #194.1 — normalize issuer fingerprints to lowercase hex once, at
+        // boot, and VALIDATE them (codex review): a blake3 fingerprint is
+        // exactly 64 hex chars, so a typo'd entry can never match anything —
+        // it would silently lock the operator out. Malformed entries disable
+        // enrollment loudly instead. Duplicates are removed. `Some([])` is
+        // kept as-is: deny-all, so an empty list in the config surfaces
+        // immediately rather than silently disabling the gate.
+        let issuer_fingerprints = match issuer_fingerprints {
+            None => None,
+            Some(list) => {
+                let mut norm: Vec<String> = Vec::with_capacity(list.len());
+                for raw in &list {
+                    let f = raw.trim().to_ascii_lowercase();
+                    if f.len() != 64 || !f.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        tracing::error!(
+                            entry = %raw,
+                            "enroll: enroll_issuer_fingerprints entry is not 64 hex chars \
+                             (blake3 of the client cert DER); enrollment disabled"
+                        );
+                        return None;
+                    }
+                    if !norm.contains(&f) {
+                        norm.push(f);
+                    }
+                }
+                Some(norm)
+            }
+        };
+        match issuer_fingerprints.as_deref() {
+            Some([]) => tracing::warn!(
+                "enroll: enroll_issuer_fingerprints is EMPTY — every /v1/enroll caller will be denied"
+            ),
+            Some(list) => tracing::info!(
+                entries = list.len(),
+                "enroll: issuer cert-fingerprint binding enabled (#194.1)"
+            ),
+            None => {}
+        }
         tracing::info!(
             cert = %cert.display(),
             "enroll: enabled (intermediate CA validated)"
@@ -134,6 +177,7 @@ impl EnrollState {
             audit_path,
             openssl_path: openssl,
             cert_days: cert_days.unwrap_or(DEFAULT_CERT_DAYS),
+            issuer_fingerprints,
             mint: Mutex::new(()),
         })
     }
@@ -218,6 +262,7 @@ mod tests {
             true, // mtls on
             None,
             PathBuf::from("/tmp/a.jsonl"),
+            None,
         );
         assert!(s.is_none());
     }
@@ -233,6 +278,7 @@ mod tests {
             true, // mtls on
             None,
             PathBuf::from("/tmp/a.jsonl"),
+            None,
         );
         assert!(s.is_none());
     }
@@ -250,6 +296,7 @@ mod tests {
             false, // mtls OFF ⇒ must refuse
             None,
             d.path().join("a.jsonl"),
+            None,
         );
         assert!(s.is_none(), "no mTLS ⇒ enrollment must be disabled");
     }
@@ -273,6 +320,7 @@ mod tests {
             false, // mtls OFF
             Some(30),
             d.path().join("a.jsonl"),
+            None,
         );
         assert!(s.is_none(), "valid CA still disabled when mTLS is off");
     }
@@ -296,6 +344,7 @@ mod tests {
             true, // mtls on
             Some(30),
             d.path().join("a.jsonl"),
+            None,
         );
         assert!(
             s.is_none(),
@@ -315,6 +364,7 @@ mod tests {
             true,
             None,
             d.path().join("a.jsonl"),
+            None,
         );
         assert!(s.is_none());
     }
@@ -338,9 +388,57 @@ mod tests {
             true,
             Some(30),
             d.path().join("a.jsonl"),
+            None,
         );
         assert!(s.is_some(), "valid CA should enable enrollment");
         assert_eq!(s.unwrap().cert_days, 30);
+    }
+
+    /// #194.1 — issuer fingerprints are normalized (trim + lowercase) at load;
+    /// absent stays `None`; an empty list is preserved (deny-all).
+    #[test]
+    fn load_normalizes_issuer_fingerprints() {
+        let Some(openssl) = sign::resolve_openssl() else {
+            return;
+        };
+        let d = tempfile::tempdir().unwrap();
+        let (cert, key) = make_ca(&openssl, d.path());
+        let al = write_allowlist(d.path());
+        let toks = d.path().join("t.json");
+        let load = |issuers: Option<Vec<String>>| {
+            EnrollState::load(
+                Some(&cert),
+                Some(&key),
+                Some(&toks),
+                Some(&al),
+                true,
+                Some(30),
+                d.path().join("a.jsonl"),
+                issuers,
+            )
+        };
+        let hexfp = "AB".repeat(32); // 64 hex chars, uppercase
+        let s = load(Some(vec![format!("  {hexfp}  "), hexfp.to_lowercase()])).unwrap();
+        assert_eq!(
+            s.issuer_fingerprints,
+            Some(vec!["ab".repeat(32)]),
+            "trimmed + lowercased + deduped"
+        );
+        let s = load(Some(vec![])).unwrap();
+        assert_eq!(s.issuer_fingerprints, Some(vec![]), "empty kept = deny-all");
+        let s = load(None).unwrap();
+        assert_eq!(s.issuer_fingerprints, None, "absent stays permissive");
+        // codex review — malformed entries (wrong length / non-hex) can never
+        // match a blake3 fingerprint; they disable enrollment loudly instead
+        // of silently locking the operator out.
+        assert!(
+            load(Some(vec!["abcdef0123".to_string()])).is_none(),
+            "short entry rejected"
+        );
+        assert!(
+            load(Some(vec!["zz".repeat(32)])).is_none(),
+            "non-hex entry rejected"
+        );
     }
 
     /// A non-CA (CA:FALSE) cert must be rejected.
@@ -360,6 +458,7 @@ mod tests {
             true,
             None,
             d.path().join("a.jsonl"),
+            None,
         );
         assert!(s.is_none(), "CA:FALSE cert must disable enrollment");
     }

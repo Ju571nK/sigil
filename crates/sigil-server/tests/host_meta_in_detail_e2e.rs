@@ -64,6 +64,7 @@ async fn ingested_host_meta_appears_in_detail_block() {
         audit_head: std::sync::Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     });
     let app = build_router(state);
     let req = Request::builder()

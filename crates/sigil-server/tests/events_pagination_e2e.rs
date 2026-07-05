@@ -53,6 +53,7 @@ async fn events_pagination_walks_in_pages() {
         audit_head: Mutex::new(None),
         allowlist_path: None,
         enroll: None,
+        events_require_cert_host_match: false,
     });
     let app = build_router(state);
 

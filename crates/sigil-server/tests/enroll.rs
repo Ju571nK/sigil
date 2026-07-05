@@ -15,6 +15,7 @@ use sigil_server::enroll::tokens::TokenStore;
 use sigil_server::enroll::EnrollState;
 use sigil_server::fleet_index::FleetIndex;
 use sigil_server::persist::HighWater;
+use sigil_server::tls_accept::PeerIdentity;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -131,6 +132,15 @@ fn cert_text(dir: &Path, leaf_pem: &str) -> String {
 /// (empty) allowlist file is written so EnrollState::load's fix-B gate passes,
 /// and the in-memory allowlist starts as the same restrictive `Some(set)`.
 fn state(scratch: &Path, with_enroll: bool) -> Arc<AppState> {
+    state_with_issuers(scratch, with_enroll, None)
+}
+
+/// Same as `state`, with an optional #194.1 issuer-fingerprint allowlist.
+fn state_with_issuers(
+    scratch: &Path,
+    with_enroll: bool,
+    issuer_fingerprints: Option<Vec<String>>,
+) -> Arc<AppState> {
     let tokens_path = scratch.join("tokens.json");
     let allowlist_path = scratch.join("hosts.json");
     // restrictive (empty) on-disk allowlist — required when enrollment is on.
@@ -146,6 +156,7 @@ fn state(scratch: &Path, with_enroll: bool) -> Arc<AppState> {
             true, // mtls on (fix A) — tests drive the handler directly
             Some(30),
             scratch.join("enrollment-audit.jsonl"),
+            issuer_fingerprints,
         )
     } else {
         None
@@ -167,6 +178,7 @@ fn state(scratch: &Path, with_enroll: bool) -> Arc<AppState> {
         audit_head: Mutex::new(None),
         allowlist_path: Some(allowlist_path),
         enroll,
+        events_require_cert_host_match: false,
     })
 }
 
@@ -176,18 +188,34 @@ async fn post_enroll(
     host_id: &str,
     csr_pem: &str,
 ) -> (StatusCode, serde_json::Value) {
+    post_enroll_as(app, token, host_id, csr_pem, None).await
+}
+
+/// Like `post_enroll`, but optionally injects a `PeerIdentity` request
+/// extension — exactly what `PeerCertAcceptor` does on a live mTLS connection.
+async fn post_enroll_as(
+    app: &axum::Router,
+    token: &str,
+    host_id: &str,
+    csr_pem: &str,
+    peer: Option<Arc<PeerIdentity>>,
+) -> (StatusCode, serde_json::Value) {
     let body = serde_json::json!({
         "token": token,
         "host_id": host_id,
         "csr_pem": csr_pem,
     });
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/v1/enroll")
+        .header("content-type", "application/json");
+    if let Some(peer) = peer {
+        builder = builder.extension(peer);
+    }
     let resp = app
         .clone()
         .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/enroll")
-                .header("content-type", "application/json")
+            builder
                 .body(Body::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap(),
         )
@@ -199,6 +227,15 @@ async fn post_enroll(
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
     (status, json)
+}
+
+/// A synthetic caller identity, as the acceptor would build from the leaf DER.
+fn peer_with_fingerprint(fp: &str) -> Arc<PeerIdentity> {
+    Arc::new(PeerIdentity {
+        fingerprint: fp.to_string(),
+        cn: Some("issuer-box".to_string()),
+        san_dns: vec![],
+    })
 }
 
 const HOST: &str = "018f9c1a-0000-7000-8000-000000000001";
@@ -419,4 +456,165 @@ async fn audit_failure_does_not_grant_allowlist() {
         !permits(&st_for_check.allowlist.read(), HOST),
         "host must NOT be permitted in-memory when audit failed"
     );
+}
+
+// --- #194.1 — caller (issuer) cert binding -----------------------------------
+
+/// Read the enrollment audit JSONL as parsed JSON values.
+fn audit_lines(path: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+const ISSUER_FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+#[tokio::test]
+async fn issuer_list_with_matching_peer_is_allowed() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = state_with_issuers(dir.path(), true, Some(vec![ISSUER_FP.to_string()]));
+    let en = st.enroll.as_ref().unwrap();
+    let (tokens_path, audit_path) = (en.tokens_path.clone(), en.audit_path.clone());
+    let now = OffsetDateTime::now_utc();
+    let token = TokenStore::issue(&tokens_path, HOST, now + Duration::hours(1), now).unwrap();
+    let csr = make_csr(dir.path(), HOST);
+    let app = build_router(st);
+
+    let peer = peer_with_fingerprint(ISSUER_FP);
+    let (status, body) = post_enroll_as(&app, &token, HOST, &csr, Some(peer)).await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
+    // The issued audit record carries the caller's fingerprint.
+    let lines = audit_lines(&audit_path);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["decision"], "issued");
+    assert_eq!(lines[0]["caller_fingerprint"], ISSUER_FP);
+}
+
+#[tokio::test]
+async fn issuer_list_with_wrong_fingerprint_is_denied_403_generic() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = state_with_issuers(dir.path(), true, Some(vec![ISSUER_FP.to_string()]));
+    let en = st.enroll.as_ref().unwrap();
+    let (tokens_path, audit_path) = (en.tokens_path.clone(), en.audit_path.clone());
+    let now = OffsetDateTime::now_utc();
+    let token = TokenStore::issue(&tokens_path, HOST, now + Duration::hours(1), now).unwrap();
+    let csr = make_csr(dir.path(), HOST);
+    let app = build_router(st);
+
+    let wrong = peer_with_fingerprint(&"b".repeat(64));
+    let (status, body) = post_enroll_as(&app, &token, HOST, &csr, Some(wrong)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // SAME body as every token failure — no oracle for "wrong caller".
+    assert_eq!(
+        body,
+        serde_json::json!({"error": {"code": "enrollment_denied", "message": "enrollment denied"}})
+    );
+
+    // Denial is audited with the internal reason + caller fingerprint.
+    let lines = audit_lines(&audit_path);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["decision"], "denied");
+    assert_eq!(lines[0]["reason"], "issuer_not_allowed");
+    assert_eq!(lines[0]["caller_fingerprint"], "b".repeat(64));
+
+    // The gate runs BEFORE the token is touched: the same token still works
+    // for an authorized caller.
+    let ok_peer = peer_with_fingerprint(ISSUER_FP);
+    let (status, body) = post_enroll_as(&app, &token, HOST, &csr, Some(ok_peer)).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "token must not be spent, body={body}"
+    );
+}
+
+#[tokio::test]
+async fn issuer_list_with_no_peer_identity_is_denied_403() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = state_with_issuers(dir.path(), true, Some(vec![ISSUER_FP.to_string()]));
+    let tokens_path = st.enroll.as_ref().unwrap().tokens_path.clone();
+    let now = OffsetDateTime::now_utc();
+    let token = TokenStore::issue(&tokens_path, HOST, now + Duration::hours(1), now).unwrap();
+    let csr = make_csr(dir.path(), HOST);
+    let app = build_router(st);
+
+    let (status, body) = post_enroll_as(&app, &token, HOST, &csr, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"]["code"], "enrollment_denied");
+}
+
+/// Uppercase config entries are normalized: a lowercase-hex caller still matches.
+#[tokio::test]
+async fn issuer_list_entries_are_normalized_to_lowercase() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = state_with_issuers(dir.path(), true, Some(vec![ISSUER_FP.to_ascii_uppercase()]));
+    let tokens_path = st.enroll.as_ref().unwrap().tokens_path.clone();
+    let now = OffsetDateTime::now_utc();
+    let token = TokenStore::issue(&tokens_path, HOST, now + Duration::hours(1), now).unwrap();
+    let csr = make_csr(dir.path(), HOST);
+    let app = build_router(st);
+
+    let peer = peer_with_fingerprint(ISSUER_FP);
+    let (status, body) = post_enroll_as(&app, &token, HOST, &csr, Some(peer)).await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+}
+
+/// An EMPTY issuer list is deny-all (operator error surfaces fast).
+#[tokio::test]
+async fn issuer_list_empty_denies_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = state_with_issuers(dir.path(), true, Some(vec![]));
+    let tokens_path = st.enroll.as_ref().unwrap().tokens_path.clone();
+    let now = OffsetDateTime::now_utc();
+    let token = TokenStore::issue(&tokens_path, HOST, now + Duration::hours(1), now).unwrap();
+    let csr = make_csr(dir.path(), HOST);
+    let app = build_router(st);
+
+    let peer = peer_with_fingerprint(ISSUER_FP);
+    let (status, _) = post_enroll_as(&app, &token, HOST, &csr, Some(peer)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// List unset ⇒ pre-#194 behavior: a peer identity may be present or absent;
+/// either way enrollment succeeds and the audit carries the real caller
+/// fingerprint ("" when absent — covered by the other happy-path test).
+#[tokio::test]
+async fn no_issuer_list_still_records_caller_fingerprint_when_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = state(dir.path(), true);
+    let en = st.enroll.as_ref().unwrap();
+    let (tokens_path, audit_path) = (en.tokens_path.clone(), en.audit_path.clone());
+    let now = OffsetDateTime::now_utc();
+    let token = TokenStore::issue(&tokens_path, HOST, now + Duration::hours(1), now).unwrap();
+    let csr = make_csr(dir.path(), HOST);
+    let app = build_router(st);
+
+    let peer = peer_with_fingerprint(ISSUER_FP);
+    let (status, body) = post_enroll_as(&app, &token, HOST, &csr, Some(peer)).await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let lines = audit_lines(&audit_path);
+    assert_eq!(lines[0]["caller_fingerprint"], ISSUER_FP);
+}
+
+/// Absent peer + no issuer list: the audit caller_fingerprint is "" (empty),
+/// never fabricated.
+#[tokio::test]
+async fn absent_peer_audits_empty_caller_fingerprint() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = state(dir.path(), true);
+    let en = st.enroll.as_ref().unwrap();
+    let (tokens_path, audit_path) = (en.tokens_path.clone(), en.audit_path.clone());
+    let now = OffsetDateTime::now_utc();
+    let token = TokenStore::issue(&tokens_path, HOST, now + Duration::hours(1), now).unwrap();
+    let csr = make_csr(dir.path(), HOST);
+    let app = build_router(st);
+
+    let (status, _) = post_enroll(&app, &token, HOST, &csr).await;
+    assert_eq!(status, StatusCode::OK);
+    let lines = audit_lines(&audit_path);
+    assert_eq!(lines[0]["caller_fingerprint"], "");
 }

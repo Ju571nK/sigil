@@ -136,6 +136,7 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         cfg.mtls_enabled(),
         cfg.enroll_cert_days,
         enroll_audit_path,
+        cfg.enroll_issuer_fingerprints.clone(),
     );
     if enroll.is_some() {
         tracing::info!("enrollment endpoint enabled (POST /v1/enroll)");
@@ -157,6 +158,10 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         audit_head: Mutex::new(None),
         allowlist_path: cfg.host_allowlist_path.clone(),
         enroll,
+        // #194.2 — ServerConfig::load refused to start if this is set
+        // without mTLS, so `true` here implies the mTLS listener (and thus
+        // PeerIdentity injection) is active.
+        events_require_cert_host_match: cfg.events_require_cert_host_match,
     }))
 }
 
@@ -263,7 +268,11 @@ async fn run(cfg: ServerConfig) -> Result<()> {
     if cfg.mtls_enabled() {
         let tls = build_mtls(&cfg)?;
         tracing::info!(bind = %cfg.bind, "starting sigil-server (mTLS)");
-        axum_server::bind_rustls(cfg.bind, tls)
+        // #194 — PeerCertAcceptor wraps axum-server's rustls acceptor (same
+        // handshake + timeout) and exposes the verified client cert to
+        // handlers as an `Extension<Arc<PeerIdentity>>` on every request.
+        axum_server::bind(cfg.bind)
+            .acceptor(sigil_server::tls_accept::PeerCertAcceptor::new(tls))
             .serve(app.into_make_service())
             .await
             .context("axum_server serve (mTLS)")?;

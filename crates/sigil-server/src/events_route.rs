@@ -7,9 +7,11 @@
 use crate::allowlist;
 use crate::app::SharedState;
 use crate::persist::{append_events, PersistEvent};
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use crate::tls_accept::PeerIdentity;
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Extension, Json};
 use serde_json::{json, Value as JsonValue};
 use sigil_core::event::{Event, SCHEMA_VERSION};
+use std::sync::Arc;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -66,8 +68,45 @@ fn validate(payload: &JsonValue, envelope_host_id: &str) -> Result<(), &'static 
 
 pub async fn post_events(
     State(state): State<SharedState>,
+    // #194 — injected per-connection by `tls_accept::PeerCertAcceptor`.
+    // Absent over plain HTTP (dev mode) or if rustls reported no peer cert.
+    peer: Option<Extension<Arc<PeerIdentity>>>,
     Json(req): Json<EventsRequest>,
 ) -> impl IntoResponse {
+    // #194.2 — cert↔host_id binding, checked BEFORE the allowlist so a
+    // mismatched cert can never even probe allowlist membership. The response
+    // is byte-identical to the allowlist rejection (no oracle distinguishing
+    // "not allowlisted" from "wrong cert"); the fingerprint is logged for
+    // operators. Boot validation guarantees mTLS is on when this flag is set.
+    // Matching is ASCII-case-insensitive (codex review): DNS names are
+    // case-insensitive and UUID host_ids appear in both hex cases in the wild;
+    // hex case carries no identity, so folding removes false rejects without
+    // weakening the binding. (Known limit, deliberate: this gate runs after
+    // axum's Json extraction, so a malformed body still 400s before the 404 —
+    // a parser-level oracle only, not a token/allowlist oracle.)
+    if state.events_require_cert_host_match {
+        let peer = peer.as_ref().map(|Extension(p)| p);
+        let host_id = req.envelope.host_id.as_str();
+        let matches = peer.is_some_and(|p| {
+            p.cn.as_deref()
+                .is_some_and(|cn| cn.eq_ignore_ascii_case(host_id))
+                || p.san_dns.iter().any(|d| d.eq_ignore_ascii_case(host_id))
+        });
+        if !matches {
+            tracing::warn!(
+                host_id = %req.envelope.host_id,
+                peer_fingerprint = peer.map(|p| p.fingerprint.as_str()).unwrap_or(""),
+                peer_cn = peer.and_then(|p| p.cn.as_deref()).unwrap_or(""),
+                "events: client cert does not match envelope host_id; rejecting"
+            );
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "host_unknown", "host_id": req.envelope.host_id})),
+            )
+                .into_response();
+        }
+    }
+
     if !allowlist::permits(&state.allowlist.read(), &req.envelope.host_id) {
         return (
             StatusCode::NOT_FOUND,

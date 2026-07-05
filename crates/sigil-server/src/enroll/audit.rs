@@ -33,9 +33,9 @@ pub struct EnrollmentAuditRecord {
     pub serial: String,
     /// not_after of the issued cert, rfc3339 (empty when denied).
     pub not_after: String,
-    /// Caller (peer) cert fingerprint, if extractable. Empty otherwise.
-    // TODO(#184): caller cert fingerprint — needs peer-cert plumbing from the
-    // axum-server rustls connection; deferred (see report). Left empty for now.
+    /// Caller (TLS peer) cert fingerprint — blake3 hex of the leaf DER, as
+    /// plumbed by `tls_accept::PeerCertAcceptor` (#194). Empty when the
+    /// request carried no peer identity (plain-HTTP dev mode).
     pub caller_fingerprint: String,
     pub prev_hash: String,
 }
@@ -96,6 +96,7 @@ pub fn append(
     cert_fingerprint: &str,
     serial: &str,
     not_after: &str,
+    caller_fingerprint: &str,
     ts: &str,
 ) -> Result<SignedEnrollmentRecord, AuditAppendError> {
     let (seq, prev_hash) = resume_chain(path);
@@ -110,7 +111,7 @@ pub fn append(
         cert_fingerprint: cert_fingerprint.to_string(),
         serial: serial.to_string(),
         not_after: not_after.to_string(),
-        caller_fingerprint: String::new(),
+        caller_fingerprint: caller_fingerprint.to_string(),
         prev_hash,
     };
     let canonical =
@@ -180,6 +181,7 @@ mod tests {
             "certfp",
             "0a",
             "2026-07-01T00:00:00Z",
+            "callerfp",
             "2026-06-23T00:00:00Z",
         )
         .unwrap();
@@ -193,11 +195,14 @@ mod tests {
             "",
             "",
             "",
+            "",
             "2026-06-23T00:01:00Z",
         )
         .unwrap();
         assert_eq!(a.record.seq, 0);
         assert_eq!(a.record.prev_hash, GENESIS_PREV_HASH);
+        assert_eq!(a.record.caller_fingerprint, "callerfp");
+        assert_eq!(b.record.caller_fingerprint, "");
         assert_eq!(b.record.seq, 1);
         assert_eq!(b.record.prev_hash, a.hash, "chain link");
         assert!(verify_line(&a, &k));
