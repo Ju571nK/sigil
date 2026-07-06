@@ -151,6 +151,52 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    /// The shipped `config/server.example.yaml` must stay in sync with the
+    /// `ServerConfig` schema: uncomment every documented setting and it must
+    /// still deserialize (guards against a typo'd or renamed key in the docs).
+    #[test]
+    fn example_config_matches_schema() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/server.example.yaml"
+        );
+        let raw = std::fs::read_to_string(path).expect("read example yaml");
+        let mut out = String::new();
+        for line in raw.lines() {
+            let t = line.trim_start();
+            // Uncomment lines that document a setting (`# key:`, `#   - item`,
+            // nested `# path:` / `# active_window_days:`); drop prose comments.
+            let is_setting = t
+                .strip_prefix('#')
+                .map(|r| {
+                    let r = r.trim_start();
+                    r.starts_with("- ")
+                        || r.split_once(':').is_some_and(|(k, _)| {
+                            !k.is_empty() && k.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                        })
+                })
+                .unwrap_or(false);
+            if let Some(stripped) = line.strip_prefix("# ").or_else(|| line.strip_prefix('#')) {
+                if is_setting {
+                    out.push_str(stripped);
+                    out.push('\n');
+                }
+                // else: prose comment — skip
+            } else {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        let cfg: ServerConfig = serde_yaml::from_str(&out).unwrap_or_else(|e| {
+            panic!("example yaml (all keys uncommented) must parse: {e}\n---\n{out}")
+        });
+        // Spot-check the #184/#194 keys are present and typed as expected.
+        assert!(cfg.enroll_ca_cert_path.is_some());
+        assert!(cfg.enroll_issuer_fingerprints.is_some());
+        assert!(cfg.events_require_cert_host_match);
+        assert!(cfg.artifacts_dir.is_some());
+    }
+
     #[test]
     fn loads_minimal_config() {
         let dir = tempdir().unwrap();

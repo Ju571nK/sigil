@@ -25,3 +25,47 @@ policy_bundle_path: "/var/lib/sigil-server/signed-policy.json"
 # Optional — per-host event-id high-water file (at-least-once dedup). If
 # unset, the server uses <events_out_dir>/.high-water.json.
 # high_water_path: "/var/lib/sigil-server/high_water.json"
+
+# Optional — signed rule-pack bundle served at GET /v1/rule-packs. Produced by
+# `sigil-sign` like the policy bundle. Absent ⇒ that route returns 404.
+# rule_packs_bundle_path: "/var/lib/sigil-server/signed-rule-packs.json"
+
+# Optional (#182) — directory of operator-populated, signed agent release
+# artifacts (tarballs/zips, .deb/.rpm, SHA256SUMS, build-manifest.json), served
+# read-only at GET /v1/artifacts[/ <file>] so an air-gapped fleet/PMS can pull
+# clients from the server instead of GitHub. Bearer-gated, path-traversal-hardened.
+# Absent ⇒ /v1/artifacts* returns 404 (feature off).
+# artifacts_dir: "/var/lib/sigil-server/artifacts"
+
+# --- Automated enrollment / B-mint (#184) --------------------------------------
+# POST /v1/enroll signs a per-host CSR into a short-lived mTLS client cert using
+# an operator-provided INTERMEDIATE CA (keep the root offline). Requires mTLS
+# above AND a restrictive host_allowlist_path — the server refuses to enable
+# enrollment otherwise. Mint a single-use token with:
+#   sigil-server enroll-token --config server.yaml --host-id <uuid> [--ttl 1h]
+#
+# enroll_ca_cert_path: "/etc/sigil/enroll-intermediate.crt"   # CA:TRUE, PEM
+# enroll_ca_key_path:  "/etc/sigil/enroll-intermediate.key"   # 0600, matches cert
+# enroll_tokens_path:  "/var/lib/sigil-server/enroll-tokens.json"
+# enroll_cert_days: 30                                          # issued-cert TTL (default 30)
+
+# Optional (#194.1) — bind /v1/enroll to specific caller certs. Each entry is the
+# blake3 hex (64 lowercase chars) of a permitted client cert's DER — typically
+# the PMS/issuer box. When set, a caller whose client cert is not listed is
+# denied (generic 403) even with a valid token, so a leaked token is useless
+# without the issuer cert. Malformed entries disable enrollment at boot.
+# enroll_issuer_fingerprints:
+#   - "0000000000000000000000000000000000000000000000000000000000000000"
+
+# Optional (#194.2) — require the TLS client cert to match the event's host_id
+# (subject CN, or a SAN DNS entry, == envelope.host_id; ASCII-case-insensitive)
+# on POST /v1/events. Blocks an enrolled host from impersonating another in the
+# body. Requires mTLS (the server refuses to start otherwise). Default false —
+# leave off if your client certs' CN is not the host_id. B-mint-issued certs
+# (CN = SAN = host_id) satisfy it immediately.
+# events_require_cert_host_match: true
+
+# Optional — commercial license bundle. Absent ⇒ free tier.
+# license:
+#   path: "/etc/sigil/license.bundle"
+#   active_window_days: 30
