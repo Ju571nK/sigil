@@ -13,6 +13,7 @@ pub mod remediation;
 pub mod rubric;
 pub mod rule_pack;
 pub mod task;
+pub mod tool_surface;
 pub mod workspace_discovery;
 
 pub use parser::antigravity::{AntigravityParser, AntigravityProjectParser};

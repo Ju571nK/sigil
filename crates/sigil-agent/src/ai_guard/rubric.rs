@@ -59,6 +59,9 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
             ..
         } => "instruction_override_marker",
         AiGuardReason::UnattendedScheduledTask { .. } => "unattended_scheduled_task",
+        AiGuardReason::McpToolInstructionOverride { .. } => "mcp_tool_instruction_override",
+        AiGuardReason::McpToolHiddenText { .. } => "mcp_tool_hidden_text",
+        AiGuardReason::McpToolNameShadow { .. } => "mcp_tool_name_shadow",
     }
 }
 
@@ -71,6 +74,12 @@ pub const DANGEROUS_TOGGLE_KINDS: &[&str] = &[
     // #191 — a newly-appeared unattended scheduled task is an OFF→ON drift:
     // it means an autonomous loop/goal is now running without a human present.
     "unattended_scheduled_task",
+    // #148 — a newly-appeared poisoned MCP tool (active instruction-override or
+    // hidden text, or a name-shadow collision) is an OFF→ON drift: a tool now
+    // advertises attacker-controlled metadata that wasn't there before.
+    "mcp_tool_instruction_override",
+    "mcp_tool_hidden_text",
+    "mcp_tool_name_shadow",
 ];
 
 /// The set of dangerous-toggle kind keys present in a reason set.
@@ -88,7 +97,7 @@ pub fn dangerous_toggles(reasons: &[AiGuardReason]) -> std::collections::BTreeSe
 #[derive(Debug, Clone)]
 pub struct Rubric {
     /// kind_key → weight. Keys are static strings owned by the rubric
-    /// module (returned by `kind_key()`). Defaults populate all 21 known
+    /// module (returned by `kind_key()`). Defaults populate all 24 known
     /// kinds; with_overrides() may replace values but never adds keys.
     pub weights: HashMap<&'static str, f32>,
     /// Subset of `weights` whose value came from an operator override
@@ -103,7 +112,7 @@ pub struct Rubric {
 impl Rubric {
     /// Build the canonical hardcoded weights — single source of truth for
     /// defaults. Must match the historical `weight_for()` match arms for
-    /// all 21 kinds.
+    /// all 24 kinds.
     pub fn defaults() -> Self {
         let mut w: HashMap<&'static str, f32> = HashMap::new();
         w.insert("destructive_in_inline_command", 4.0);
@@ -129,6 +138,13 @@ impl Rubric {
         // #191 — an unattended recurring task is serious (autonomous loop
         // without guardrails) but not max.
         w.insert("unattended_scheduled_task", 2.5);
+        // #148 — active tool-metadata poisoning. instruction_override and
+        // hidden_text are attacker instructions the model reads directly, so
+        // they weigh high (3.5). name_shadow is a strong squatting signal but
+        // one step less direct (3.0).
+        w.insert("mcp_tool_instruction_override", 3.5);
+        w.insert("mcp_tool_hidden_text", 3.5);
+        w.insert("mcp_tool_name_shadow", 3.0);
         Rubric {
             weights: w,
             overridden: HashSet::new(),

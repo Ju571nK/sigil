@@ -63,6 +63,15 @@ pub fn hint_for_reason(reason: &AiGuardReason) -> &'static str {
         UnattendedScheduledTask { .. } => {
             "An unattended scheduled task runs Claude Code on a recurring basis — review its prompt and permissions, or remove it if unexpected."
         }
+        McpToolInstructionOverride { .. } => {
+            "An MCP tool's description contains instructions aimed at your agent — treat the server as untrusted; remove it or pin a reviewed version."
+        }
+        McpToolHiddenText { .. } => {
+            "An MCP tool's advertised text contains hidden or deceptive Unicode (zero-width, bidi, or homoglyphs) — inspect the raw metadata and remove the server unless you trust it."
+        }
+        McpToolNameShadow { .. } => {
+            "The same MCP tool name is offered by multiple servers — a server may be shadowing a trusted tool; disambiguate or remove the untrusted one."
+        }
     }
 }
 
