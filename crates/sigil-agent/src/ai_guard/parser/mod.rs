@@ -5,6 +5,7 @@ pub mod antigravity;
 pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;
+pub mod codex_tool_cache;
 pub mod continue_dev;
 pub mod cursor;
 pub mod gemini;

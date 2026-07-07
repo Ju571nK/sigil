@@ -398,11 +398,11 @@ mod tests {
         let mut a = surface("clean desc");
         let mut b = surface("clean desc");
         // Same content, different JSON key order in the flattened schema text.
-        a.schema_text = r#"{"a":1,"b":2,"z":"​hidden"}"#.into();
-        b.schema_text = r#"{"z":"​hidden","b":2,"a":1}"#.into();
-        // Note: both contain the literal escape sequence, not the char; so
-        // neither trips zero_width. The point is identical verdicts.
+        // No hidden chars → both must be clean, and identical.
+        a.schema_text = r#"{"a":1,"b":2,"z":"visible"}"#.into();
+        b.schema_text = r#"{"z":"visible","b":2,"a":1}"#.into();
         assert_eq!(analyze_tool_surface(&a), analyze_tool_surface(&b));
+        assert!(analyze_tool_surface(&a).is_empty());
     }
 
     #[test]

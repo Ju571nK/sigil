@@ -482,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn rubric_defaults_all_21_kinds_present() {
+    fn rubric_defaults_all_24_kinds_present() {
         let r = Rubric::defaults();
         assert_eq!(r.weights.get("destructive_in_inline_command"), Some(&4.0));
         assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&4.0));
@@ -505,7 +505,11 @@ mod tests {
         assert_eq!(r.weights.get("instruction_obfuscation"), Some(&2.5));
         assert_eq!(r.weights.get("instruction_override_marker"), Some(&2.0));
         assert_eq!(r.weights.get("unattended_scheduled_task"), Some(&2.5));
-        assert_eq!(r.weights.len(), 21);
+        // #148 — MCP tool-poisoning kinds.
+        assert_eq!(r.weights.get("mcp_tool_instruction_override"), Some(&3.5));
+        assert_eq!(r.weights.get("mcp_tool_hidden_text"), Some(&3.5));
+        assert_eq!(r.weights.get("mcp_tool_name_shadow"), Some(&3.0));
+        assert_eq!(r.weights.len(), 24);
     }
 
     #[test]
