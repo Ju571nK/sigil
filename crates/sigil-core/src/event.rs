@@ -247,6 +247,35 @@ pub enum AiGuardReason {
     /// persistent equivalent of a loop/goal running without a human in the
     /// loop. POSTURE only; `name` is the task subdir name.
     UnattendedScheduledTask { name: String },
+    /// #148 — an MCP tool's advertised description (or its namespace
+    /// description) contains an imperative aimed at the model/client rather
+    /// than documenting the tool — i.e. prompt injection embedded in tool
+    /// metadata ("ignore previous instructions", "do not tell the user", a
+    /// `<important>` marker, …). `pattern` names the matched detector for
+    /// evidence. POSTURE only. Static — no baseline needed.
+    McpToolInstructionOverride {
+        server: String,
+        tool: String,
+        pattern: String,
+    },
+    /// #148 — an MCP tool surface (description / namespace description /
+    /// input schema) contains hidden or deceptive Unicode: zero-width chars,
+    /// bidi controls, other control/format codepoints, or homoglyph mixing.
+    /// `kind` is the sub-class ("zero_width" | "bidi" | "control" |
+    /// "homoglyph"). POSTURE only. Static.
+    McpToolHiddenText {
+        server: String,
+        tool: String,
+        /// Sub-class of hidden text. Named `text_kind` (not `kind`) because the
+        /// enum is internally tagged with `tag = "kind"`.
+        text_kind: String,
+    },
+    /// #148 — the same MCP tool name is advertised by two or more distinct
+    /// servers (name shadowing / tool squatting): a malicious server can
+    /// shadow a trusted tool's name so calls route to it. `servers` lists the
+    /// colliding server names. POSTURE only. Cross-tool (computed over the
+    /// whole snapshot, not per-tool).
+    McpToolNameShadow { tool: String, servers: Vec<String> },
 }
 
 /// #146 — category of instruction-file directive. Stable wire strings

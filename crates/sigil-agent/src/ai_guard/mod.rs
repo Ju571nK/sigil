@@ -13,12 +13,14 @@ pub mod remediation;
 pub mod rubric;
 pub mod rule_pack;
 pub mod task;
+pub mod tool_surface;
 pub mod workspace_discovery;
 
 pub use parser::antigravity::{AntigravityParser, AntigravityProjectParser};
 pub use parser::claude_code::{ClaudeCodeParser, ClaudeCodeProjectParser};
 pub use parser::claude_desktop::ClaudeDesktopParser;
 pub use parser::codex::{CodexParser, CodexProjectParser};
+pub use parser::codex_tool_cache::CodexToolCacheParser;
 pub use parser::continue_dev::{ContinueDevParser, ContinueDevProjectParser};
 pub use parser::cursor::{CursorParser, CursorProjectParser};
 pub use parser::gemini::{GeminiParser, GeminiProjectParser};
@@ -55,14 +57,19 @@ pub fn default_rubric_handle() -> RubricHandle {
     std::sync::Arc::new(parking_lot::RwLock::new(rubric::Rubric::defaults()))
 }
 
-/// The seven built-in user-global parsers, one per supported AI agent. Single
-/// source of truth shared by the daemon boot path (`runtime::run`) and the
-/// one-shot `sigil scan` (#174) so the two can never drift on which tools are
-/// covered. Per-repo / project parsers are appended separately by each caller.
+/// The built-in user-global parsers. Single source of truth shared by the
+/// daemon boot path (`runtime::run`) and the one-shot `sigil scan` (#174) so
+/// the two can never drift on which tools are covered. Per-repo / project
+/// parsers are appended separately by each caller.
+///
+/// #148 — `CodexToolCacheParser` is Codex-tool but scope
+/// `Application{app:"codex-mcp-tools"}`, so it renders as its own scan row
+/// distinct from `CodexParser`'s user-global row (scan groups by (tool,scope)).
 pub fn user_global_parsers() -> Vec<std::sync::Arc<dyn parser::AiGuardParser>> {
     vec![
         std::sync::Arc::new(ClaudeCodeParser),
         std::sync::Arc::new(CodexParser),
+        std::sync::Arc::new(CodexToolCacheParser),
         std::sync::Arc::new(ClaudeDesktopParser),
         std::sync::Arc::new(ContinueDevParser),
         std::sync::Arc::new(GeminiParser),
