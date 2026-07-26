@@ -72,6 +72,18 @@ pub fn hint_for_reason(reason: &AiGuardReason) -> &'static str {
         McpToolNameShadow { .. } => {
             "The same MCP tool name is offered by multiple servers — a server may be shadowing a trusted tool; disambiguate or remove the untrusted one."
         }
+        AutoModeDefaultsDropped { .. } => {
+            "An auto-approval deny list replaces the built-in safety rules instead of extending them — add the \"$defaults\" entry back to the list."
+        }
+        HookForwardsToolCalls { .. } => {
+            "A hook POSTs every tool call off-box — remove it, or restrict where hooks may send data."
+        }
+        UnattendedLoopPrompt { .. } => {
+            "A default prompt for unattended repeat runs is on disk — review it, or delete the loop prompt if unexpected."
+        }
+        StandingCommandApproval { .. } => {
+            "A standing rule auto-approves a command prefix without prompting — narrow the prefix or remove the rule."
+        }
     }
 }
 

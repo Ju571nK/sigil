@@ -32,6 +32,14 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
         AiGuardReason::McpServerRemote { .. } => "mcp_server_remote",
         AiGuardReason::McpServerLocalCommand { .. } => "mcp_server_local_command",
         AiGuardReason::TrustedMcpServer { .. } => "trusted_mcp_server",
+        // #199 — Claude Code's `auto` runs every tool call past a classifier
+        // that can still refuse. `bypassPermissions` and `acceptEdits` have no
+        // such check, so `auto` is a real auto-approval posture but a weaker
+        // one, and is scored under its own key rather than folded in at the
+        // same severity.
+        AiGuardReason::AutoApprovalEnabled { mode } if mode == "auto" => {
+            "auto_approval_enabled_classifier"
+        }
         AiGuardReason::AutoApprovalEnabled { .. } => "auto_approval_enabled",
         AiGuardReason::McpServerSuspiciousLauncher {
             shape: LauncherShape::Shell,
@@ -62,12 +70,19 @@ fn kind_key(reason: &AiGuardReason) -> &'static str {
         AiGuardReason::McpToolInstructionOverride { .. } => "mcp_tool_instruction_override",
         AiGuardReason::McpToolHiddenText { .. } => "mcp_tool_hidden_text",
         AiGuardReason::McpToolNameShadow { .. } => "mcp_tool_name_shadow",
+        AiGuardReason::AutoModeDefaultsDropped { .. } => "auto_mode_defaults_dropped",
+        AiGuardReason::HookForwardsToolCalls { .. } => "hook_forwards_tool_calls",
+        AiGuardReason::UnattendedLoopPrompt { .. } => "unattended_loop_prompt",
+        AiGuardReason::StandingCommandApproval { .. } => "standing_command_approval",
     }
 }
 
 /// #147 — the dangerous self-escalation toggle kinds tracked for drift.
 pub const DANGEROUS_TOGGLE_KINDS: &[&str] = &[
     "auto_approval_enabled",
+    // #199 — switching into classifier auto-approval is the same OFF→ON
+    // escalation, just a milder one; it still stops the human prompts.
+    "auto_approval_enabled_classifier",
     "sandbox_disabled",
     "permissions_allow_broad",
     "project_mcp_auto_enabled",
@@ -80,6 +95,14 @@ pub const DANGEROUS_TOGGLE_KINDS: &[&str] = &[
     "mcp_tool_instruction_override",
     "mcp_tool_hidden_text",
     "mcp_tool_name_shadow",
+    // #199/#200 — each is a config edit that removes a human from the loop:
+    // the classifier's safety rules replaced, tool calls newly forwarded
+    // off-box, an unattended loop prompt appearing, or a standing approval
+    // that makes a command prefix run without asking from now on.
+    "auto_mode_defaults_dropped",
+    "hook_forwards_tool_calls",
+    "unattended_loop_prompt",
+    "standing_command_approval",
 ];
 
 /// The set of dangerous-toggle kind keys present in a reason set.
@@ -97,7 +120,7 @@ pub fn dangerous_toggles(reasons: &[AiGuardReason]) -> std::collections::BTreeSe
 #[derive(Debug, Clone)]
 pub struct Rubric {
     /// kind_key → weight. Keys are static strings owned by the rubric
-    /// module (returned by `kind_key()`). Defaults populate all 24 known
+    /// module (returned by `kind_key()`). Defaults populate all 29 known
     /// kinds; with_overrides() may replace values but never adds keys.
     pub weights: HashMap<&'static str, f32>,
     /// Subset of `weights` whose value came from an operator override
@@ -112,7 +135,7 @@ pub struct Rubric {
 impl Rubric {
     /// Build the canonical hardcoded weights — single source of truth for
     /// defaults. Must match the historical `weight_for()` match arms for
-    /// all 24 kinds.
+    /// all 29 kinds.
     pub fn defaults() -> Self {
         let mut w: HashMap<&'static str, f32> = HashMap::new();
         w.insert("destructive_in_inline_command", 4.0);
@@ -145,6 +168,18 @@ impl Rubric {
         w.insert("mcp_tool_instruction_override", 3.5);
         w.insert("mcp_tool_hidden_text", 3.5);
         w.insert("mcp_tool_name_shadow", 3.0);
+        // #199 — classifier auto-approval still removes the prompt, but a
+        // check remains in the path, so it sits below the unguarded modes.
+        w.insert("auto_approval_enabled_classifier", 1.5);
+        // #199 — dropping the shipped safety rules re-arms exactly the
+        // commands the defaults were written to stop.
+        w.insert("auto_mode_defaults_dropped", 2.5);
+        // #199 — every tool call and its arguments leave the machine.
+        w.insert("hook_forwards_tool_calls", 3.0);
+        // #199 — an unattended loop prompt, same class as a scheduled task.
+        w.insert("unattended_loop_prompt", 2.5);
+        // #200 — a persistent, unprompted approval for a command prefix.
+        w.insert("standing_command_approval", 2.0);
         Rubric {
             weights: w,
             overridden: HashSet::new(),
@@ -482,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn rubric_defaults_all_24_kinds_present() {
+    fn rubric_defaults_all_29_kinds_present() {
         let r = Rubric::defaults();
         assert_eq!(r.weights.get("destructive_in_inline_command"), Some(&4.0));
         assert_eq!(r.weights.get("destructive_in_hook_script"), Some(&4.0));
@@ -509,7 +544,7 @@ mod tests {
         assert_eq!(r.weights.get("mcp_tool_instruction_override"), Some(&3.5));
         assert_eq!(r.weights.get("mcp_tool_hidden_text"), Some(&3.5));
         assert_eq!(r.weights.get("mcp_tool_name_shadow"), Some(&3.0));
-        assert_eq!(r.weights.len(), 24);
+        assert_eq!(r.weights.len(), 29);
     }
 
     #[test]

@@ -58,16 +58,33 @@ impl AiGuardParser for CodexParser {
     }
 
     fn watched_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
-        vec![home_dir.join(".codex").join("config.toml")]
+        vec![
+            home_dir.join(".codex").join("config.toml"),
+            // #200 — a standing command-approval rule appearing here is an
+            // OFF→ON drift, so the daemon must re-assess when the dir changes.
+            home_dir.join(".codex").join("rules"),
+        ]
     }
 
     fn assess(&self, home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
-        let path = home_dir.join(".codex").join("config.toml");
+        let codex_dir = home_dir.join(".codex");
+        let path = codex_dir.join("config.toml");
         let text = match std::fs::read_to_string(&path) {
             Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            // #200 — a rules file is evidence of use on its own, so the
+            // absent-config short-circuit must still look there first.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let mut out = Vec::new();
+                emit_rules_reasons(&codex_dir, &mut out);
+                return Ok(out);
+            }
             Err(source) => return Err(AssessError::Io { path, source }),
         };
+        // A corrupt config.toml is surfaced, not degraded to "no findings"
+        // (`corrupt_toml_returns_parse_error` pins this). Codex will not start
+        // against a config it cannot parse, so the standing approvals in
+        // `rules/` are not in force either, and the actionable signal for the
+        // operator is that the config is broken.
         let val: Value = toml::from_str(&text).map_err(|e| AssessError::Parse {
             path: path.clone(),
             message: e.to_string(),
@@ -75,9 +92,13 @@ impl AiGuardParser for CodexParser {
 
         let mut out = Vec::new();
         emit_sandbox_reasons(&val, &mut out);
-        let hooks_dir = home_dir.join(".codex").join("hooks");
+        // #200 — whether a human is asked before a tool runs.
+        emit_approval_policy_reasons(&val, &mut out);
+        let hooks_dir = codex_dir.join("hooks");
         emit_hook_reasons(&val, &hooks_dir, &mut out);
         emit_mcp_reasons(&val, &mut out);
+        // #200 — standing command approvals, which live outside config.toml.
+        emit_rules_reasons(&codex_dir, &mut out);
         Ok(out)
     }
 
@@ -105,6 +126,362 @@ pub(crate) fn emit_sandbox_reasons(val: &Value, out: &mut Vec<AiGuardReason>) {
     if matches!(mode, Some("danger-full-access")) {
         out.push(AiGuardReason::SandboxDisabled);
     }
+}
+
+/// #200 — `approval_policy` decides whether a human is asked before a tool
+/// runs. Two shapes are accepted by Codex:
+///
+/// ```toml,ignore
+/// approval_policy = "never"                     # scalar
+/// approval_policy = { granular = { ... } }      # table, since ~2026-03
+/// ```
+///
+/// `"never"` is the autonomous setting: nothing is escalated to the user.
+/// `"untrusted"` and `"on-request"` still prompt, and the deprecated
+/// `"on-failure"` prompts on error, so none of those is a finding.
+///
+/// The table form must not crash a scalar-shaped read — that is the robustness
+/// half of this — but it is also **not** scored. Its sub-keys
+/// (`sandbox_approval`, `rules`, `mcp_elicitations`, `request_permissions`,
+/// `skill_approval`) each gate a different class of prompt, and a granular
+/// policy can be more restrictive than any scalar. Emitting
+/// `AutoApprovalEnabled` on the shape alone would assert that approvals are off
+/// when they may not be. The accepted values need hardware verification before
+/// this can say anything; until then the honest answer is silence, and the
+/// silence is recorded here rather than left to look like a clean result.
+pub(crate) fn emit_approval_policy_reasons(val: &Value, out: &mut Vec<AiGuardReason>) {
+    let Some(policy) = val.get("approval_policy") else {
+        return;
+    };
+    match policy.as_str() {
+        Some("never") => out.push(AiGuardReason::AutoApprovalEnabled {
+            mode: "never".to_string(),
+        }),
+        // `untrusted` / `on-request` still prompt; the deprecated `on-failure`
+        // prompts on error. None is a blanket auto-approval.
+        Some(_) => {}
+        None => {
+            if policy.get("granular").is_some() {
+                tracing::info!("codex approval_policy: granular form not yet scored (see #200)");
+            }
+        }
+    }
+}
+
+/// #200 — bounds on the `~/.codex/rules/` sweep. These files are
+/// operator-authored, but a scan on the daemon's path must not be steerable
+/// into unbounded work by dropping a large file there.
+const MAX_RULES_FILES: usize = 64;
+const MAX_RULES_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_STANDING_APPROVAL_REASONS: usize = 32;
+
+/// #200 — `~/.codex/rules/*.rules` holds command-approval rules in a small DSL,
+/// verified on a live install (codex-cli 0.137.0):
+///
+/// ```text,ignore
+/// prefix_rule(pattern=["codex", "mcp", "login"], decision="allow")
+/// ```
+///
+/// A `decision="allow"` entry is a *standing* approval: every future command
+/// whose first words match the prefix runs with no prompt. That is the same
+/// class of posture as `approval_policy = "never"`, but scoped to a prefix and
+/// invisible in `config.toml`.
+///
+/// Only `allow` is a finding — a `deny` rule is a control, not a risk. The
+/// parser is deliberately shallow: it extracts the quoted strings from the
+/// `pattern=[...]` list of any rule whose `decision` is `allow`, and ignores
+/// rule forms it does not recognize rather than guessing at their meaning.
+pub(crate) fn emit_rules_reasons(codex_dir: &Path, out: &mut Vec<AiGuardReason>) {
+    let rules_dir = codex_dir.join("rules");
+    let Ok(entries) = std::fs::read_dir(&rules_dir) else {
+        return;
+    };
+    // Sort for deterministic emission order across platforms.
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("rules"))
+        .collect();
+    files.sort();
+    files.truncate(MAX_RULES_FILES);
+
+    let mut patterns: Vec<String> = Vec::new();
+    for file in files {
+        match std::fs::metadata(&file) {
+            Ok(m) if m.len() > MAX_RULES_FILE_BYTES => {
+                tracing::warn!(path = %file.display(), bytes = m.len(), "codex rules: file too large, skipped");
+                continue;
+            }
+            Ok(_) => {}
+            Err(_) => continue,
+        }
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        patterns.extend(allow_patterns_in_rules_text(&text));
+    }
+    patterns.sort();
+    patterns.dedup();
+    let total = patterns.len();
+    for pattern in patterns.into_iter().take(MAX_STANDING_APPROVAL_REASONS) {
+        out.push(AiGuardReason::StandingCommandApproval { pattern });
+    }
+    if total > MAX_STANDING_APPROVAL_REASONS {
+        tracing::warn!(
+            dir = %rules_dir.display(),
+            total,
+            cap = MAX_STANDING_APPROVAL_REASONS,
+            "codex rules: capping StandingCommandApproval reasons"
+        );
+    }
+}
+
+/// Strip `#` and `//` comments that are outside string literals. Without this,
+/// `prefix_rule(pattern=["git"])  # decision="allow"` reads as an approval.
+fn strip_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut quote: Option<char> = None;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                out.push(c);
+                if c == '\\' {
+                    // Escaped character inside a string: copy it verbatim so a
+                    // `\"` does not look like the closing quote.
+                    if let Some(n) = chars.next() {
+                        out.push(n);
+                    }
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => {
+                    quote = Some(c);
+                    out.push(c);
+                }
+                '#' => {
+                    for n in chars.by_ref() {
+                        if n == '\n' {
+                            out.push('\n');
+                            break;
+                        }
+                    }
+                }
+                '/' if chars.peek() == Some(&'/') => {
+                    for n in chars.by_ref() {
+                        if n == '\n' {
+                            out.push('\n');
+                            break;
+                        }
+                    }
+                }
+                _ => out.push(c),
+            },
+        }
+    }
+    out
+}
+
+/// One `prefix_rule( ... )` invocation's argument text. Scans the whole file
+/// rather than a line at a time: the documented form spans several lines.
+fn rule_invocations(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("prefix_rule") {
+        let after = &rest[i + "prefix_rule".len()..];
+        let trimmed = after.trim_start();
+        let Some(body) = trimmed.strip_prefix('(') else {
+            rest = after;
+            continue;
+        };
+        match balanced_end(body, '(', ')') {
+            Some(end) => {
+                out.push(&body[..end]);
+                rest = &body[end..];
+            }
+            // Unterminated invocation: nothing further to read.
+            None => break,
+        }
+    }
+    out
+}
+
+/// Byte offset of the `close` that balances an already-consumed `open`.
+/// Quote-aware, so a bracket inside a string does not shift the depth.
+fn balanced_end(s: &str, open: char, close: char) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut quote: Option<char> = None;
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == '\\' {
+                    chars.next();
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                } else if c == open {
+                    depth += 1;
+                } else if c == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Value text of `name = …` at the top level of an argument list — not inside
+/// a nested list and not inside a string, so prose mentioning the keyword
+/// cannot be mistaken for the real argument.
+fn top_level_arg<'a>(args: &'a str, name: &str) -> Option<&'a str> {
+    let bytes = args.as_bytes();
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut chars = args.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == '\\' {
+                    chars.next();
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' => depth = depth.saturating_sub(1),
+                _ if depth == 0 && args[i..].starts_with(name) => {
+                    // Must be a whole word followed by `=`.
+                    let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+                    let after = &args[i + name.len()..];
+                    let after_trimmed = after.trim_start();
+                    if before_ok && after_trimmed.starts_with('=') {
+                        return Some(after_trimmed[1..].trim_start());
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+    None
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// The command prefix a `pattern=[...]` list approves.
+///
+/// The list is a **sequence** of argv words, not a set of independent
+/// prefixes: `["codex", "mcp", "login"]` approves the command
+/// `codex mcp login`, not three separate commands. A nested list is a set of
+/// alternatives at that position, rendered `{a|b}`. Emitting one finding per
+/// quoted string would invent approvals that were never granted.
+fn pattern_prefix(list_text: &str) -> Option<String> {
+    let inner = list_text.trim().strip_prefix('[')?;
+    let end = balanced_end(inner, '[', ']')?;
+    let mut words: Vec<String> = Vec::new();
+    for item in split_top_level(&inner[..end]) {
+        let item = item.trim();
+        if let Some(nested) = item.strip_prefix('[') {
+            let n_end = balanced_end(nested, '[', ']')?;
+            let alts: Vec<String> = split_top_level(&nested[..n_end])
+                .into_iter()
+                .filter_map(|a| quoted_string(a.trim()))
+                .collect();
+            if alts.is_empty() {
+                return None;
+            }
+            words.push(format!("{{{}}}", alts.join("|")));
+        } else {
+            words.push(quoted_string(item)?);
+        }
+    }
+    if words.is_empty() {
+        return None;
+    }
+    Some(words.join(" "))
+}
+
+/// Split on commas that are not inside a nested bracket or a string.
+fn split_top_level(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut start = 0usize;
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == '\\' {
+                    chars.next();
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => {
+                    out.push(&s[start..i]);
+                    start = i + c.len_utf8();
+                }
+                _ => {}
+            },
+        }
+    }
+    let tail = &s[start..];
+    if !tail.trim().is_empty() {
+        out.push(tail);
+    }
+    out
+}
+
+/// The contents of a single quoted string, or None if `s` is not exactly one.
+fn quoted_string(s: &str) -> Option<String> {
+    let s = s.trim();
+    let quote = s.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let body = &s[quote.len_utf8()..];
+    let end = body.find(quote)?;
+    // Anything after the closing quote means this was not a lone string.
+    if !body[end + quote.len_utf8()..].trim().is_empty() {
+        return None;
+    }
+    Some(body[..end].to_string())
+}
+
+/// Approved command prefixes in one rules file. Only `decision="allow"` counts:
+/// a deny rule is a control, not a risk. Rule forms this parser does not model
+/// are skipped rather than guessed at.
+fn allow_patterns_in_rules_text(text: &str) -> Vec<String> {
+    let stripped = strip_comments(text);
+    let mut out = Vec::new();
+    for args in rule_invocations(&stripped) {
+        let decides_allow = top_level_arg(args, "decision")
+            .and_then(|v| quoted_string(v.split(',').next().unwrap_or(v)))
+            .is_some_and(|d| d == "allow");
+        if !decides_allow {
+            continue;
+        }
+        if let Some(list) = top_level_arg(args, "pattern") {
+            if let Some(prefix) = pattern_prefix(list) {
+                out.push(prefix);
+            }
+        }
+    }
+    out
 }
 
 /// Verified schema: hooks live under the top-level `[hooks]` table, keyed by
@@ -931,6 +1308,290 @@ command = "echo inline"
         assert_eq!(
             paths,
             vec![std::path::PathBuf::from("/opt/sigil-tools/pre.sh")]
+        );
+    }
+
+    // ─── #200: approval_policy ─────────────────────────────────────────────
+
+    fn write_rules(home: &Path, name: &str, contents: &str) {
+        let dir = home.join(".codex").join("rules");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), contents).unwrap();
+    }
+
+    #[test]
+    fn approval_policy_never_is_auto_approval() {
+        let dir = tempdir().unwrap();
+        write_config(dir.path(), r#"approval_policy = "never""#);
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::AutoApprovalEnabled { mode } if mode == "never"
+            )),
+            "got {reasons:?}"
+        );
+    }
+
+    /// These still put a prompt in front of the user, so none is a blanket
+    /// auto-approval.
+    #[test]
+    fn prompting_approval_policies_are_silent() {
+        for policy in ["untrusted", "on-request", "on-failure"] {
+            let dir = tempdir().unwrap();
+            write_config(dir.path(), &format!("approval_policy = \"{policy}\""));
+            let reasons = CodexParser.assess(dir.path()).unwrap();
+            assert!(
+                !reasons
+                    .iter()
+                    .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })),
+                "{policy} -> {reasons:?}"
+            );
+        }
+    }
+
+    /// The table form must parse without error and without inventing a
+    /// posture claim: a granular policy can be stricter than any scalar, so
+    /// asserting auto-approval on its shape alone would be wrong.
+    #[test]
+    fn granular_approval_policy_parses_and_claims_nothing() {
+        let dir = tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"
+[approval_policy.granular]
+sandbox_approval = "on-request"
+rules = "never"
+mcp_elicitations = "on-request"
+"#,
+        );
+        let reasons = CodexParser
+            .assess(dir.path())
+            .expect("table form must not error");
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })),
+            "got {reasons:?}"
+        );
+    }
+
+    // ─── #200: standing command approvals (~/.codex/rules) ─────────────────
+
+    #[test]
+    fn allow_prefix_rule_emits_standing_approval() {
+        let dir = tempdir().unwrap();
+        write_config(dir.path(), r#"sandbox_mode = "read-only""#);
+        write_rules(
+            dir.path(),
+            "default.rules",
+            "prefix_rule(pattern=[\"codex\", \"mcp\", \"login\"], decision=\"allow\")\n",
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        // The list is one argv sequence, not three independent approvals:
+        // this rule approves the command `codex mcp login`.
+        assert_eq!(
+            approvals(&reasons),
+            vec!["codex mcp login"],
+            "got {reasons:?}"
+        );
+    }
+
+    fn approvals(reasons: &[AiGuardReason]) -> Vec<&str> {
+        reasons
+            .iter()
+            .filter_map(|r| match r {
+                AiGuardReason::StandingCommandApproval { pattern } => Some(pattern.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A nested list is a set of alternatives at that position. Flattening it
+    /// would invent approvals for `view` and `list` as standalone commands.
+    #[test]
+    fn nested_alternatives_stay_within_one_prefix() {
+        let dir = tempdir().unwrap();
+        write_rules(
+            dir.path(),
+            "n.rules",
+            "prefix_rule(pattern=[\"gh\", \"pr\", [\"view\", \"list\"]], decision=\"allow\")\n",
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert_eq!(
+            approvals(&reasons),
+            vec!["gh pr {view|list}"],
+            "got {reasons:?}"
+        );
+    }
+
+    /// The keyword appearing in a comment or inside a quoted string is not a
+    /// decision. Reading either as one manufactures an approval.
+    #[test]
+    fn decision_keyword_in_comment_or_prose_is_not_an_approval() {
+        for line in [
+            "prefix_rule(pattern=[\"git\"])  # decision=\"allow\"",
+            "// prefix_rule(pattern=[\"git\"], decision=\"allow\")",
+            "prefix_rule(pattern=[\"git\"], justification=\"old decision=allow\", decision=\"prompt\")",
+            "prefix_rule(pattern=[\"git\"], note=\"decision\", decision=\"deny\")",
+        ] {
+            let dir = tempdir().unwrap();
+            write_rules(dir.path(), "c.rules", line);
+            let reasons = CodexParser.assess(dir.path()).unwrap();
+            assert!(approvals(&reasons).is_empty(), "{line} -> {reasons:?}");
+        }
+    }
+
+    /// The documented form spans several lines, so a line-at-a-time parser
+    /// would see nothing at all.
+    #[test]
+    fn multi_line_rule_is_parsed() {
+        let dir = tempdir().unwrap();
+        write_rules(
+            dir.path(),
+            "ml.rules",
+            "prefix_rule(\n    pattern = [\"cargo\", \"test\"],\n    decision = \"allow\",\n)\n",
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert_eq!(approvals(&reasons), vec!["cargo test"], "got {reasons:?}");
+    }
+
+    /// A bracket or comment character inside a string must not shift the
+    /// parser's depth or truncate the rule.
+    #[test]
+    fn brackets_and_hashes_inside_strings_do_not_confuse_the_parser() {
+        let dir = tempdir().unwrap();
+        write_rules(
+            dir.path(),
+            "q.rules",
+            "prefix_rule(pattern=[\"sh\", \"-c\", \"echo ]# not a comment\"], decision=\"allow\")\n",
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert_eq!(
+            approvals(&reasons),
+            vec!["sh -c echo ]# not a comment"],
+            "got {reasons:?}"
+        );
+    }
+
+    /// A deny rule is a control, not a risk.
+    #[test]
+    fn deny_prefix_rule_is_not_a_finding() {
+        let dir = tempdir().unwrap();
+        write_rules(
+            dir.path(),
+            "d.rules",
+            "prefix_rule(pattern=[\"rm\"], decision=\"deny\")\n",
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert!(reasons.is_empty(), "got {reasons:?}");
+    }
+
+    /// A rules file is evidence of use even with no config.toml.
+    #[test]
+    fn rules_file_alone_is_assessed() {
+        let dir = tempdir().unwrap();
+        write_rules(
+            dir.path(),
+            "a.rules",
+            "prefix_rule(pattern=[\"git\"], decision=\"allow\")\n",
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::StandingCommandApproval { pattern } if pattern == "git"
+            )),
+            "got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn comments_and_unmodeled_rule_forms_are_ignored() {
+        let dir = tempdir().unwrap();
+        write_rules(
+            dir.path(),
+            "m.rules",
+            concat!(
+                "# prefix_rule(pattern=[\"commented\"], decision=\"allow\")\n",
+                "// prefix_rule(pattern=[\"also-commented\"], decision=\"allow\")\n",
+                "\n",
+                "some_future_rule(scope=\"x\")\n",
+                "prefix_rule(pattern=[\"real\"], decision=\"allow\")\n",
+            ),
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        let patterns: Vec<&str> = reasons
+            .iter()
+            .filter_map(|r| match r {
+                AiGuardReason::StandingCommandApproval { pattern } => Some(pattern.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(patterns, vec!["real"], "got {reasons:?}");
+    }
+
+    #[test]
+    fn duplicate_patterns_across_files_are_reported_once() {
+        let dir = tempdir().unwrap();
+        write_rules(
+            dir.path(),
+            "a.rules",
+            "prefix_rule(pattern=[\"git\"], decision=\"allow\")\n",
+        );
+        write_rules(
+            dir.path(),
+            "b.rules",
+            "prefix_rule(pattern=[\"git\"], decision=\"allow\")\n",
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert_eq!(
+            reasons
+                .iter()
+                .filter(|r| matches!(r, AiGuardReason::StandingCommandApproval { .. }))
+                .count(),
+            1,
+            "got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn non_rules_extension_is_skipped() {
+        let dir = tempdir().unwrap();
+        write_rules(
+            dir.path(),
+            "notes.txt",
+            "prefix_rule(pattern=[\"x\"], decision=\"allow\")\n",
+        );
+        let reasons = CodexParser.assess(dir.path()).unwrap();
+        assert!(reasons.is_empty(), "got {reasons:?}");
+    }
+
+    #[test]
+    fn malformed_rule_lines_never_panic() {
+        let dir = tempdir().unwrap();
+        for line in [
+            "prefix_rule(",
+            "prefix_rule(pattern=[",
+            "prefix_rule(pattern=[\"unterminated], decision=\"allow\")",
+            "decision=\"allow\"",
+            "prefix_rule(pattern=[], decision=\"allow\")",
+            "prefix_rule(pattern=[\"a\"], decision=)",
+            "\u{0}\u{0}",
+            "🙂 decision=\"allow\" pattern=[\"🙂\"]",
+        ] {
+            write_rules(dir.path(), "x.rules", line);
+            let _ = CodexParser.assess(dir.path()).unwrap();
+        }
+    }
+
+    #[test]
+    fn rules_dir_is_watched() {
+        let dir = tempdir().unwrap();
+        let watched = CodexParser.watched_paths(dir.path());
+        assert!(
+            watched.contains(&dir.path().join(".codex").join("rules")),
+            "got {watched:?}"
         );
     }
 }
