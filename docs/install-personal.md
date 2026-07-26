@@ -201,6 +201,52 @@ sigil-hook claude-code --enforce --on-failure closed
 
 Choose fail-closed only when you are confident the daemon will always be running; an unexpected daemon outage will block all matched tool calls.
 
+#### How bash deny rules are matched
+
+A `bash` deny rule is tested against the raw command *and* against the command as the shell would actually run it. Writing the obvious rule is enough:
+
+```yaml
+hook_deny_rules:
+  - id: no-rm-rf-root
+    match:
+      kind: bash
+      command: { kind: regex, pattern: "^rm\\s+-rf\\s+/$" }
+```
+
+That one rule denies all of these:
+
+| Spelling | Why the raw text differs |
+| --- | --- |
+| `r''m -rf /`, `\rm -rf /`, `"rm" -rf /` | quote and escape removal |
+| `rm${IFS}-rf${IFS}/` | `$IFS` word splitting |
+| `X=rm; $X -rf /` | variable assigned earlier in the line |
+| `$'\x72\x6d' -rf /` | ANSI-C quoting (`$'…'`) |
+| `sudo rm -rf /`, `env rm -rf /`, `timeout 5 rm -rf /`, `xargs -0 rm -rf /` | wrapper commands |
+| `sh -c 'rm -rf /'`, `bash -lc 'rm -rf /'`, `su -c 'rm -rf /'` | command passed as a `-c` string |
+| `bash <<< 'rm -rf /'`, `sh <<EOF … EOF` | commands fed to a shell on stdin |
+| `rm >/dev/null -rf /` | redirection placed mid-command |
+| `cd /tmp && rm -rf /`, `for i in 1; do rm -rf /; done` | list, pipeline, and compound-statement context |
+| `rm -rf / # cleanup` | trailing comment |
+
+A wrapped or nested command contributes both its literal form and its unwrapped form, so `sudo rm -rf /` matches a rule written either way. When a rule fires only after rewriting, the deny reason says so: `matched deny rule no-rm-rf-root (normalized command)`.
+
+Normalization also refuses to invent commands, so these are **not** denied by the rule above: `r$(printf x)m -rf /` (the shell runs `rxm`), `echo ok # ; rm -rf /` (commented out), `cat <<EOF … EOF` whose body contains the text (data for `cat`, unlike the `bash <<EOF` row above), `su rm` (switches to a user named `rm`), and `timeout rm -rf /` (an error — `timeout` needs a duration, so nothing ran).
+
+Some constructs cannot be resolved without running them — `$(...)`, backticks, process substitution `<(...)`, `eval`, parameter expansions like `${X:-rm}`, and pipelines that feed a shell (`curl … | sh`, `base64 -d | sh`). Sigil does not guess what those expand to. Match them by shape instead:
+
+```yaml
+  - id: no-opaque-commands
+    match:
+      kind: bash_indirection
+      indirection: { kind: exists }
+```
+
+`indirection` matches one of `command_substitution`, `eval`, `pipe_to_shell`, `unresolved_command_variable`, or `unparsable`. Use `{ kind: equals, value: pipe_to_shell }` to target a single class. These rules are strict: they block a legitimate `$(git rev-parse HEAD)` too, so they suit a locked-down profile rather than a developer laptop.
+
+`unparsable` deserves its own rule if you care about coverage. It fires when quoting never closes, or when the command is past the parser's size or segment bound — cases where a text rule's silence means "not checked", not "safe".
+
+**Limits worth knowing.** Normalization models POSIX sh/bash quoting and expansion, not the whole language: arithmetic expansion, brace expansion, globbing, aliases, and shell functions are not interpreted, and Windows/PowerShell quoting is not covered. Those leave a rule exactly where a plain text match already stood — gaps to close, not regressions. As always, a command whose text the hook never sees (no preview) fails open.
+
 The four ways rules manifest at runtime:
 
 1. The daemon auto-assesses AI agent config files on change → posture events in the event log.

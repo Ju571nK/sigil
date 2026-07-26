@@ -22,6 +22,9 @@ pub use verify::{verify_envelope, VerifiedPolicy, VerifyError};
 pub mod deny_rule;
 pub use deny_rule::{DenyRule, FailMode, HookActionMatch};
 
+pub mod shell_norm;
+pub use shell_norm::{normalize, Indirection, NormalizedCommand};
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {

@@ -25,8 +25,22 @@ pub struct DenyRule {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HookActionMatch {
+    /// #198 — tested against the raw command preview AND each shell-normalized
+    /// segment, so a rule written as `rm -rf /` also catches `r''m -rf /` and
+    /// `rm${IFS}-rf${IFS}/`.
     Bash {
         command: Matcher,
+    },
+    /// #198 — matches on the *shape* of a command whose effect cannot be known
+    /// statically (`$(...)`, `eval`, `... | sh`), rather than on its text. The
+    /// field is named `indirection` and not `kind` because `kind` is the serde
+    /// tag for this enum.
+    ///
+    /// Values are `shell_norm::Indirection::as_str()`:
+    /// `command_substitution`, `eval`, `pipe_to_shell`,
+    /// `unresolved_command_variable`, `unparsable`.
+    BashIndirection {
+        indirection: Matcher,
     },
     FileEdit {
         path: Matcher,
@@ -66,6 +80,43 @@ match:
         // serialize direction: the `match_` field must re-emit as `match:`.
         let out = serde_yaml::to_string(&r).unwrap();
         assert!(out.contains("match:"));
+    }
+
+    /// #198 — the indirection rule's field is `indirection`, not `kind`, which
+    /// is the serde tag for this enum. Pin the wire shape so a rename can't
+    /// silently collide with the tag.
+    #[test]
+    fn bash_indirection_rule_round_trips() {
+        let yaml = r#"
+id: no-opaque-commands
+match:
+  kind: bash_indirection
+  indirection: { kind: equals, value: pipe_to_shell }
+"#;
+        let r: DenyRule = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(r.id, "no-opaque-commands");
+        match &r.match_ {
+            HookActionMatch::BashIndirection {
+                indirection: Matcher::Equals { value },
+            } => assert_eq!(value, "pipe_to_shell"),
+            other => panic!("expected bash_indirection/equals, got {other:?}"),
+        }
+        let out = serde_yaml::to_string(&r).unwrap();
+        assert!(out.contains("kind: bash_indirection"), "{out}");
+        assert!(out.contains("indirection:"), "{out}");
+    }
+
+    /// Packs written before #198 must keep parsing untouched.
+    #[test]
+    fn pre_198_bash_rule_still_parses() {
+        let yaml = r#"
+id: legacy
+match:
+  kind: bash
+  command: { kind: equals, value: "rm -rf /" }
+"#;
+        let r: DenyRule = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(r.match_, HookActionMatch::Bash { .. }));
     }
 
     #[test]
