@@ -145,6 +145,43 @@ mod tests {
         assert_eq!(result.unwrap().0, "deny-test-marker");
     }
 
+    /// #198 — the same path an operator actually uses: a rule written as YAML
+    /// in a rule pack, loaded through `load_effective_policy`, must deny the
+    /// shell re-spellings of the command it names. Hand-built rule structs
+    /// prove the matcher; this proves the pack-to-verdict chain.
+    #[test]
+    fn rule_pack_bash_rule_denies_shell_rewrite_bypasses() {
+        let dir = tempdir().unwrap();
+        let policy_path = dir.path().join("policy.yaml");
+        let rule_packs_path = dir.path().join("rule-packs.yaml");
+        std::fs::write(&policy_path, minimal_policy()).unwrap();
+        std::fs::write(
+            &rule_packs_path,
+            "version: 1\ntargets:\n  - id: bundle-target\n    description: bundle\n    tier: standard\n    platform: any\n    paths:\n      - '/tmp/bundle'\n    recursive: false\n    follow_symlinks: false\nhook_deny_rules:\n  - id: no-rm-rf-root\n    match:\n      kind: bash\n      command:\n        kind: regex\n        pattern: '^rm\\s+-rf\\s+/$'\n",
+        )
+        .unwrap();
+
+        let (_rubric, deny, _bucket) =
+            load_effective_policy(&policy_path, &rule_packs_path).unwrap();
+
+        for raw in [
+            "rm -rf /",
+            "r''m -rf /",
+            r"\rm -rf /",
+            "rm${IFS}-rf${IFS}/",
+            "X=rm; $X -rf /",
+        ] {
+            let verdict = deny.evaluate_bash_preview(raw);
+            assert_eq!(
+                verdict.as_ref().map(|(id, _)| id.as_str()),
+                Some("no-rm-rf-root"),
+                "{raw:?} should be denied by the pack's rule"
+            );
+        }
+        // Still no over-blocking of a command that merely mentions it.
+        assert!(deny.evaluate_bash_preview("grep -r 'rm -rf /' .").is_none());
+    }
+
     // ── TDD test 2 ────────────────────────────────────────────────────────────
     /// rule-packs.yaml absent → Ok, rubric built, deny evaluator empty (no error).
     #[test]
