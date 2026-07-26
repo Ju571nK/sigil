@@ -7,6 +7,71 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-26
+
+### Security
+
+- **Bash deny rules are matched against the command a shell would actually run**
+  (#198). Rules previously ran the operator's regex at the raw command string,
+  but the shell rewrites that string before `execve`, so any re-spelling that
+  survives the rewrite defeated the rule — `r''m -rf /`, `rm${IFS}-rf${IFS}/`,
+  `X=rm; $X -rf /`, `sudo rm -rf /`, `sh -c 'rm -rf /'`. (This is the class
+  Adversa AI published as GuardFall, which bypassed plaintext denylists in 10 of
+  11 OSS coding agents.) On a blocking path a bypassable matcher is worse than no
+  rule, because it reads as coverage that is not there.
+
+  A rule written as `rm -rf /` now also denies quote and escape re-spellings,
+  `$IFS` word splitting, variables assigned earlier in the line, ANSI-C quoting
+  (`$'\x72\x6d'`), wrapper commands (`sudo`, `env`, `nice`, `timeout 5`,
+  `xargs`), `-c` string payloads (`sh -c`, `bash -lc`, `su -c`), commands fed to
+  a shell on stdin (`bash <<< '…'`, `sh <<EOF … EOF`), mid-command redirections
+  (`rm >/dev/null -rf /`), compound-statement context, and trailing comments.
+  Normalized segments are matched **in addition to** the raw string, so existing
+  rule packs keep firing unchanged; a rule that fires only after rewriting says
+  so in the deny reason.
+
+  Normalization refuses to guess in the other direction, since an invented
+  command means denying legitimate work: `r$(printf x)m -rf /` is not `rm`
+  (the shell runs `rxm`), a `cat <<EOF` body stays data while a `bash <<EOF`
+  body is commands, `su rm` switches to a user, and `timeout rm -rf /` never
+  ran anything.
+
+### Added
+
+- **Static MCP tool-metadata poisoning detection** (#148). The Codex tool cache
+  (`~/.codex/cache/codex_apps_tools/*.json`) holds tool descriptions and input
+  schemas that the model reads but the user never sees — the payload surface for
+  the poisoning technique Microsoft warned about on 2026-06-30. Three new
+  findings: `mcp_tool_instruction_override` (imperative directives aimed at the
+  agent inside tool metadata), `mcp_tool_hidden_text` (zero-width, bidi,
+  control, or homoglyph characters), and `mcp_tool_name_shadow` (two servers
+  offering the same tool name). Bounded and defensive against hostile input.
+- **New deny-rule shape `bash_indirection`** (#198). Constructs whose effect
+  cannot be known without running them — `$(...)`, backticks, process
+  substitution, `eval`, unmodeled parameter expansions, pipelines feeding a
+  shell — are reported rather than guessed at, so an operator can deny on the
+  shape instead of enumerating spellings. Values: `command_substitution`,
+  `eval`, `pipe_to_shell`, `unresolved_command_variable`, `unparsable`.
+  Exceeding a size or segment bound always reports `unparsable`, so a text
+  rule's silence is never mistaken for safety.
+- **`sigil-server` binds enrollment to issuer certs and can require a
+  cert↔host_id match** (#194). `enroll_issuer_fingerprints` lists the blake3
+  fingerprints of client certs permitted to call `POST /v1/enroll`; a caller not
+  on the list is denied before its token is consumed, so a leaked token is
+  useless without the issuer cert. The opt-in `events_require_cert_host_match`
+  requires a `POST /v1/events` client cert whose CN or SAN DNS entry matches the
+  envelope's `host_id`, blocking an enrolled host from impersonating another.
+  Both rest on new per-connection TLS peer-certificate identity; enrollment
+  audit records now carry the caller fingerprint.
+
+### Documentation
+
+- `config/server.example.yaml` documents the enrollment (#184), peer-cert
+  (#194), and artifact-serving (#182) keys, with a test that keeps the example
+  in step with the config schema (#196).
+- `docs/install-personal.md` explains how bash deny rules are matched, what a
+  plain rule now covers, and what it deliberately does not (#198).
+
 ## [0.7.1] - 2026-07-02
 
 ### Added
