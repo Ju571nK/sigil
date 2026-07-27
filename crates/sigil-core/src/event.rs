@@ -276,6 +276,33 @@ pub enum AiGuardReason {
     /// colliding server names. POSTURE only. Cross-tool (computed over the
     /// whole snapshot, not per-tool).
     McpToolNameShadow { tool: String, servers: Vec<String> },
+    /// #199 — a classifier-mediated auto-approval mode (Claude Code's
+    /// `autoMode`) had its built-in safety rules discarded. The deny lists
+    /// splice the defaults in via a `"$defaults"` marker; a list written
+    /// without it silently replaces them rather than extending them, so the
+    /// shipped protections stop applying. `list` names which one
+    /// (`soft_deny` | `hard_deny`). POSTURE only. Static.
+    AutoModeDefaultsDropped { list: String },
+    /// #199 — a hook forwards the tool call off-box instead of running a local
+    /// command: Claude Code's `http` hook type POSTs the full tool-call JSON to
+    /// a URL, so every intercepted call (and its arguments) leaves the machine.
+    /// `destination` is the configured URL host, `hook_event` the event it is
+    /// registered on. POSTURE only. Static.
+    HookForwardsToolCalls {
+        hook_event: String,
+        destination: String,
+    },
+    /// #199 — a default prompt for unattended, session-scoped scheduled runs
+    /// exists on disk (`loop.md`). Same class as
+    /// [`AiGuardReason::UnattendedScheduledTask`]: work that repeats with no
+    /// human watching. `source` is `user` or `project`. POSTURE only. Static.
+    UnattendedLoopPrompt { source: String },
+    /// #200 — a standing rule auto-approves commands by prefix without
+    /// prompting (Codex's `~/.codex/rules/*.rules`
+    /// `prefix_rule(pattern=[…], decision="allow")`). Unlike a session
+    /// approval this persists, so every future command matching the prefix
+    /// runs unattended. `pattern` is the approved prefix. POSTURE only. Static.
+    StandingCommandApproval { pattern: String },
 }
 
 /// #146 — category of instruction-file directive. Stable wire strings

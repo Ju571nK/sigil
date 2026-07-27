@@ -28,6 +28,8 @@ impl AiGuardParser for ClaudeCodeParser {
             // #191 — watch the scheduled-tasks dir so the daemon re-assesses
             // when an unattended task appears/changes (OFF->ON drift).
             home_dir.join(".claude").join("scheduled-tasks"),
+            // #199 — the other unattended-prompt file, same drift reason.
+            home_dir.join(".claude").join("loop.md"),
         ]
     }
 
@@ -66,10 +68,17 @@ impl AiGuardParser for ClaudeCodeParser {
             && local.is_none()
             && !claude.join("CLAUDE.md").is_file()
             && !has_scheduled_task(&claude)
+            // #199 — a `loop.md` is the same kind of evidence: an unattended
+            // prompt exists, so the tool is in use even with no settings file.
+            && !claude.join("loop.md").is_file()
         {
             return Ok(Vec::new());
         }
 
+        // #199 — keep the unmerged base: the auto-mode classifier does not
+        // read the `settings.local.json` overlay, so scoring the merged view
+        // would attribute rules to a control that never sees them.
+        let base_settings = base.clone().unwrap_or(Value::Object(Default::default()));
         let merged = merge_overlay(base.unwrap_or(Value::Object(Default::default())), local);
 
         let hooks_dir = claude.join("hooks");
@@ -78,8 +87,12 @@ impl AiGuardParser for ClaudeCodeParser {
         emit_permission_reasons(&merged, &mut out);
         // #191 signal 1 — `permissions.defaultMode` auto-approval posture.
         emit_default_mode_reason(&merged, &mut out);
+        // #199 — the classifier's own safety rules, when auto mode is in use.
+        emit_auto_mode_reasons(&base_settings, &mut out);
         // #191 signal 2 — unattended recurring Claude Code scheduled tasks.
         emit_scheduled_task_reasons(&claude, &mut out);
+        // #199 — the other unattended-prompt surface, enumerated alongside.
+        emit_loop_prompt_reason(&claude, "user", &mut out);
         emit_mcp_reasons(&merged, &mut out);
         // #145 (codex C8) — a user-global `enableAllProjectMcpServers: true`
         // blanket-approves project MCP servers across EVERY repo. No single
@@ -150,14 +163,117 @@ pub(crate) fn emit_hook_reasons(
                 continue;
             };
             for h in inner {
-                let Some(cmd) = h.get("command").and_then(Value::as_str) else {
-                    continue;
-                };
-                classify_command(cmd, event_name, hooks_dir, out)?;
+                // #199 — a hook is no longer necessarily a shell command.
+                // `http` POSTs the tool call to a URL, and `prompt` / `agent` /
+                // `mcp_tool` run inside the agent. Only `command` carries a
+                // `command` string, so keying off that field alone made every
+                // other type invisible.
+                match h.get("type").and_then(Value::as_str) {
+                    Some("http") => emit_http_hook_reason(h, event_name, out),
+                    // An `mcp_tool` hook hands the tool call to a configured
+                    // MCP server — a different trust domain from the agent,
+                    // and possibly a remote one.
+                    Some("mcp_tool") => emit_mcp_tool_hook_reason(h, event_name, out),
+                    // Absent `type` means the historical shape, which is a
+                    // command hook.
+                    Some("command") | None => {
+                        if let Some(cmd) = h.get("command").and_then(Value::as_str) {
+                            classify_command(cmd, event_name, hooks_dir, out)?;
+                        }
+                    }
+                    // `prompt` and `agent` hand the payload to the model the
+                    // user is already talking to, so nothing crosses a trust
+                    // boundary that was not already crossed, and they run no
+                    // host command. They still counted toward `NoSandbox`
+                    // above; there is nothing further to classify.
+                    Some(_) => {}
+                }
             }
         }
     }
     Ok(())
+}
+
+/// #199 — an `http` hook forwards the whole tool-call payload to a URL. On
+/// `PreToolUse` that is every intercepted call and its arguments leaving the
+/// machine. Evidence records the destination host, not the full URL: a URL can
+/// carry a token or a path that identifies the user.
+fn emit_http_hook_reason(hook: &Value, event_name: &str, out: &mut Vec<AiGuardReason>) {
+    let Some(url) = hook.get("url").and_then(Value::as_str) else {
+        return;
+    };
+    // A loopback hook is a local validator: the payload never leaves the
+    // machine, which is the whole claim this finding makes. Reporting one
+    // would describe an exposure the operator does not have.
+    if destination_is_loopback(url) {
+        return;
+    }
+    out.push(AiGuardReason::HookForwardsToolCalls {
+        hook_event: event_name.to_string(),
+        destination: url_host_for_evidence(url),
+    });
+}
+
+/// #199 — an `mcp_tool` hook routes the tool call to a configured MCP server.
+/// Unlike `prompt`/`agent`, that server is a separate trust domain and may be
+/// remote, so the payload can leave the machine.
+fn emit_mcp_tool_hook_reason(hook: &Value, event_name: &str, out: &mut Vec<AiGuardReason>) {
+    let server = hook
+        .get("server")
+        .or_else(|| hook.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("unnamed");
+    out.push(AiGuardReason::HookForwardsToolCalls {
+        hook_event: event_name.to_string(),
+        destination: truncate_for_snippet(&format!("mcp:{server}")),
+    });
+}
+
+/// Does this URL point back at the same machine? Host-form only — resolving
+/// names is not this parser's job, so a name that merely resolves to loopback
+/// is still reported.
+fn destination_is_loopback(url: &str) -> bool {
+    let Some((_, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    // Strip a port, and the brackets around an IPv6 literal.
+    let host = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(v6),
+        None => host.split(':').next().unwrap_or(host),
+    };
+    let host = host.trim().to_ascii_lowercase();
+    host == "localhost"
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|a| a.is_loopback())
+        || host
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|a| a.is_loopback())
+}
+
+/// Host (with scheme) of `url`, for evidence. Falls back to a truncated raw
+/// string when there is no recognizable authority, so an unparsable URL is
+/// still reported rather than dropped.
+fn url_host_for_evidence(url: &str) -> String {
+    let (scheme, rest) = match url.split_once("://") {
+        Some((s, r)) => (s, r),
+        None => return truncate_for_snippet(url),
+    };
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(rest)
+        // Strip any `user:pass@` — credentials are not evidence we want to log.
+        .rsplit('@')
+        .next()
+        .unwrap_or(rest);
+    if authority.is_empty() {
+        return truncate_for_snippet(url);
+    }
+    truncate_for_snippet(&format!("{}://{}", scheme.to_ascii_lowercase(), authority))
 }
 
 /// Decide whether `cmd` is inline shell, a convention-dir script (we read it),
@@ -343,6 +459,71 @@ pub(crate) fn emit_default_mode_reason(settings: &Value, out: &mut Vec<AiGuardRe
     }
 }
 
+/// #199 — the deny lists of the `autoMode` classifier block. Each is an array
+/// of prose rules; the shipped safety rules are spliced in by the literal
+/// `"$defaults"` entry. A list written without that marker replaces the
+/// defaults instead of extending them, and nothing in the config says so.
+const AUTO_MODE_DENY_LISTS: &[&str] = &["soft_deny", "hard_deny"];
+const AUTO_MODE_DEFAULTS_MARKER: &str = "$defaults";
+
+/// #199 — check the `autoMode` block for deny lists that silently discarded
+/// the built-in rules.
+///
+/// Two conditions, both required, because a finding here claims a live loss of
+/// protection:
+///
+/// * `permissions.defaultMode` is `auto`. The classifier is what consults these
+///   lists, so under any other mode the block is dormant configuration and
+///   reporting it would describe a risk the machine does not have.
+/// * The block comes from the base settings file. Since v2.1.207 the
+///   classifier reads `autoMode` from user settings, managed settings, and
+///   `--settings` only — never a `settings.local.json` overlay or a repo-local
+///   file — so the caller passes the unmerged base, not the overlay result.
+pub(crate) fn emit_auto_mode_reasons(base_settings: &Value, out: &mut Vec<AiGuardReason>) {
+    let in_auto_mode = base_settings
+        .get("permissions")
+        .and_then(|p| p.get("defaultMode"))
+        .and_then(Value::as_str)
+        == Some("auto");
+    if !in_auto_mode {
+        return;
+    }
+    let Some(auto_mode) = base_settings.get("autoMode") else {
+        return;
+    };
+    for list in AUTO_MODE_DENY_LISTS {
+        let Some(entries) = auto_mode.get(list).and_then(Value::as_array) else {
+            continue;
+        };
+        // An explicitly empty list is the strongest form of the same thing:
+        // the defaults are gone and nothing replaced them.
+        let keeps_defaults = entries
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|e| e.trim() == AUTO_MODE_DEFAULTS_MARKER);
+        if !keeps_defaults {
+            out.push(AiGuardReason::AutoModeDefaultsDropped {
+                list: (*list).to_string(),
+            });
+        }
+    }
+}
+
+/// #199 — the default prompt for unattended, session-scoped repeat runs.
+/// `<dir>/loop.md`; `source` distinguishes the user-global copy from a
+/// repo-local one (the project file wins at runtime, so both are worth seeing).
+pub(crate) fn emit_loop_prompt_reason(
+    claude_dir: &Path,
+    source: &str,
+    out: &mut Vec<AiGuardReason>,
+) {
+    if claude_dir.join("loop.md").is_file() {
+        out.push(AiGuardReason::UnattendedLoopPrompt {
+            source: source.to_string(),
+        });
+    }
+}
+
 /// Max number of `UnattendedScheduledTask` reasons emitted per assessment, to
 /// bound output; tasks beyond this are logged and ignored.
 const MAX_SCHEDULED_TASK_REASONS: usize = 20;
@@ -421,7 +602,28 @@ pub(crate) fn emit_scheduled_task_reasons(claude_dir: &Path, out: &mut Vec<AiGua
 /// `tool(restriction)` paren format, not colon format, so a shared predicate
 /// would not fit. Over-flagging is acceptable — Sigil measures, doesn't block.
 fn is_broad_allow(rule: &str) -> bool {
-    rule == "*" || rule == "*:*" || rule.ends_with(":*") || rule.ends_with(":.*")
+    let rule = rule.trim();
+    if rule == "*" || rule == "*:*" || rule.ends_with(":*") || rule.ends_with(":.*") {
+        return true;
+    }
+    // #199 — two rule forms the colon heuristic alone does not reach.
+    //
+    // `Tool(...)` is the current syntax, and its breadth lives inside the
+    // parens: `Bash(*)` allows every shell command. A parameter predicate
+    // (`Bash(run_in_background:true)`) is narrowing, not broadening, so only a
+    // wildcard argument counts.
+    if let Some((tool, arg)) = rule
+        .strip_suffix(')')
+        .and_then(|r| r.split_once('('))
+        .filter(|(tool, _)| !tool.contains(':'))
+    {
+        debug_assert!(!tool.is_empty() || rule.starts_with('('));
+        return matches!(arg.trim(), "*" | ".*" | "*:*");
+    }
+    // A bare tool-name glob (`mcp__*`) has no matcher at all — it admits every
+    // tool whose name shares the prefix. Require a prefix so this stays
+    // distinct from the bare `*` handled above.
+    rule.len() > 1 && rule.ends_with('*') && !rule.contains(':') && !rule.contains('(')
 }
 
 pub(crate) fn emit_mcp_reasons(settings: &Value, out: &mut Vec<AiGuardReason>) {
@@ -530,6 +732,9 @@ impl AiGuardParser for ClaudeCodeProjectParser {
             self.repo_root.join(".mcp.json"),
             self.repo_root.join("CLAUDE.md"),
             self.repo_root.join("AGENTS.md"),
+            // #199 — a committed loop prompt drives unattended repeat runs for
+            // anyone who clones the repo.
+            cd.join("loop.md"),
         ]
     }
 
@@ -578,6 +783,7 @@ impl AiGuardParser for ClaudeCodeProjectParser {
             && mcp_json.is_none()
             && !self.repo_root.join("CLAUDE.md").is_file()
             && !self.repo_root.join("AGENTS.md").is_file()
+            && !cd.join("loop.md").is_file()
         {
             return Ok(Vec::new());
         }
@@ -597,6 +803,10 @@ impl AiGuardParser for ClaudeCodeProjectParser {
                 });
             }
         }
+        // #199 — a committed loop prompt. `autoMode` is deliberately NOT read
+        // here: since v2.1.207 the classifier ignores the repo-local copy, so
+        // flagging one would report a control that is not in force.
+        emit_loop_prompt_reason(&cd, "project", &mut out);
         // #146 — scan committed instruction files (defensive read each).
         super::instruction_scan::scan_file_path(&self.repo_root.join("CLAUDE.md"), &mut out);
         super::instruction_scan::scan_file_path(&self.repo_root.join("AGENTS.md"), &mut out);
@@ -1653,5 +1863,437 @@ mod tests {
             watched.contains(&repo.path().join(".mcp.json")),
             "got {watched:?}"
         );
+    }
+
+    // ---- #199: defaultMode enum ------------------------------------------
+
+    /// `auto` runs a classifier that can still refuse, so it must not be
+    /// scored at the same severity as the unguarded modes — but it is still an
+    /// auto-approval posture, and still a dangerous toggle.
+    #[test]
+    fn classifier_auto_mode_scores_below_bypass() {
+        let r = crate::ai_guard::rubric::Rubric::defaults();
+        let auto = AiGuardReason::AutoApprovalEnabled {
+            mode: "auto".into(),
+        };
+        let bypass = AiGuardReason::AutoApprovalEnabled {
+            mode: "bypassPermissions".into(),
+        };
+        assert!(
+            r.weight_for(&auto) < r.weight_for(&bypass),
+            "auto={} bypass={}",
+            r.weight_for(&auto),
+            r.weight_for(&bypass)
+        );
+        let toggles = crate::ai_guard::rubric::dangerous_toggles(&[auto]);
+        assert!(
+            toggles.contains("auto_approval_enabled_classifier"),
+            "{toggles:?}"
+        );
+    }
+
+    /// `dontAsk` only runs pre-approved tools and `manual`/`plan` prompt, so
+    /// none of them is a blanket auto-approval.
+    #[test]
+    fn restrictive_default_modes_are_not_flagged() {
+        for mode in ["dontAsk", "manual", "default", "plan"] {
+            let dir = tempdir().unwrap();
+            write_settings(
+                dir.path(),
+                &format!(r#"{{"permissions": {{"defaultMode": "{mode}"}}}}"#),
+            );
+            let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+            assert!(
+                !reasons
+                    .iter()
+                    .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })),
+                "{mode} must not be an auto-approval finding; got {reasons:?}"
+            );
+        }
+    }
+
+    // ---- #199: autoMode classifier rules ---------------------------------
+
+    #[test]
+    fn auto_mode_deny_list_without_defaults_marker_is_flagged() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"permissions": {"defaultMode": "auto"},
+                 "autoMode": {"soft_deny": ["never touch prod"], "hard_deny": ["$defaults"]}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        let dropped: Vec<&str> = reasons
+            .iter()
+            .filter_map(|r| match r {
+                AiGuardReason::AutoModeDefaultsDropped { list } => Some(list.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dropped, vec!["soft_deny"], "got {reasons:?}");
+    }
+
+    #[test]
+    fn auto_mode_empty_deny_list_is_flagged() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"permissions": {"defaultMode": "auto"}, "autoMode": {"hard_deny": []}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::AutoModeDefaultsDropped { list } if list == "hard_deny"
+            )),
+            "an empty deny list discards the defaults too; got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn auto_mode_keeping_defaults_is_silent() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"permissions": {"defaultMode": "auto"},
+                 "autoMode": {"soft_deny": ["$defaults", "extra"], "hard_deny": ["$defaults"]}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::AutoModeDefaultsDropped { .. })),
+            "got {reasons:?}"
+        );
+    }
+
+    /// A list the parser never sees must not be invented: absent lists keep
+    /// the defaults, and no `autoMode` block at all means nothing to say.
+    #[test]
+    fn absent_auto_mode_block_or_list_is_silent() {
+        for settings in [
+            r#"{}"#,
+            r#"{"autoMode": {}}"#,
+            r#"{"autoMode": {"allow": ["x"]}}"#,
+        ] {
+            let dir = tempdir().unwrap();
+            write_settings(dir.path(), settings);
+            let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+            assert!(
+                !reasons
+                    .iter()
+                    .any(|r| matches!(r, AiGuardReason::AutoModeDefaultsDropped { .. })),
+                "{settings} -> {reasons:?}"
+            );
+        }
+    }
+
+    /// The classifier reads `autoMode` from user/managed settings only, so a
+    /// repo-local copy is not in force and must not be reported as if it were.
+    #[test]
+    fn project_scope_does_not_flag_auto_mode() {
+        let repo = tempdir().unwrap();
+        write_file(
+            repo.path(),
+            ".claude/settings.json",
+            r#"{"permissions": {"defaultMode": "auto"}, "autoMode": {"hard_deny": []}}"#,
+        );
+        let reasons = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        }
+        .assess(repo.path())
+        .unwrap();
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::AutoModeDefaultsDropped { .. })),
+            "got {reasons:?}"
+        );
+    }
+
+    // ---- #199: non-command hook types ------------------------------------
+
+    #[test]
+    fn http_hook_is_reported_with_destination_host_only() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+                 {"type": "http", "url": "https://user:secret@collect.example.test/ingest?tok=abc"}
+               ]}]}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        let dest = reasons
+            .iter()
+            .find_map(|r| match r {
+                AiGuardReason::HookForwardsToolCalls {
+                    hook_event,
+                    destination,
+                } if hook_event == "PreToolUse" => Some(destination.as_str()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no http hook finding in {reasons:?}"));
+        assert_eq!(dest, "https://collect.example.test");
+    }
+
+    /// In-process hook types run no host command. They still count as hooks
+    /// (the `NoSandbox` signal), but there is nothing to classify and nothing
+    /// leaves the machine.
+    #[test]
+    fn in_process_hook_types_are_counted_but_not_flagged_as_forwarding() {
+        for ty in ["prompt", "agent"] {
+            let dir = tempdir().unwrap();
+            write_settings(
+                dir.path(),
+                &format!(r#"{{"hooks": {{"PreToolUse": [{{"hooks": [{{"type": "{ty}"}}]}}]}}}}"#),
+            );
+            let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+            assert!(
+                reasons
+                    .iter()
+                    .any(|r| matches!(r, AiGuardReason::NoSandbox { .. })),
+                "{ty} is still a configured hook; got {reasons:?}"
+            );
+            assert!(
+                !reasons
+                    .iter()
+                    .any(|r| matches!(r, AiGuardReason::HookForwardsToolCalls { .. })),
+                "{ty} does not leave the host; got {reasons:?}"
+            );
+        }
+    }
+
+    /// A hook entry with no `type` is the historical command shape and must
+    /// keep being scanned for destructive inline commands.
+    #[test]
+    fn untyped_hook_is_still_treated_as_a_command() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"hooks": {"PreToolUse": [{"hooks": [{"command": "rm -rf /tmp/x"}]}]}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::DestructiveInInlineCommand { .. })),
+            "got {reasons:?}"
+        );
+    }
+
+    /// A dormant `autoMode` block is configuration, not exposure: under any
+    /// other default mode the classifier never consults it.
+    #[test]
+    fn auto_mode_block_is_not_flagged_outside_auto_mode() {
+        for mode in ["default", "acceptEdits", "plan", "bypassPermissions"] {
+            let dir = tempdir().unwrap();
+            write_settings(
+                dir.path(),
+                &format!(
+                    r#"{{"permissions": {{"defaultMode": "{mode}"}}, "autoMode": {{"hard_deny": []}}}}"#
+                ),
+            );
+            let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+            assert!(
+                !reasons
+                    .iter()
+                    .any(|r| matches!(r, AiGuardReason::AutoModeDefaultsDropped { .. })),
+                "{mode} -> {reasons:?}"
+            );
+        }
+    }
+
+    /// The classifier does not read the `settings.local.json` overlay, so an
+    /// `autoMode` block found only there is not in force.
+    #[test]
+    fn auto_mode_from_local_overlay_is_not_flagged() {
+        let dir = tempdir().unwrap();
+        write_settings(dir.path(), r#"{"permissions": {"defaultMode": "auto"}}"#);
+        write_file(
+            dir.path(),
+            ".claude/settings.local.json",
+            r#"{"autoMode": {"hard_deny": []}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::AutoModeDefaultsDropped { .. })),
+            "got {reasons:?}"
+        );
+    }
+
+    /// A loopback hook is a local validator — the payload never leaves the
+    /// machine, which is exactly what this finding claims.
+    #[test]
+    fn loopback_http_hook_is_not_forwarding() {
+        for url in [
+            "http://localhost:8080/hooks/pre-tool-use",
+            "http://127.0.0.1:9000/check",
+            "http://[::1]:8080/x",
+            "https://LOCALHOST/x",
+        ] {
+            let dir = tempdir().unwrap();
+            write_settings(
+                dir.path(),
+                &format!(
+                    r#"{{"hooks": {{"PreToolUse": [{{"hooks": [{{"type": "http", "url": "{url}"}}]}}]}}}}"#
+                ),
+            );
+            let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+            assert!(
+                !reasons
+                    .iter()
+                    .any(|r| matches!(r, AiGuardReason::HookForwardsToolCalls { .. })),
+                "{url} -> {reasons:?}"
+            );
+        }
+    }
+
+    /// An `mcp_tool` hook hands the call to a separate trust domain, unlike
+    /// `prompt`/`agent` which stay with the model the user already uses.
+    #[test]
+    fn mcp_tool_hook_is_reported_as_forwarding() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "mcp_tool", "server": "auditor"}]}]}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::HookForwardsToolCalls { destination, .. } if destination == "mcp:auditor"
+            )),
+            "got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn http_hook_without_url_is_silent() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "http"}]}]}}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::HookForwardsToolCalls { .. })),
+            "got {reasons:?}"
+        );
+    }
+
+    // ---- #199: loop.md ----------------------------------------------------
+
+    #[test]
+    fn user_loop_prompt_is_reported_even_without_settings() {
+        let dir = tempdir().unwrap();
+        write_file(dir.path(), ".claude/loop.md", "check the deploy\n");
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::UnattendedLoopPrompt { source } if source == "user"
+            )),
+            "a loop prompt is evidence of use on its own; got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn project_loop_prompt_is_reported() {
+        let repo = tempdir().unwrap();
+        write_file(repo.path(), ".claude/loop.md", "keep running\n");
+        let reasons = ClaudeCodeProjectParser {
+            repo_root: repo.path().to_path_buf(),
+        }
+        .assess(repo.path())
+        .unwrap();
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                AiGuardReason::UnattendedLoopPrompt { source } if source == "project"
+            )),
+            "got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn no_loop_prompt_no_finding() {
+        let dir = tempdir().unwrap();
+        write_settings(dir.path(), r#"{"permissions": {"deny": ["Bash"]}}"#);
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::UnattendedLoopPrompt { .. })),
+            "got {reasons:?}"
+        );
+    }
+
+    // ---- #199: permission rule forms -------------------------------------
+
+    /// Table of realistic permission rules. Over-flagging here is not a free
+    /// choice: a wrongly-broad rule adds weight to a user's score for a
+    /// setting that is actually scoped, so the "not broad" half matters as
+    /// much as the "broad" half.
+    #[test]
+    fn broad_allow_classifies_real_permission_rules() {
+        let cases: &[(&str, bool)] = &[
+            // Genuinely broad.
+            ("*", true),
+            ("*:*", true),
+            ("**", true),
+            ("Bash:*", true),
+            ("Bash:.*", true),
+            ("Bash(*)", true),
+            ("Read(.*)", true),
+            ("mcp__*", true),
+            // Scoped — a matcher, a path, a domain, or a parameter predicate.
+            ("Bash", false),
+            ("Read", false),
+            ("Bash(run_in_background:true)", false),
+            ("Agent(model:opus)", false),
+            ("Bash(npm run test:*)", false),
+            ("Bash(git diff:*)", false),
+            ("Bash(ls*)", false),
+            ("Read(/etc/hosts)", false),
+            ("Write(/tmp/*)", false),
+            ("Edit(src/**)", false),
+            ("WebFetch(domain:example.com)", false),
+            ("mcp__github", false),
+            ("mcp__github__create_issue", false),
+            ("", false),
+        ];
+        let wrong: Vec<&str> = cases
+            .iter()
+            .filter(|(rule, want)| is_broad_allow(rule) != *want)
+            .map(|(rule, _)| *rule)
+            .collect();
+        assert!(wrong.is_empty(), "misclassified: {wrong:?}");
+    }
+
+    /// The new rule forms must parse without disturbing the rest of the
+    /// assessment — the point of #199 gap 7.
+    #[test]
+    fn new_permission_rule_forms_do_not_break_assessment() {
+        let dir = tempdir().unwrap();
+        write_settings(
+            dir.path(),
+            r#"{"permissions": {
+                 "deny": ["Bash(rm:*)"],
+                 "allow": ["Bash(run_in_background:true)", "mcp__*", "Agent(model:opus)"]
+               }}"#,
+        );
+        let reasons = ClaudeCodeParser.assess(dir.path()).unwrap();
+        let broad: Vec<&str> = reasons
+            .iter()
+            .filter_map(|r| match r {
+                AiGuardReason::PermissionsAllowBroad { rule } => Some(rule.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(broad, vec!["mcp__*"], "got {reasons:?}");
     }
 }
