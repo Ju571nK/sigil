@@ -10,10 +10,14 @@
 //   - Cursor: ~/.cursor/hooks.json with `version:1` + per-event arrays
 //     (`beforeShellExecution`, `beforeMCPExecution`) of `{command}`.
 //
-// Antigravity is deliberately absent here: on-hardware verification (real `agy`
-// 1.0.4) proved its hooks are NOT read from any settings.json — they load only
-// from an imported plugin bundle. That install path lives in
-// `install_antigravity.rs` (a directory bundle handed to `agy plugin install`).
+//   - Antigravity: ~/.gemini/config/hooks.json, same nested `PreToolUse` shape
+//     as claude-code/codex. This is the SHARED hooks file agy's own `/hooks`
+//     TUI writes, so registration merges and uninstall removes only our entry.
+//     Hardware-verified on agy 1.1.7 (#202): the hook fires and an explicit
+//     deny blocks the call. The earlier "hooks are not read from a settings
+//     file" conclusion (#112) held for agy 1.0.4–1.0.8 and was fixed upstream.
+//     The separate plugin-bundle path in `install_antigravity.rs` is a
+//     different mechanism and has not been re-probed.
 
 use serde_json::{json, Value};
 use std::io;
@@ -30,7 +34,10 @@ pub(crate) enum HookFormat {
 
 pub(crate) fn agent_format(agent: &str) -> Option<HookFormat> {
     match agent {
-        "claude-code" | "codex" => Some(HookFormat::NestedPreToolUse),
+        // #208 — agy's shared hooks file uses the same nested shape as
+        // claude-code/codex (hardware-verified on 1.1.7, #202: a bare
+        // `{"PreToolUse":[…]}` at that path does not load).
+        "claude-code" | "codex" | "antigravity" => Some(HookFormat::NestedPreToolUse),
         "cursor" => Some(HookFormat::Cursor),
         _ => None,
     }
@@ -86,6 +93,39 @@ pub(crate) fn claude_entry_is_ours(entry: &Value, exe: &str) -> bool {
 }
 
 /// Get-or-create the nested `hooks.PreToolUse` array.
+/// #208 — describe a shape conflict in an existing settings document, if the
+/// merge would have to overwrite live data to proceed.
+///
+/// `pretooluse_array_mut` coerces: a `hooks` that is not an object, or a
+/// `PreToolUse` that is not an array, is replaced outright. That is silent data
+/// loss, and for antigravity the file is shared with agy's own `/hooks` TUI, so
+/// what would be lost is the user's other hooks. Callers check this first and
+/// refuse rather than coerce. Absent keys are not a conflict — there is nothing
+/// there to lose.
+pub fn conflicting_shape(root: &Value, agent: &str) -> Option<String> {
+    if !root.is_null() && !root.is_object() {
+        return Some("the document root is not a JSON object".to_string());
+    }
+    let hooks = root.get("hooks")?;
+    if !hooks.is_object() {
+        return Some("`hooks` exists but is not an object".to_string());
+    }
+    let events: &[&str] = match agent_format(agent) {
+        Some(HookFormat::NestedPreToolUse) => &["PreToolUse"],
+        Some(HookFormat::Cursor) => &CURSOR_EVENTS,
+        None => return None,
+    };
+    for ev in events {
+        match hooks.get(*ev) {
+            Some(v) if !v.is_array() => {
+                return Some(format!("`hooks.{ev}` exists but is not an array"));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn pretooluse_array_mut(root: &mut Value) -> &mut Vec<Value> {
     if !root.is_object() {
         *root = json!({});
@@ -371,6 +411,10 @@ pub fn settings_path(agent: &str) -> Option<PathBuf> {
         "claude-code" => home.join(".claude/settings.json"),
         "codex" => home.join(".codex/hooks.json"),
         "cursor" => home.join(".cursor/hooks.json"),
+        // #208 — the SHARED hooks file, which agy's own `/hooks` TUI also
+        // writes. Not `~/.gemini/antigravity-cli/hooks.json`: agy 1.0.8 fixed
+        // writing there as a bug. Merged into, never overwritten.
+        "antigravity" => home.join(".gemini/config/hooks.json"),
         _ => return None,
     };
     Some(p)
@@ -542,23 +586,60 @@ mod tests {
         assert!(v["hooks"]["PreToolUse"].is_array());
     }
 
-    // Antigravity is NOT a settings-merge agent — it installs as an `agy`
-    // plugin bundle (see install_antigravity.rs). The JSON-merge path must
-    // treat it as unsupported so it can never write a settings.json hook that
-    // `agy` silently ignores.
+    // #208 — Antigravity IS a settings-merge agent now. Its file is shared
+    // with agy's own `/hooks` TUI, so the merge must be additive and uninstall
+    // must take only our entry.
     #[test]
-    fn antigravity_not_in_settings_merge_path() {
-        assert!(settings_path("antigravity").is_none());
-        assert!(!merge_into(
-            &mut json!({}),
+    fn antigravity_registers_in_nested_pretooluse_shape() {
+        let mut v = json!({});
+        assert!(merge_into(
+            &mut v,
             "/abs/sigil-hook",
             "antigravity",
             "redacted"
         ));
-        assert_eq!(
-            count_sigil_entries(&json!({}), "/abs/sigil-hook", "antigravity"),
-            0
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "antigravity"), 1);
+        // The nested wrapper is required: a bare top-level `PreToolUse` does
+        // not load on agy (#202).
+        assert!(v["hooks"]["PreToolUse"].is_array(), "got {v}");
+        assert!(
+            v["PreToolUse"].is_null(),
+            "must not write the bare shape: {v}"
         );
+    }
+
+    #[test]
+    fn antigravity_settings_path_is_the_shared_file() {
+        let p = settings_path("antigravity").expect("antigravity has a settings path");
+        assert!(
+            p.ends_with(".gemini/config/hooks.json"),
+            "got {}",
+            p.display()
+        );
+    }
+
+    /// The file belongs to agy too — registering must not drop a hook the user
+    /// or the `/hooks` TUI put there, and uninstall must leave it behind.
+    #[test]
+    fn antigravity_merge_preserves_foreign_hooks_and_uninstall_leaves_them() {
+        let mut v = json!({
+            "hooks": {"PreToolUse": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": "/other/tool --x"}]}
+            ]}
+        });
+        assert!(merge_into(
+            &mut v,
+            "/abs/sigil-hook",
+            "antigravity",
+            "redacted"
+        ));
+        assert_eq!(v["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
+
+        assert!(remove_from(&mut v, "/abs/sigil-hook", "antigravity"));
+        let left = v["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(left.len(), 1, "foreign hook must survive: {v}");
+        assert_eq!(left[0]["hooks"][0]["command"], "/other/tool --x");
+        assert_eq!(count_sigil_entries(&v, "/abs/sigil-hook", "antigravity"), 0);
     }
 
     // --- Cursor (version + two event arrays) ---
