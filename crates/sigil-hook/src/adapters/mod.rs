@@ -10,8 +10,6 @@ pub mod grok;
 /// deny response, if any) and the process exit code. claude-code/codex/
 /// antigravity: the JSON rides stdout with exit 0; the exit_code field lets a
 /// future agent whose deny path needs a non-zero exit express that.
-/// (antigravity: this deny contract is NOT reachable on current agy — its
-/// command-hooks do not fire; #112).
 pub struct DenyOutput {
     pub stdout: Option<String>,
     pub exit_code: i32,
@@ -41,6 +39,24 @@ pub(crate) fn decision_deny(rule_id: &str, reason: &str) -> DenyOutput {
     let v = serde_json::json!({
         "decision": "deny",
         "reason": format!("Blocked by Sigil rule {rule_id}: {reason}"),
+    });
+    DenyOutput {
+        stdout: Some(v.to_string()),
+        exit_code: 0,
+    }
+}
+
+/// Antigravity-shaped deny: `{"allow_tool":false,"deny_reason":"…"}` on stdout,
+/// exit 0 (hardware-verified on agy 1.1.7, #202 — the reason is surfaced to the
+/// model verbatim). A third distinct spelling: Grok keys on `decision`, Cursor
+/// on `permission`, agy on `allow_tool`.
+///
+/// agy is fail-OPEN — empty stdout, an explicit allow, and a non-zero exit all
+/// allow the call — so this must always be emitted and the exit code stays 0.
+pub(crate) fn allow_tool_deny(rule_id: &str, reason: &str) -> DenyOutput {
+    let v = serde_json::json!({
+        "allow_tool": false,
+        "deny_reason": format!("Blocked by Sigil rule {rule_id}: {reason}"),
     });
     DenyOutput {
         stdout: Some(v.to_string()),

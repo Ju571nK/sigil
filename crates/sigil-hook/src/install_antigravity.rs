@@ -1,15 +1,18 @@
 // Antigravity (Google `agy` CLI) install. Antigravity loads hooks from an
 // imported plugin bundle (`agy plugin install <dir>`), NOT settings.json.
 //
-// VERSION CAVEAT (#112): agy 1.0.4 accepted and loaded this `hooks/hooks.json`
-// bundle (`agy plugin validate` reported "hooks: 1 processed"), but agy
-// 1.0.7/1.0.8 do NOT fire `agy plugin install` PreToolUse command-hooks —
-// `agy plugin validate` reports "hooks: skipped (not found)", `plugin list`
-// shows components: null, and an always-deny probe hook fired 0 times on
-// hardware. So on current agy this registration is a no-op. `sigil-hook install
-// --agent antigravity` therefore does NOT install by default (see
-// cmd_install_antigravity); this module's bundle path is reached only under
-// `--force` (experimental / for a future agy that restores command-hooks).
+// LEGACY MECHANISM (#112, #208). agy 1.0.4 accepted and loaded this
+// `hooks/hooks.json` bundle (`agy plugin validate` reported "hooks: 1
+// processed"), but agy 1.0.7/1.0.8 did NOT fire `agy plugin install` PreToolUse
+// command-hooks — validate reported "hooks: skipped (not found)", `plugin list`
+// showed components: null, and an always-deny probe hook fired 0 times on
+// hardware.
+//
+// #202 later measured agy 1.1.7 firing hooks from the SHARED settings file
+// `~/.gemini/config/hooks.json`, and honouring an explicit deny. That is a
+// different mechanism and is now the default install (see install.rs). This
+// plugin-bundle path has NOT been re-probed on 1.1.x, registers an observe-only
+// command, and is reached only under `--force`.
 //
 // Canonical bundle layout (as accepted by agy 1.0.4; `hooks/` subdir required —
 // root-level hooks.json, inline `hooks` in plugin.json, and hooks.toml were all
@@ -113,9 +116,12 @@ pub fn render_block(exe: &str, capture: &str) -> String {
     let pj = serde_json::to_string_pretty(&plugin_json()).unwrap_or_default();
     let hj = serde_json::to_string_pretty(&hooks_json(exe, capture)).unwrap_or_default();
     format!(
-        "// Antigravity registers hooks via an imported plugin, not a settings file.\n\
-         // NOTE: current agy (>=1.0.7) does NOT fire this command-hook (sigil #112);\n\
-         // `install --agent antigravity` is a no-op unless you pass --force.\n\
+        "// LEGACY path: the `agy plugin install` bundle, selected by --force.\n\
+         // agy 1.0.7-1.0.8 did not fire this command-hook (sigil #112) and it has\n\
+         // not been re-probed since; it is observe-only and cannot enforce.\n\
+         // The SUPPORTED path is `install --agent antigravity` without --force,\n\
+         // which merges into ~/.gemini/config/hooks.json — verified to fire and\n\
+         // to honour a deny on agy 1.1.7 (sigil #202).\n\
          // Under --force, --write writes this bundle to\n\
          //   {dir_s}\n\
          // then runs: agy plugin install {dir_s}\n\

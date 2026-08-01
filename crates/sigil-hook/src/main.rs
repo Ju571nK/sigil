@@ -190,10 +190,18 @@ enum Cmd {
         on_failure: OnFailureArg,
     },
 
-    /// Antigravity PreToolUse entrypoint: read stdin, emit, exit 0.
+    /// Antigravity PreToolUse entrypoint: observe (emit, exit 0), or --enforce
+    /// (deny-decision path). #208 — enforce became reachable once #202 measured
+    /// agy 1.1.7 firing the hook and honouring an explicit deny.
     Antigravity {
         #[arg(long, value_enum, default_value_t = CaptureArg::Redacted)]
         capture: CaptureArg,
+        /// Stage 2: run the synchronous deny-decision path instead of observe.
+        #[arg(long)]
+        enforce: bool,
+        /// Behavior when no verdict is obtainable. Default open (fail-open).
+        #[arg(long, value_enum, default_value_t = OnFailureArg::Open)]
+        on_failure: OnFailureArg,
     },
 
     /// Grok Build PreToolUse entrypoint: observe (emit, exit 0), or --enforce (deny-decision path).
@@ -210,9 +218,12 @@ enum Cmd {
 
     /// Print (or write) the sigil-hook registration for an agent.
     ///
-    /// claude-code | codex | cursor merge into a settings JSON file; antigravity
-    /// is registered as an `agy` plugin bundle (`agy plugin install`); grok
-    /// writes a dedicated ~/.grok/hooks/sigil-hook.json file.
+    /// claude-code | codex | cursor | antigravity merge into a settings JSON
+    /// file (antigravity's is ~/.gemini/config/hooks.json, shared with agy's own
+    /// `/hooks` TUI, so the merge is additive); grok writes a dedicated
+    /// ~/.grok/hooks/sigil-hook.json file. `--force` selects antigravity's
+    /// legacy `agy plugin install` bundle instead, which is a different and
+    /// unverified mechanism.
     Install {
         /// Agent to register with: claude-code | codex | cursor | antigravity | grok.
         #[arg(long, default_value = INSTALL_AGENT_DEFAULT)]
@@ -399,7 +410,17 @@ fn main() {
                 run_hook("cursor", capture.into())
             }
         }
-        Cmd::Antigravity { capture } => run_hook("antigravity", capture.into()),
+        Cmd::Antigravity {
+            capture,
+            enforce,
+            on_failure,
+        } => {
+            if enforce {
+                run_enforce("antigravity", capture.into(), on_failure)
+            } else {
+                run_hook("antigravity", capture.into())
+            }
+        }
         Cmd::Grok {
             capture,
             enforce,
@@ -451,19 +472,24 @@ fn cmd_install(
     };
     let exe = exe_path();
 
-    // Antigravity is not a settings-merge agent: it installs as an `agy` plugin
-    // bundle. Route it through the dedicated path.
-    if agent == "antigravity" {
-        // #112 (C1) — Antigravity enforce is not available: current agy does not
-        // fire plugin command-hooks, so there is no deny path to register.
+    // #208 — Antigravity now installs through the ordinary settings-merge path
+    // (`~/.gemini/config/hooks.json`), which is the mechanism #202 verified on
+    // hardware. `--force` still selects the legacy `agy plugin install` bundle:
+    // that is a DIFFERENT mechanism which has not been re-probed, so it stays
+    // opt-in rather than becoming the default or being deleted outright.
+    if agent == "antigravity" && force {
+        // The legacy bundle registers an observe-only command
+        // (`install_antigravity::command_string`). Honouring `--enforce` here
+        // would hand back a hook that never denies while reporting success.
         if enforce {
             eprintln!(
-                "error: Antigravity enforce is not available — current agy does not fire \
-                 plugin command-hooks (sigil #112). Use static posture scanning; omit --enforce."
+                "error: --force selects the legacy Antigravity plugin bundle, which registers \
+                 an observe-only hook and cannot enforce. Drop --force to install the \
+                 verified enforce hook in ~/.gemini/config/hooks.json."
             );
             std::process::exit(2);
         }
-        return cmd_install_antigravity(&exe, write, capture_str, force);
+        return cmd_install_antigravity(&exe, write, capture_str);
     }
 
     // Grok is not a settings-merge agent: it writes a dedicated
@@ -485,14 +511,19 @@ fn cmd_install(
     }
 
     // Enforce-mode --write is supported for the NestedPreToolUse agents
-    // (claude-code, codex), for cursor (beforeShellExecution/beforeMCPExecution),
-    // and for grok (native ~/.grok/hooks). Guard any other agent so we never
-    // write a misleading settings file. (antigravity routes to its own plugin
-    // path above; grok routes to cmd_install_grok above — so by here the only
-    // enforce-capable agents reaching the generic path are claude-code/codex/cursor.)
-    if enforce && !matches!(agent, "claude-code" | "codex" | "grok" | "cursor") {
+    // (claude-code, codex, antigravity), for cursor
+    // (beforeShellExecution/beforeMCPExecution), and for grok (native
+    // ~/.grok/hooks). Guard any other agent so we never write a misleading
+    // settings file. #208 added antigravity, whose deny path #202 measured
+    // working on agy 1.1.7. (grok routes to cmd_install_grok above.)
+    if enforce
+        && !matches!(
+            agent,
+            "claude-code" | "codex" | "grok" | "cursor" | "antigravity"
+        )
+    {
         eprintln!(
-            "error: enforce-mode install is only supported for claude-code/codex/grok/cursor in this slice (agent '{agent}' not registered)"
+            "error: enforce-mode install is only supported for claude-code/codex/grok/cursor/antigravity (agent '{agent}' not registered)"
         );
         std::process::exit(1);
     }
@@ -507,6 +538,12 @@ fn cmd_install(
     };
 
     // Read existing settings or start from an empty object.
+    //
+    // A file we cannot parse is NOT treated as empty. Registration rewrites the
+    // whole document, so starting from `{}` would silently delete whatever the
+    // file held — and for antigravity that file is shared with agy's own
+    // `/hooks` TUI (#208), so the loss would be the user's other hooks. Refuse
+    // and say which file, so a typo is fixed rather than erased.
     let mut root: serde_json::Value = if sp.exists() {
         let raw = match std::fs::read(&sp) {
             Ok(r) => r,
@@ -515,10 +552,36 @@ fn cmd_install(
                 std::process::exit(1);
             }
         };
-        serde_json::from_slice(&raw).unwrap_or(serde_json::json!({}))
+        if raw.iter().all(|b| b.is_ascii_whitespace()) {
+            serde_json::json!({})
+        } else {
+            match serde_json::from_slice(&raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!(
+                        "error: {} is not valid JSON ({e}); refusing to overwrite it. \
+                         Fix or move the file, then re-run.",
+                        sp.display()
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
     } else {
         serde_json::json!({})
     };
+
+    // #208 — refuse rather than coerce a conflicting shape. `merge_*` would
+    // replace a non-array `PreToolUse` (or a non-object `hooks`) outright, which
+    // for antigravity's shared file means deleting the user's own hooks.
+    if let Some(conflict) = install::conflicting_shape(&root, agent) {
+        eprintln!(
+            "error: {} has an unexpected shape — {conflict}. Registering would \
+             overwrite it, so nothing was written. Fix or move the file, then re-run.",
+            sp.display()
+        );
+        std::process::exit(1);
+    }
 
     let changed = if enforce {
         install::merge_into_enforce(&mut root, &exe, agent, capture_str, on_failure_str)
@@ -550,9 +613,9 @@ fn cmd_install(
     // Write baseline / update discovery index. For agents whose `verify`
     // path is implemented. Cursor gained format-aware verify in #120 (per-agent
     // baseline file hook-registration-cursor.json), so the #119 D6 exclusion
-    // is removed. (grok and antigravity never reach here; they return to their
-    // own install fns above.)
-    if matches!(agent, "claude-code" | "codex" | "cursor") {
+    // is removed. #208 added antigravity, which now uses this same path.
+    // (grok never reaches here; it returns to its own install fn above.)
+    if matches!(agent, "claude-code" | "codex" | "cursor" | "antigravity") {
         if let Err(e) = install::write_baseline(
             agent,
             &sp,
@@ -577,8 +640,11 @@ fn cmd_install(
 fn cmd_uninstall(agent: &str, write: bool) {
     let exe = exe_path();
 
+    // #208 — remove the plugin bundle too, so an operator who installed the
+    // legacy way before this change is still cleaned up. The settings-file
+    // entry is then removed by the shared path below.
     if agent == "antigravity" {
-        return cmd_uninstall_antigravity(write);
+        cmd_uninstall_antigravity(write);
     }
 
     if agent == "grok" {
@@ -608,7 +674,19 @@ fn cmd_uninstall(agent: &str, write: bool) {
             std::process::exit(1);
         }
     };
-    let mut root: serde_json::Value = serde_json::from_slice(&raw).unwrap_or(serde_json::json!({}));
+    // Same reasoning as install: an unparsable file must not be reported as
+    // "nothing to remove", which reads as "already clean" when in fact we could
+    // not look.
+    let mut root: serde_json::Value = match serde_json::from_slice(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "error: {} is not valid JSON ({e}); cannot tell what is registered there.",
+                sp.display()
+            );
+            std::process::exit(1);
+        }
+    };
 
     let count = install::count_sigil_entries(&root, &exe, agent);
     if count == 0 {
@@ -693,45 +771,18 @@ fn cmd_uninstall_grok(write: bool) {
     }
 }
 
-/// #112 — current agy (>=1.0.7) does not fire `agy plugin install` PreToolUse
-/// command-hooks; installing one is a no-op that gives false assurance. Skip by
-/// default; only proceed under `--force` (preserves the path for a future agy
-/// that restores command-hooks).
-#[derive(Debug, PartialEq, Eq)]
-enum AntigravityInstallDisposition {
-    NotSupported,
-    Proceed,
-}
-
-fn antigravity_install_disposition(force: bool) -> AntigravityInstallDisposition {
-    if force {
-        AntigravityInstallDisposition::Proceed
-    } else {
-        AntigravityInstallDisposition::NotSupported
-    }
-}
-
-// C6 — must begin with "NOT installed" + "no files written, agy not invoked"
-// so the message never drifts into "installed" language; asserted by tests.
-const ANTIGRAVITY_NOT_SUPPORTED_MSG: &str =
-    "sigil-hook: Antigravity runtime hooks NOT installed (no files written, agy not invoked).\n\
-     Current Antigravity (agy >=1.0.7) does not fire `agy plugin install` PreToolUse \
-     command-hooks (verified — sigil #112), so installing one would be a no-op that \
-     falsely implies runtime protection.\n\
-     Sigil covers Antigravity via STATIC configuration posture scanning \
-     (sandbox / permission settings) instead.\n\
-     If a future agy restores command-hooks, re-run with --force to install anyway.";
-
 /// Antigravity install: materialize the plugin bundle, then register it with
 /// `agy plugin install`. Without `--write`, print the bundle + command preview.
-fn cmd_install_antigravity(exe: &str, write: bool, capture: &str, force: bool) {
-    if antigravity_install_disposition(force) == AntigravityInstallDisposition::NotSupported {
-        // Both preview (!write) and apply (--write) paths: do nothing but explain.
-        eprintln!("{ANTIGRAVITY_NOT_SUPPORTED_MSG}");
-        return;
-    }
-    // --force: legacy bundle path preserved (may still be a no-op on current agy).
-    eprintln!("sigil-hook: --force set; installing Antigravity command-hook anyway (may not fire on current agy — #112).");
+fn cmd_install_antigravity(exe: &str, write: bool, capture: &str) {
+    // Reached only under `--force`. This is the legacy `agy plugin install`
+    // bundle, a different mechanism from the verified `~/.gemini/config/hooks.json`
+    // registration and one that agy 1.0.7-1.0.8 did not fire (#112). It has not
+    // been re-probed since, so say so rather than implying protection.
+    eprintln!(
+        "sigil-hook: --force set; installing the legacy Antigravity plugin bundle. \
+         This mechanism did not fire on agy 1.0.7-1.0.8 (#112) and has not been \
+         re-verified; the supported path is `install --agent antigravity` without --force."
+    );
     if !write {
         print!("{}", install_antigravity::render_block(exe, capture));
         return;
@@ -821,13 +872,17 @@ fn cmd_verify(agent: &str) -> i32 {
     use sigil_core::event::AiTool;
 
     // TODO(#120 follow-on): consolidate this agent→AiTool table with install::agent_format
-    // when more agents (grok/antigravity) gain verify support — keep the two in sync until then.
+    // when grok gains verify support — keep the two in sync until then.
+    // #208 added antigravity, which now writes a baseline like the others; verify
+    // must accept every agent install writes one for, or the baseline is
+    // unreadable by the command meant to read it.
     let aitool = match agent {
         "claude-code" => AiTool::ClaudeCode,
         "codex" => AiTool::Codex,
         "cursor" => AiTool::Cursor,
+        "antigravity" => AiTool::Antigravity,
         other => {
-            eprintln!("sigil-hook verify: unsupported --agent '{other}' (expected: claude-code, codex, cursor)");
+            eprintln!("sigil-hook verify: unsupported --agent '{other}' (expected: claude-code, codex, cursor, antigravity)");
             return 1; // usage error — distinct from drift (2) / baseline_absent (3) / clean (0)
         }
     };
@@ -898,27 +953,5 @@ mod tests {
         assert_eq!(drift_exit_code(CommandDrift), 2);
         assert_eq!(drift_exit_code(MatcherDrift), 2);
         assert_eq!(drift_exit_code(FailModeDrift), 2);
-    }
-
-    #[test]
-    fn antigravity_disposition_gates_on_force() {
-        assert_eq!(
-            antigravity_install_disposition(false),
-            AntigravityInstallDisposition::NotSupported
-        );
-        assert_eq!(
-            antigravity_install_disposition(true),
-            AntigravityInstallDisposition::Proceed
-        );
-    }
-
-    #[test]
-    fn antigravity_not_supported_msg_is_honest() {
-        let m = ANTIGRAVITY_NOT_SUPPORTED_MSG;
-        assert!(m.contains("NOT installed"));
-        assert!(m.contains("no files written"));
-        assert!(m.contains("#112"));
-        assert!(m.contains("--force"));
-        assert!(m.to_lowercase().contains("static"));
     }
 }
