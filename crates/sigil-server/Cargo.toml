@@ -59,7 +59,9 @@ name = "sigil-server"
 maintainer = "Sigil contributors <sigil@users.noreply.github.com>"
 section = "admin"
 priority = "optional"
-depends = "libc6"
+# Match the dependencies injected by Debian's dh_installsystemd and
+# dh_installsysusers helpers. The alternatives keep non-systemd hosts usable.
+depends = "libc6, init-system-helpers (>= 1.52), systemd | systemd-standalone-sysusers | systemd-sysusers"
 maintainer-scripts = "../../packaging/debian-server"
 extended-description = """\
 Sigil OSS reference server. Receives sigil agent posture events over HTTPS \
@@ -116,4 +118,3 @@ if [ "$1" -ge 1 ] ; then
     systemctl try-restart sigil-server.service >/dev/null 2>&1 || :
 fi
 """
-

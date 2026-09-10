@@ -151,7 +151,9 @@ jobs:
             grep -qE "/usr/bin/${bin}$" <<< "$contents"
             [ -z "$unit" ]    || grep -qE "/systemd/system/${unit}$" <<< "$contents"
             [ -z "$example" ] || grep -qE "${example}$" <<< "$contents"
-            dpkg -i "$deb"
+            # Use apt so the test also verifies that declared package
+            # dependencies resolve in a minimal Debian installation.
+            apt-get install -y "./$deb"
             "/usr/bin/${bin}" --help >/dev/null
             [ -z "$example" ] || test -f "$example"
             dpkg -P "$pkg"

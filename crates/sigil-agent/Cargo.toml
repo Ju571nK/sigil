@@ -73,7 +73,9 @@ name = "sigil"
 maintainer = "Sigil contributors <sigil@users.noreply.github.com>"
 section = "admin"
 priority = "optional"
-depends = "libc6"
+# Match the dependencies injected by Debian's dh_installsystemd and
+# dh_installsysusers helpers. The alternatives keep non-systemd hosts usable.
+depends = "libc6, init-system-helpers (>= 1.52), systemd | systemd-standalone-sysusers | systemd-sysusers"
 # cargo-deb only emits the systemd maintainer scripts when this is set; the
 # files in packaging/debian/ are skeletons whose #DEBHELPER# token cargo-deb
 # substitutes with the systemd integration snippet.
