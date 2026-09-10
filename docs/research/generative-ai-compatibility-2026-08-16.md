@@ -77,20 +77,26 @@ Sources: [hooks](https://cursor.com/docs/hooks),
 ### Antigravity
 
 The CLI permissions engine now documents `permissions.deny`, `ask`, and `allow`
-with Deny > Ask > Allow precedence. Global settings live at
-`~/.gemini/antigravity-cli/settings.json`; current documentation says project
-permissions are merged. `toolPermission` documents four modes including
-`strict`.
+with Deny > Ask > Allow precedence. Current documentation places all three
+lists in global `~/.gemini/antigravity-cli/settings.json`; the re-probe found
+no active project settings path. `toolPermission` documents four modes
+including `strict`.
 
 The local CLI 1.1.7 hook contract was hardware-verified as nested `toolCall`
-input and `{"allow_tool":false}` output in #202/#208. Current documentation,
-covering CLI and Antigravity 2.0, instead specifies
-`decision = allow | deny | ask | force_ask | deny_unless_prior_grant`. Do not
-replace the 1.1.7 adapter from documentation alone. Re-probe CLI and Desktop
-separately and version the contract if both shapes are real.
+input and `{"allow_tool":false}` output in #202/#208. A 2026-09-10 macOS
+re-probe on CLI 1.2.0 confirmed that shape and the documented
+`{"decision":"deny"}` shape both block. Global `~/.gemini/config/hooks.json`
+and workspace `.agents/hooks.json` fired; the old
+`~/.gemini/antigravity-cli/hooks.json` did not. Keep the backward-compatible
+Sigil output. Current Desktop remains unverified because the installed 2.0.6
+is behind the documented 2.12.2 release.
 
 #209 is confirmed as a genuine parser gap. It should parse all three permission
-lists, not only broad `allow`, so precedence prevents false positives.
+lists, not only broad `allow`, so precedence prevents false positives. The same
+probe found only the global CLI settings path affects permissions; neither
+`.agents/settings.json` nor `.antigravity/settings.json` did.
+
+Detailed evidence: [2026-09-10 Antigravity compatibility probe](antigravity-compatibility-2026-09-10.md).
 
 Sources: [permissions](https://antigravity.google/docs/cli/permissions),
 [hooks](https://antigravity.google/docs/hooks),
@@ -175,7 +181,7 @@ Sources: [2026-07-28 release](https://blog.modelcontextprotocol.io/posts/2026-07
 
 | Order | Issue | Gate before implementation |
 | --- | --- | --- |
-| 1 | #202 | Re-probe current Antigravity CLI and Desktop hook output separately. |
+| 1 | #202 | CLI 1.2.0 re-probed; current Desktop and non-macOS remain hardware gates. |
 | 2 | #209 | Confirm effective permission-list merge and implement precedence-aware parsing. |
 | 3 | #207 | Define positive controls without offsetting unrelated risk scores. |
 | 4 | #199 / #200 | Implement only remaining scope after PR #206; include newly found approval surfaces. |

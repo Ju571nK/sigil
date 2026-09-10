@@ -47,9 +47,9 @@ pub(crate) fn decision_deny(rule_id: &str, reason: &str) -> DenyOutput {
 }
 
 /// Antigravity-shaped deny: `{"allow_tool":false,"deny_reason":"…"}` on stdout,
-/// exit 0 (hardware-verified on agy 1.1.7, #202 — the reason is surfaced to the
-/// model verbatim). A third distinct spelling: Grok keys on `decision`, Cursor
-/// on `permission`, agy on `allow_tool`.
+/// exit 0 (hardware-verified on agy 1.1.7 and 1.2.0, #202 — the reason is
+/// surfaced to the model verbatim). A third distinct spelling: Grok keys on
+/// `decision`, Cursor on `permission`, agy on `allow_tool`.
 ///
 /// agy is fail-OPEN — empty stdout, an explicit allow, and a non-zero exit all
 /// allow the call — so this must always be emitted and the exit code stays 0.
