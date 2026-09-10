@@ -19,7 +19,10 @@ use sigil_core::hook_proto::*;
 /// session is `conversationId` and the working directory rides in the tool's
 /// own arguments.
 ///
-/// Deny is `{"allow_tool": false, "deny_reason": "…"}` with exit 0. agy is
+/// Deny is `{"allow_tool": false, "deny_reason": "…"}` with exit 0. The
+/// documented `{"decision":"deny","reason":"…"}` form and this legacy
+/// form both blocked on agy 1.2.0; Sigil keeps the latter for 1.1.7
+/// compatibility. agy 1.1.7 is
 /// **fail-open** — an empty stdout, an explicit allow, and a non-zero exit all
 /// let the call through — so the deny must always be emitted explicitly and
 /// never expressed through the exit code.

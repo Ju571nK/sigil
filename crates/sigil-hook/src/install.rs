@@ -412,8 +412,9 @@ pub fn settings_path(agent: &str) -> Option<PathBuf> {
         "codex" => home.join(".codex/hooks.json"),
         "cursor" => home.join(".cursor/hooks.json"),
         // #208 — the SHARED hooks file, which agy's own `/hooks` TUI also
-        // writes. Not `~/.gemini/antigravity-cli/hooks.json`: agy 1.0.8 fixed
-        // writing there as a bug. Merged into, never overwritten.
+        // writes. Re-verified on agy 1.2.0: this path and workspace
+        // `.agents/hooks.json` fire; `~/.gemini/antigravity-cli/hooks.json`
+        // does not. Merged into, never overwritten.
         "antigravity" => home.join(".gemini/config/hooks.json"),
         _ => return None,
     };

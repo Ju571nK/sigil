@@ -42,17 +42,15 @@ pub struct AssessCtx<'a> {
 pub fn assess(input: &AssessInput, ctx: &AssessCtx) -> AssessVerdict {
     // ── 1. Build reasons ─────────────────────────────────────────────────────
     let mut reasons = Vec::new();
-    let deny_match: Option<DenyMatch>;
 
-    match input {
+    let deny_match = match input {
         AssessInput::Command { command, args } => {
             reasons = scan_command(command, args);
 
             let preview = render_bash_preview(command, args);
-            deny_match = ctx
-                .deny
+            ctx.deny
                 .evaluate_bash_preview(&preview)
-                .map(|(rule_id, reason)| DenyMatch { rule_id, reason });
+                .map(|(rule_id, reason)| DenyMatch { rule_id, reason })
         }
         AssessInput::McpServer {
             server_name,
@@ -60,9 +58,9 @@ pub fn assess(input: &AssessInput, ctx: &AssessCtx) -> AssessVerdict {
         } => {
             emit_one_server(server_name, definition, &mut reasons);
             // v1 scope: deny rules are not applied to MCP server definitions.
-            deny_match = None;
+            None
         }
-    }
+    };
 
     // ── 2. Score + bucket ────────────────────────────────────────────────────
     let score = ctx.rubric.score(&reasons);
