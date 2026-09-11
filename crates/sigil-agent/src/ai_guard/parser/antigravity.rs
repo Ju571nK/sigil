@@ -1,6 +1,7 @@
 //! Antigravity (Google) parser. Antigravity is the successor to Gemini CLI
 //! (Gemini CLI sunset 2026-06-18) and reuses the `~/.gemini/` config tree, but
-//! with Antigravity-specific keys/paths (web-verified 2026-06):
+//! with Antigravity-specific keys/paths (official docs + macOS arm64 CLI 1.2.0
+//! hardware verification, 2026-09-10):
 //!   - settings (user-global): `~/.gemini/antigravity-cli/settings.json`
 //!   - MCP servers: `~/.gemini/config/mcp_config.json` (`mcpServers`, a separate
 //!     file — unlike Gemini, MCP is not inline in settings.json)
@@ -10,13 +11,12 @@
 //!     struct fields, NOT CLI settings keys (hardware-verified on agy 1.0.8:
 //!     writing `sandbox_mode` into settings.json is silently ignored, exactly
 //!     like an unknown key — the CLI settings validator never sees it).
-//!   - tool permission: `toolPermission`. Accepted enum (hardware-verified on
-//!     agy 1.0.8): `request-review` (default, safe — agent asks per action),
-//!     `proceed-in-sandbox` (auto-executes inside the sandbox), `always-proceed`
-//!     (auto-executes, NOT sandboxed). The old Gemini `approval_mode`
-//!     (`yolo`/`auto_edit`) was dropped, and the literal `auto-approve` is now
-//!     REJECTED by 1.0.8's settings validator (replaced with the `request-review`
-//!     default at load) — see `emit_approval`.
+//!   - tool permission: `toolPermission`. Documented values are `request-review`,
+//!     `proceed-in-sandbox`, `strict`, and `always-proceed`. CLI 1.2.0 kept an
+//!     unknown value byte-identical and treated it like review in the tested
+//!     headless command; unknown values are ignored rather than assumed safe.
+//!   - fine-grained permissions: global `permissions.deny`, `ask`, and `allow`
+//!     arrays of `action(target)` rules, with Deny > Ask > Allow precedence.
 //!
 //! UserGlobal scope only for now; the per-repo (`<repo>/.antigravity/settings.json`)
 //! parser needs an `antigravity_workspaces` policy field and is a follow-up.
@@ -42,6 +42,7 @@ fn assess_user(home: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
     if let Some(settings) = super::read_json_optional(&settings_path(home))? {
         emit_sandbox(&settings, &mut out);
         emit_approval(&settings, &mut out);
+        emit_permission_lists(&settings, &mut out);
     }
     // MCP lives in a separate file (shared across Antigravity IDE/CLI).
     if let Some(mcp) = super::read_json_optional(&mcp_config_path(home))? {
@@ -60,20 +61,15 @@ pub(crate) fn emit_sandbox(v: &Value, out: &mut Vec<AiGuardReason>) {
     }
 }
 
-/// Flag the `toolPermission` modes that make the agent run tools WITHOUT
-/// per-action review. Hardware-verified against `agy` 1.0.8's settings
-/// validator (`cli_setting_manager.go`, via `CLI settings initialized:
-/// ... toolPermission=<value>` + `unrecognized value` rejections):
+/// Flag the documented `toolPermission` modes that make the agent run tools
+/// without per-action review (hardware-verified on `agy` 1.2.0):
 ///   - `always-proceed`     -> auto-execute, NOT sandboxed  (highest risk)
 ///   - `proceed-in-sandbox` -> auto-execute, confined to the terminal sandbox
-///   - `request-review`     -> the safe default (agent asks); not flagged
+///   - `request-review` / `strict` -> prompts; not flagged
 ///
-/// The old literal `auto-approve` is deliberately NOT matched: 1.0.8's validator
-/// rejects it as an unrecognized value and falls back to `request-review`, so a
-/// settings file carrying `auto-approve` is effectively safe at runtime — flagging
-/// it would be a false positive. (Permissive auto-approval without a persisted
-/// setting is reached via the session-scoped `--dangerously-skip-permissions`
-/// CLI flag, which never touches settings.json and so is out of scope here.)
+/// Unknown values are deliberately not matched. CLI 1.2.0 left an unknown
+/// value on disk and behaved like review for the tested command, but that is a
+/// version-scoped observation rather than a validator guarantee.
 ///
 /// A truthy `permissions.allowAll` is a separate explicit auto-approval signal.
 pub(crate) fn emit_approval(v: &Value, out: &mut Vec<AiGuardReason>) {
@@ -92,6 +88,101 @@ pub(crate) fn emit_approval(v: &Value, out: &mut Vec<AiGuardReason>) {
             });
         }
         _ => {}
+    }
+}
+
+const PERMISSION_ACTIONS: &[&str] = &[
+    "read_file",
+    "write_file",
+    "read_url",
+    "execute_url",
+    "command",
+    "unsandboxed",
+    "mcp",
+];
+
+fn parse_permission_rule(rule: &str) -> Option<(&str, &str)> {
+    let rule = rule.trim();
+    let (action, target) = rule.strip_suffix(')')?.split_once('(')?;
+    let action = action.trim();
+    let target = target.trim();
+    if target.is_empty() || !PERMISSION_ACTIONS.contains(&action) {
+        return None;
+    }
+    Some((action, target))
+}
+
+fn permission_rules<'a>(permissions: &'a Value, list: &str) -> impl Iterator<Item = &'a str> {
+    permissions
+        .get(list)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+}
+
+fn is_risky_allow(rule: &str) -> bool {
+    let Some((action, target)) = parse_permission_rule(rule) else {
+        return false;
+    };
+    if target == "*" {
+        return true;
+    }
+    matches!(action, "command" | "unsandboxed")
+        && crate::ai_guard::rubric::is_destructive(target.strip_prefix("regex:").unwrap_or(target))
+}
+
+/// Whether a higher-priority rule fully covers an allow rule. Antigravity's
+/// command rules match literal word prefixes, while `*` covers an entire action
+/// namespace. Regex containment cannot be proven cheaply, so only identical
+/// regex rules are treated as covering one another.
+fn permission_rule_covers(higher: &str, allowed: &str) -> bool {
+    let (Some((higher_action, higher_target)), Some((allow_action, allow_target))) = (
+        parse_permission_rule(higher),
+        parse_permission_rule(allowed),
+    ) else {
+        return false;
+    };
+    if higher_action != allow_action {
+        return false;
+    }
+    if higher_target == "*" || higher_target == allow_target {
+        return true;
+    }
+    if matches!(higher_action, "command" | "unsandboxed")
+        && !higher_target.starts_with("regex:")
+        && !allow_target.starts_with("regex:")
+    {
+        return allow_target
+            .strip_prefix(higher_target)
+            .is_some_and(|rest| rest.starts_with(char::is_whitespace));
+    }
+    false
+}
+
+/// Emit one finding per effective broad/destructive standing allow rule.
+/// `deny` and `ask` are read first because either one overrides a matching
+/// `allow`; a broad allow that is completely shadowed does not auto-approve.
+pub(crate) fn emit_permission_lists(v: &Value, out: &mut Vec<AiGuardReason>) {
+    let Some(permissions) = v.get("permissions") else {
+        return;
+    };
+    let deny: Vec<&str> = permission_rules(permissions, "deny").collect();
+    let ask: Vec<&str> = permission_rules(permissions, "ask").collect();
+    for rule in permission_rules(permissions, "allow") {
+        if !is_risky_allow(rule)
+            || deny
+                .iter()
+                .any(|higher| permission_rule_covers(higher, rule))
+            || ask
+                .iter()
+                .any(|higher| permission_rule_covers(higher, rule))
+        {
+            continue;
+        }
+        out.push(AiGuardReason::AutoApprovalEnabled {
+            mode: format!("permissions.allow:{rule}"),
+        });
     }
 }
 
@@ -219,7 +310,7 @@ mod tests {
     }
     #[test]
     fn always_proceed_emits_auto_approval() {
-        // agy 1.0.8: unsandboxed auto-execute — the highest-risk persisted mode.
+        // agy 1.2.0: unsandboxed auto-execute — the highest-risk persisted mode.
         let d = tempdir().unwrap();
         write_settings(d.path(), r#"{"toolPermission":"always-proceed"}"#);
         assert!(assess(d.path()).iter().any(
@@ -228,7 +319,7 @@ mod tests {
     }
     #[test]
     fn proceed_in_sandbox_emits_auto_approval() {
-        // agy 1.0.8: auto-execute confined to the sandbox — still no per-action review.
+        // agy 1.2.0: auto-execute in the sandbox — still no per-action review.
         let d = tempdir().unwrap();
         write_settings(d.path(), r#"{"toolPermission":"proceed-in-sandbox"}"#);
         assert!(assess(d.path()).iter().any(
@@ -237,14 +328,105 @@ mod tests {
     }
     #[test]
     fn auto_approve_literal_is_not_flagged() {
-        // agy 1.0.8 rejects `auto-approve` as an unrecognized settings value and
-        // falls back to `request-review`, so the file is safe at runtime —
-        // flagging it would be a false positive. (Hardware-verified, #158.)
+        // agy 1.2.0 preserves unknown values. The tested headless command still
+        // required review, but unknown values are not treated as a stable mode.
         let d = tempdir().unwrap();
         write_settings(d.path(), r#"{"toolPermission":"auto-approve"}"#);
         assert!(!assess(d.path())
             .iter()
             .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
+    }
+    #[test]
+    fn broad_global_permission_allow_emits_auto_approval() {
+        let d = tempdir().unwrap();
+        write_settings(
+            d.path(),
+            r#"{"permissions":{"allow":["command(*)","read_url(*)","mcp(*)"]}}"#,
+        );
+        let reasons = assess(d.path());
+        let modes: Vec<&str> = reasons
+            .iter()
+            .filter_map(|reason| match reason {
+                AiGuardReason::AutoApprovalEnabled { mode } => Some(mode.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            modes,
+            [
+                "permissions.allow:command(*)",
+                "permissions.allow:read_url(*)",
+                "permissions.allow:mcp(*)",
+            ]
+        );
+    }
+    #[test]
+    fn scoped_permission_allow_is_not_flagged() {
+        let d = tempdir().unwrap();
+        write_settings(
+            d.path(),
+            r#"{"permissions":{"allow":["command(echo)","read_url(example.com)","mcp(linter/*)"]}}"#,
+        );
+        assert!(!assess(d.path())
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
+    }
+    #[test]
+    fn destructive_command_allow_emits_auto_approval() {
+        let d = tempdir().unwrap();
+        write_settings(
+            d.path(),
+            r#"{"permissions":{"allow":["command(rm -rf /)"]}}"#,
+        );
+        assert!(assess(d.path()).iter().any(
+            |r| matches!(r, AiGuardReason::AutoApprovalEnabled { mode } if mode == "permissions.allow:command(rm -rf /)")
+        ));
+    }
+    #[test]
+    fn deny_or_ask_global_rule_shadows_command_allow() {
+        for list in ["deny", "ask"] {
+            let d = tempdir().unwrap();
+            write_settings(
+                d.path(),
+                &format!(
+                    r#"{{"permissions":{{"allow":["command(*)","command(rm -rf /)"],"{list}":["command(*)"]}}}}"#
+                ),
+            );
+            assert!(!assess(d.path())
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
+        }
+    }
+    #[test]
+    fn higher_priority_command_prefix_shadows_destructive_allow() {
+        let d = tempdir().unwrap();
+        write_settings(
+            d.path(),
+            r#"{"permissions":{"allow":["command(rm -rf /)"],"ask":["command(rm)"]}}"#,
+        );
+        assert!(!assess(d.path())
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
+    }
+    #[test]
+    fn unrelated_higher_priority_rule_does_not_shadow_broad_allow() {
+        let d = tempdir().unwrap();
+        write_settings(
+            d.path(),
+            r#"{"permissions":{"allow":["command(*)"],"deny":["read_url(*)"],"ask":["command(git)"]}}"#,
+        );
+        assert!(assess(d.path()).iter().any(
+            |r| matches!(r, AiGuardReason::AutoApprovalEnabled { mode } if mode == "permissions.allow:command(*)")
+        ));
+    }
+    #[test]
+    fn malformed_permission_lists_and_rules_are_ignored() {
+        let d = tempdir().unwrap();
+        write_settings(
+            d.path(),
+            r#"{"permissions":{"allow":[null,7,"command()","unknown(*)"],"ask":"command(*)","deny":{}}}"#,
+        );
+        assert!(assess(d.path()).is_empty());
     }
     #[test]
     fn permissions_allow_all_emits_auto_approval() {
@@ -255,12 +437,14 @@ mod tests {
             .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
     }
     #[test]
-    fn request_review_is_safe() {
-        let d = tempdir().unwrap();
-        write_settings(d.path(), r#"{"toolPermission":"request-review"}"#);
-        assert!(!assess(d.path())
-            .iter()
-            .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
+    fn review_modes_are_safe() {
+        for mode in ["request-review", "strict"] {
+            let d = tempdir().unwrap();
+            write_settings(d.path(), &format!(r#"{{"toolPermission":"{mode}"}}"#));
+            assert!(!assess(d.path())
+                .iter()
+                .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
+        }
     }
     #[test]
     fn gemini_approval_mode_no_longer_matches() {
@@ -341,5 +525,20 @@ mod tests {
             .iter()
             .any(|r| matches!(r, AiGuardReason::AutoApprovalEnabled { .. })));
         assert_eq!(p.scope(), AiGuardScope::Project { path: repo });
+    }
+    #[test]
+    fn project_permission_lists_are_not_scanned() {
+        let d = tempdir().unwrap();
+        let repo = d.path().join("repoX");
+        std::fs::create_dir_all(repo.join(".antigravity")).unwrap();
+        std::fs::write(
+            repo.join(".antigravity").join("settings.json"),
+            r#"{"permissions":{"allow":["command(*)"]}}"#,
+        )
+        .unwrap();
+        let reasons = AntigravityProjectParser { repo_root: repo }
+            .assess(Path::new("/unused"))
+            .unwrap();
+        assert!(reasons.is_empty());
     }
 }
