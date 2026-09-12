@@ -7,6 +7,15 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-12
+
+### Fixed
+
+- Retry absent or replaced filesystem watch roots every five seconds without
+  recursively watching parent directories. Replay current files after successful
+  subscription, cancel recovery when targets are removed, and retain failed
+  registrations for retry with both native and polling backends (#219).
+
 ## [0.8.1] - 2026-09-12
 
 ### Fixed

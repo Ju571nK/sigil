@@ -62,9 +62,25 @@ exemptions do not exempt hidden text, contradictions, or drift.
 
 Built-in watch targets now cover tool/server caches and local policy sources
 (#218). Operators overriding target paths must include these paths themselves.
-Targets absent at daemon startup may still require restart after directory
-creation (#219); heartbeat remains the fallback. Canonicalize parser watch prefixes
+The #219 watcher update retains absent literal roots and retries subscriptions
+every five seconds without adding recursive ancestor watches. After registration,
+it streams existing regular files through the normal event pipeline to cover the
+creation-to-subscription gap. This is current-state recovery, not reconstruction
+of transient files already removed before the retry. Unreadable paths and event
+rate limits still require heartbeat/reconciliation fallback. Wildcard directory
+ancestors in non-recursive targets remain a separate limitation (#223).
+Canonicalize parser watch prefixes
 so macOS `/etc` and symlinked HOME paths match normalized events.
 
 Deploy the updated server before agents: new reason enum variants require a
 consumer that recognizes them. Controls remain additive and report-only.
+
+## Watcher Follow-up Compatibility Check
+
+2026-09-12 (#219): local `codex --version` remains `codex-cli 0.147.0`.
+Rechecked the [official MCP documentation](https://learn.chatgpt.com/docs/extend/mcp):
+user/project MCP configuration and server instructions remain documented. The
+cache layout above remains locally measured, not a promised public interface.
+This fix changes generic filesystem delivery only; configuration precedence,
+approval modes, hooks/payloads, MCP parsing, unattended behavior, and product
+enforcement gates are unchanged. No new vendor-runtime enforcement claim is made.
