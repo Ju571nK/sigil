@@ -7,6 +7,17 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-12
+
+### Fixed
+
+- Include all 30 binaries from the five Linux, macOS, and Windows release
+  archives in the signed build manifest. Preserve canonical binary names for
+  Windows `.exe` files so `sigil doctor --verify-self` can find them (#221).
+- Block signed release publication unless native runners for all five targets
+  verify their downloaded agent and reject a tampered manifest. Add regression
+  tests for incomplete archives, duplicate entries, and unsafe archive members.
+
 ## [0.8.0] - 2026-09-12
 
 ### Added
