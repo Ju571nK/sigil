@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod gemini;
 pub(crate) mod instruction_scan;
 pub mod mcp_scan;
+pub(crate) mod policy_controls;
 
 use serde_json::Value;
 use sigil_core::event::{AiGuardControl, AiGuardReason, AiGuardScope, AiTool};

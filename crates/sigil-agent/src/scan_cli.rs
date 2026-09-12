@@ -315,7 +315,10 @@ fn render_human(report: &Report) -> String {
     for row in &report.rows {
         for control in row.controls.iter().flatten() {
             if !controls_heading {
-                let _ = writeln!(out, "Observed controls");
+                let _ = writeln!(
+                    out,
+                    "Observed controls (configuration only; enforcement unverified)"
+                );
                 controls_heading = true;
             }
             let _ = writeln!(
