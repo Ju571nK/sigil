@@ -7,6 +7,47 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-12
+
+### Added
+
+- Report-only AI Guard controls across scan, daemon, IPC, event history, and
+  fleet detail (#207). Controls preserve absent versus empty reporting and
+  never reduce risk scores or suppress findings.
+- Allowlisted Claude managed-file and Codex requirements-file observations
+  with exact source paths (#199, #200). `configured` controls describe local
+  files only, not effective cloud/MDM policy or verified runtime enforcement.
+- Persistent, per-server MCP metadata baselines beside state.db (#201).
+  Detect changed surfaces, new tools, schema expansion, and advisory read-only
+  hint contradictions; scan server-info text and v3/v4 cache fields. Repeated
+  changes retain distinct evidence hashes. One-shot scan remains stateless.
+- Claude auto-mode/default-rule, non-command hook, loop-prompt, and Codex
+  standing-approval detection from the earlier #199/#200 increment (#206).
+- Antigravity enforcement adapter limited to the hardware-verified contract
+  (#208), with compatibility re-probe evidence (#202). Existing unsupported
+  modes remain gated.
+
+### Fixed
+
+- Preserve inherited Claude permission rules when merging local settings
+  instead of losing broad allows behind an unrelated override (#216).
+- Scan all MCP cache variants so an older clean snapshot cannot hide poisoned
+  metadata; enforce the schema text cap for a single oversized string (#217).
+- Add default watcher coverage for MCP caches and local managed policies,
+  and resolve canonical parser paths on macOS (#218).
+- Detect broad Antigravity permission allows (#209).
+
+### Upgrade Notes
+
+- Upgrade sigil-server before agents: new MCP reason variants require an
+  updated consumer. Manager rendering of controls remains a companion change.
+- MCP baselines are first-observed references, not user approvals. Review
+  metadata before deliberately resetting a reference. Keep the baseline
+  directory protected with the agent's state files.
+- #199/#200 remain open for other configuration scopes and effective-policy
+  verification. Missing watch directories created after startup may require
+  restart; the heartbeat fallback remains in place (#219).
+
 ## [0.7.2] - 2026-07-26
 
 ### Security
