@@ -10,6 +10,78 @@ use std::path::{Path, PathBuf};
 const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 const MAX_DROP_INS: usize = 128;
 
+pub(super) fn codex_requirements_path() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+            .join("OpenAI")
+            .join("Codex")
+            .join("requirements.toml")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        PathBuf::from("/etc/codex/requirements.toml")
+    }
+}
+
+pub(super) fn codex_controls(path: &Path) -> Result<Vec<AiGuardControl>, AssessError> {
+    let Some(text) = read_policy(path)? else {
+        return Ok(Vec::new());
+    };
+    let policy: toml::Value = toml::from_str(&text).map_err(|e| AssessError::Parse {
+        path: path.into(),
+        message: e.to_string(),
+    })?;
+    let mut out = Vec::new();
+    for (key, expected) in [
+        ("allow_managed_hooks_only", true),
+        ("allow_remote_control", false),
+        ("allow_login_shell", false),
+        ("allow_browser_and_computer_use", false),
+        ("allow_appshots", false),
+    ] {
+        if policy.get(key).and_then(toml::Value::as_bool) == Some(expected) {
+            out.push(observation("codex", path, key, Value::Bool(expected)));
+        }
+    }
+    // Do not infer protection from arbitrary profiles or granular approval
+    // names. Only bounded, known restrictive enum lists qualify.
+    for (key, allowed) in [
+        (
+            "allowed_approval_policies",
+            &["on-request", "untrusted"][..],
+        ),
+        (
+            "allowed_sandbox_modes",
+            &["read-only", "workspace-write"][..],
+        ),
+        ("allowed_approvals_reviewers", &["user"][..]),
+    ] {
+        let Some(values) = policy.get(key).and_then(toml::Value::as_array) else {
+            continue;
+        };
+        if values.is_empty() || values.len() > 16 {
+            continue;
+        }
+        let Some(mut strings) = values
+            .iter()
+            .map(toml::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        if strings.iter().any(|value| !allowed.contains(value)) {
+            continue;
+        }
+        strings.sort_unstable();
+        strings.dedup();
+        out.push(observation("codex", path, key, serde_json::json!(strings)));
+    }
+    Ok(out)
+}
+
 pub(super) fn claude_policy_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -170,6 +242,42 @@ pub(super) fn claude_controls(dir: &Path) -> Result<Vec<AiGuardControl>, AssessE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_requirements_restrictions_are_explicit_and_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("requirements.toml");
+        assert!(codex_controls(&path).unwrap().is_empty());
+        std::fs::write(&path, "allow_managed_hooks_only = true\nallow_remote_control = false\nallowed_sandbox_modes = ['workspace-write', 'read-only', 'read-only']\nallowed_approval_policies = ['on-request']\nsecret = 'not-evidence'\n").unwrap();
+        let controls = codex_controls(&path).unwrap();
+        assert_eq!(controls.len(), 4);
+        assert_eq!(
+            controls
+                .iter()
+                .find(|c| c.setting == "allowed_sandbox_modes")
+                .unwrap()
+                .value,
+            serde_json::json!(["read-only", "workspace-write"])
+        );
+        assert!(controls
+            .iter()
+            .all(|c| c.source_path == path && c.id.starts_with("codex.configured.")));
+        assert!(!serde_json::to_string(&controls)
+            .unwrap()
+            .contains("not-evidence"));
+        std::fs::write(&path, "allow_managed_hooks_only = false\nallow_remote_control = true\nallowed_sandbox_modes = ['danger-full-access']\nallowed_approval_policies = ['granular']\nallowed_approvals_reviewers = []\n").unwrap();
+        assert!(codex_controls(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn codex_wrong_types_and_unknown_enums_never_claim_restrictions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("requirements.toml");
+        std::fs::write(&path, "allow_remote_control = 'false'\nallowed_approval_policies = ['on-request', 'future']\nallowed_sandbox_modes = ['read-only', 1]\n").unwrap();
+        assert!(codex_controls(&path).unwrap().is_empty());
+        std::fs::write(&path, "[broken").unwrap();
+        assert!(codex_controls(&path).is_err());
+    }
 
     #[test]
     fn claude_reports_only_allowlisted_local_file_restrictions() {

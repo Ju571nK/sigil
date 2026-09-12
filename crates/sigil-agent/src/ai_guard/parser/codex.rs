@@ -63,7 +63,17 @@ impl AiGuardParser for CodexParser {
             // #200 — a standing command-approval rule appearing here is an
             // OFF→ON drift, so the daemon must re-assess when the dir changes.
             home_dir.join(".codex").join("rules"),
+            super::policy_controls::codex_requirements_path(),
         ]
+    }
+
+    fn assess_posture(&self, home_dir: &Path) -> Result<super::AiGuardAssessment, AssessError> {
+        Ok(super::AiGuardAssessment {
+            reasons: self.assess(home_dir)?,
+            controls: Some(super::policy_controls::codex_controls(
+                &super::policy_controls::codex_requirements_path(),
+            )?),
+        })
     }
 
     fn assess(&self, home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError> {

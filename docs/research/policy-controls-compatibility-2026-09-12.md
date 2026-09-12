@@ -27,6 +27,25 @@ Wrong types and inactive sandbox subsettings are not reported. The array form
 of strict-plugin customization is deliberately not mapped in this increment.
 Hook enforcement and existing compatibility gates are unchanged.
 
+## Codex (#200)
+
+[Managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration)
+places requirements at `/etc/codex/requirements.toml` on Unix and
+`%ProgramData%\OpenAI\Codex\requirements.toml` on Windows. Cloud, legacy
+managed-config, and macOS MDM layers can override that file. The new parser
+therefore reports only the local file, not effective requirements.
+
+The [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+uses `allowed_approval_policies`, `allowed_sandbox_modes`, and
+`allowed_permission_profiles`, not the singular fields guessed in #207.
+Permission profiles now have a name-to-boolean table; arbitrary profile names
+do not prove restricted filesystem access. This increment maps documented
+restrictive booleans and bounded approval/sandbox/reviewer enum lists, excluding
+`never`, `granular`, full access, unknown enums, and custom profiles. Legacy
+sandbox restrictions do not attest protection for newer permission profiles.
+Runtime config precedence, granular approval experiments, hook enforcement,
+remote pairing state, and MDM/cloud acquisition remain gated follow-ups.
+
 ## Observation Boundary
 
 Controls use `PRODUCT.configured.KEY` IDs and retain their actual file path.
