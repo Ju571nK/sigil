@@ -24,6 +24,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: release manifest regressions
+        run: python3 -m unittest discover -s tests -p test_release_manifest.py -v
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy

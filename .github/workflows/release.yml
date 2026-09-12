@@ -130,62 +130,99 @@ jobs:
           path: pkgs/*
           if-no-files-found: error
 
+  manifest:
+    name: sign complete build manifest
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    env:
+      SIGNING_KEY: ${{ secrets.SIGIL_BUILD_SIGNING_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: '*-*-*'
+          merge-multiple: true
+      - name: Sign build manifest
+        id: sign
+        if: ${{ env.SIGNING_KEY != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$(mktemp)"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$SIGNING_KEY" > "$key"
+          unset SIGNING_KEY
+          python3 packaging/release_manifest.py sign \
+            --dist dist --version "${GITHUB_REF_NAME#v}" --key "$key" \
+            --git-sha "$GITHUB_SHA" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo 'signed=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        if: steps.sign.outputs.signed == 'true'
+        with:
+          name: build-manifest
+          path: dist/build-manifest.json
+          if-no-files-found: error
+
+  verify:
+    name: verify signed release ${{ matrix.target }}
+    needs: manifest
+    if: needs.manifest.outputs.signed == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.target }}
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-manifest
+          path: dist
+      - name: Verify native binary and reject tampered signature
+        shell: bash
+        run: |
+          python3 packaging/release_manifest.py verify \
+            --dist dist --version "${GITHUB_REF_NAME#v}" \
+            --target "${{ matrix.target }}" --git-sha "$GITHUB_SHA"
+
   release:
     name: publish release
-    needs: [build, packages]
+    needs: [build, packages, manifest, verify]
+    # Unsigned repositories remain supported, but signed builds cannot bypass verification.
+    if: >-
+      ${{ always() && !cancelled() && needs.build.result == 'success' &&
+          needs.packages.result == 'success' && needs.manifest.result == 'success' &&
+          ((needs.manifest.outputs.signed == 'true' && needs.verify.result == 'success') ||
+           (needs.manifest.outputs.signed != 'true' && needs.verify.result == 'skipped')) }}
     runs-on: ubuntu-latest
-    env:
-      # Empty unless the repo provisions the secret; gates the signing step below.
-      SIGNING_KEY: ${{ secrets.SIGIL_BUILD_SIGNING_KEY }}
     steps:
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-
       - name: Checksums
         working-directory: dist
-        # `sigil*` (not `sigil-*`): the agent package is named `sigil`, so its
-        # .deb is `sigil_<ver>-1_<arch>.deb` (underscore). A `sigil-*` glob
-        # matches every other artifact (`sigil-sender_…`, the `sigil-…` rpms,
-        # the `sigil-<ver>-…` tarballs) but silently skips the agent .deb. (#138)
+        # Include the agent .deb, whose filename begins with sigil_ (#138).
         run: sha256sum sigil* | tee SHA256SUMS
-
-      # Phase 3c (#13): sign a per-arch blake3 build manifest with the dedicated
-      # build-signing key. Runs only when the secret is set; the freshly-built
-      # x86_64 sigil-sign signs it (dogfood). `sigil doctor --verify-self`
-      # checks a host's binary against this manifest + SIGIL_BUILD_PUBKEYS.
-      - name: Sign build manifest
-        if: ${{ env.SIGNING_KEY != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
-          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          tar -xzf "dist/sigil-${ver}-x86_64-unknown-linux-musl.tar.gz" -C /tmp
-          SIGN="/tmp/sigil-${ver}-x86_64-unknown-linux-musl/sigil-sign"
-          chmod +x "$SIGN"
-          # Hash each binary in the two static Linux tarballs (the canonical
-          # daemon binaries install.sh ships); one --artifact per (name,target).
-          args=()
-          for tgt in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-            tgz="dist/sigil-${ver}-${tgt}.tar.gz"
-            d="$(mktemp -d)"; tar -xzf "$tgz" -C "$d"
-            inner="$d/sigil-${ver}-${tgt}"
-            for b in sigil sigil-sender sigil-server sigil-sign sigil-mcp sigil-hook; do
-              args+=(--artifact "name=${b},target=${tgt},file=${inner}/${b}")
-            done
-          done
-          printf '%s' "$SIGNING_KEY" > /tmp/build-key.json
-          "$SIGN" manifest \
-            --key /tmp/build-key.json \
-            --git-sha "$GITHUB_SHA" \
-            --run-url "$run_url" \
-            "${args[@]}" \
-            --out dist/build-manifest.json
-          rm -f /tmp/build-key.json
-          echo ">> signed build manifest:"
-          head -c 600 dist/build-manifest.json; echo
 
       # Supplementary supply-chain attestation. The enforced trust root is the
       # ed25519 build-manifest signature produced in the build step above; this
