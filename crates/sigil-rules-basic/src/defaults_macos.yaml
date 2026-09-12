@@ -38,6 +38,8 @@ targets:
       - "~/.claude/settings.json"
       - "~/.claude/settings.local.json"
       - "~/.claude/hooks/"
+      - "/Library/Application Support/ClaudeCode/managed-settings.json"
+      - "/Library/Application Support/ClaudeCode/managed-settings.d/"
     recursive: true
     follow_symlinks: false
 
@@ -47,7 +49,10 @@ targets:
     platform: macos
     paths:
       - "~/.codex/config.toml"
-    recursive: false
+      - "/etc/codex/requirements.toml"
+      - "~/.codex/cache/codex_apps_tools/"
+      - "~/.codex/cache/codex_apps_server_info/"
+    recursive: true
     follow_symlinks: false
 
   - id: ai-guard-continue-config-macos
@@ -58,4 +63,3 @@ targets:
       - "~/.continue/config.json"
     recursive: false
     follow_symlinks: false
-

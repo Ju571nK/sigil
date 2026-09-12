@@ -138,19 +138,17 @@ pub async fn run(mut ctx: TaskCtx) {
 /// Match an incoming change path against a watched path/dir. A watched dir
 /// matches any path inside it; a watched file matches by exact equality.
 ///
-/// Assumes both `incoming` and `watched` are already canonical. Incoming
-/// paths come from the hasher, which receives them post-`dunce::canonicalize`
-/// from the normalizer. Watched paths come from each parser's
-/// `watched_paths(home_dir)`, which uses raw `home_dir.join(...)` — no
-/// explicit canonicalization. On standard macOS / Linux the user's HOME is
-/// canonical, so this assumption holds. If a future deployment uses a
-/// symlinked HOME (rare), file-change triggers may fail to match silently
-/// and the 24h heartbeat will still keep the assessment live.
+/// Incoming paths are canonical. Resolve the watched prefix too, including
+/// macOS /etc -> /private/etc and missing policy leaves under existing parents.
 fn path_matches(incoming: &std::path::Path, watched: &std::path::Path) -> bool {
+    if incoming.starts_with(watched) {
+        return true;
+    }
+    let watched = crate::normalizer::canonicalize_glob_prefix(watched);
     if incoming == watched {
         return true;
     }
-    incoming.starts_with(watched)
+    incoming.starts_with(&watched)
 }
 
 async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_emit: bool) {
@@ -814,6 +812,62 @@ mod tests {
             rubric: crate::ai_guard::default_rubric_handle(),
         };
         (ctx, events)
+    }
+
+    #[tokio::test]
+    async fn mcp_changes_reuse_toggle_events_and_repeat_edits_update_evidence() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join(".codex/cache/codex_apps_tools");
+        std::fs::create_dir_all(&cache).unwrap();
+        let write = |desc: &str| {
+            std::fs::write(
+                cache.join("a.json"),
+                serde_json::json!({
+                    "tools":[{"server_name":"third","tool":{"name":"read","description":desc}}]
+                })
+                .to_string(),
+            )
+            .unwrap()
+        };
+        let parser =
+            crate::ai_guard::CodexToolCacheParser::with_baseline(home.path().join("baselines"));
+        let (mut ctx, mut events) = drift_ctx();
+        ctx.home_dir = home.path().into();
+        write("original");
+        eval_and_maybe_emit(&parser, &ctx, false).await;
+        assert!(drain_drift_toggles(&mut events).is_empty());
+        write("changed");
+        eval_and_maybe_emit(&parser, &ctx, false).await;
+        assert_eq!(
+            drain_drift_toggles(&mut events),
+            vec!["mcp_tool_surface_drift"]
+        );
+        write("changed again");
+        eval_and_maybe_emit(&parser, &ctx, false).await;
+        let event = events.try_recv().unwrap().event;
+        assert!(matches!(
+            event.evidence,
+            Evidence::AiGuardRiskAssessed {
+                is_reattestation: false,
+                ..
+            }
+        ));
+        assert!(events.try_recv().is_err());
+        eval_and_maybe_emit(&parser, &ctx, false).await;
+        assert!(events.try_recv().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watched_policy_path_resolves_symlinked_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let incoming = real.canonicalize().unwrap().join("requirements.toml");
+        assert!(path_matches(&incoming, &link.join("requirements.toml")));
+        assert!(!path_matches(&incoming, &link.join("other.toml")));
     }
 
     /// Drain the channel and return only the `AiGuardToggleDrift` toggles, in

@@ -71,6 +71,8 @@ targets:
       - "~/.claude/settings.json"
       - "~/.claude/settings.local.json"
       - "~/.claude/hooks/"
+      - "/etc/claude-code/managed-settings.json"
+      - "/etc/claude-code/managed-settings.d/"
     recursive: true
     follow_symlinks: false
 
@@ -80,7 +82,10 @@ targets:
     platform: linux
     paths:
       - "~/.codex/config.toml"
-    recursive: false
+      - "/etc/codex/requirements.toml"
+      - "~/.codex/cache/codex_apps_tools/"
+      - "~/.codex/cache/codex_apps_server_info/"
+    recursive: true
     follow_symlinks: false
 
   - id: claude-desktop-config-linux

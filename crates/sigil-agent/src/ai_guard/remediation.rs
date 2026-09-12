@@ -69,6 +69,12 @@ pub fn hint_for_reason(reason: &AiGuardReason) -> &'static str {
         McpToolHiddenText { .. } => {
             "An MCP tool's advertised text contains hidden or deceptive Unicode (zero-width, bidi, or homoglyphs) — inspect the raw metadata and remove the server unless you trust it."
         }
+        McpToolSurfaceDrift { .. } | McpUnapprovedNewTool { .. } | McpSchemaPrivilegeExpansion { .. } => {
+            "Review cached MCP metadata changes against the daemon baseline before trusting the tool. A first-observed baseline is not approval."
+        }
+        McpReadOnlyHintContradiction { .. } => {
+            "Review the tool implementation and approval settings; do not trust a server-supplied readOnlyHint as proof of read-only behavior."
+        }
         McpToolNameShadow { .. } => {
             "The same MCP tool name is offered by multiple servers — a server may be shadowing a trusted tool; disambiguate or remove the untrusted one."
         }
