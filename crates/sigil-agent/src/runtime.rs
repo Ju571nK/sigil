@@ -1011,7 +1011,7 @@ fn glob_root_dir(p: &Path) -> PathBuf {
     match s.find(['*', '?', '[', ']', '{', '}']) {
         Some(idx) => {
             let head = &s[..idx];
-            let cut = head.rfind('/').map(|i| &s[..i]).unwrap_or(head);
+            let cut = head.rfind(['/', '\\']).map(|i| &s[..i]).unwrap_or(head);
             PathBuf::from(cut)
         }
         None => p.to_path_buf(),
@@ -1819,6 +1819,10 @@ mod tests {
 
     #[test]
     fn glob_root_dir_strips_glob_tail() {
+        assert_eq!(
+            super::glob_root_dir(std::path::Path::new(r"C:\repo/.cursor\rules\*")),
+            std::path::PathBuf::from(r"C:\repo/.cursor\rules"),
+        );
         // #156 — a recursive `**` glob target's watch root is the dir prefix
         // before the first glob metacharacter, not the literal glob path.
         assert_eq!(

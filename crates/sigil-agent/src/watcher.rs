@@ -48,13 +48,14 @@ struct RootIdentity {
     #[cfg(unix)]
     inode: u64,
     #[cfg(windows)]
-    created: u64,
+    file: same_file::Handle,
     #[cfg(not(any(unix, windows)))]
     created: Option<std::time::SystemTime>,
 }
 
 impl RootIdentity {
     fn read(path: &Path) -> std::io::Result<Self> {
+        #[cfg(not(windows))]
         let metadata = std::fs::metadata(path)?;
         #[cfg(unix)]
         {
@@ -66,9 +67,10 @@ impl RootIdentity {
         }
         #[cfg(windows)]
         {
-            use std::os::windows::fs::MetadataExt;
+            // Creation times can survive replacement (NTFS tunneling). Keep a
+            // handle open and compare volume/file IDs, not timestamps.
             Ok(Self {
-                created: metadata.creation_time(),
+                file: same_file::Handle::from_path(path)?,
             })
         }
         #[cfg(not(any(unix, windows)))]
@@ -352,7 +354,7 @@ mod tests {
             }
         })
         .await
-        .expect("missing recovered file event");
+        .unwrap_or_else(|_| panic!("missing recovered file event for {}", path.display()));
     }
 
     async fn recovers_missing_root(poll: Option<Duration>) {

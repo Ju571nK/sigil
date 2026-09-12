@@ -3157,6 +3157,7 @@ dependencies = [
  "parking_lot",
  "rand_core 0.6.4",
  "regex",
+ "same-file",
  "serde",
  "serde_json",
  "serde_yaml",
