@@ -923,6 +923,8 @@ mod tests {
                     None::<String>,
                 ),
                 crate::ai_guard::task::CachedAssessment {
+                    controls: None,
+                    controls_blake3: [0; 32],
                     score: 5.0,
                     bucket: sigil_core::event::AiGuardBucket::High,
                     reasons_blake3: [0u8; 32],
@@ -1295,6 +1297,8 @@ mod tests {
                         Some(pack_id.to_string()),
                     ),
                     crate::ai_guard::task::CachedAssessment {
+                        controls: None,
+                        controls_blake3: [0; 32],
                         score: 5.0,
                         bucket: sigil_core::event::AiGuardBucket::High,
                         reasons_blake3: [0u8; 32],

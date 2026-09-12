@@ -298,6 +298,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                         .format(&time::format_description::well_known::Rfc3339)
                         .unwrap_or_default();
                     RiskSummary {
+                        controls: cached.controls.clone(),
                         tool: *t,
                         scope: scope.clone(),
                         score: cached.score,
@@ -397,6 +398,7 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
                         .format(&time::format_description::well_known::Rfc3339)
                         .unwrap_or_default();
                     RiskSummary {
+                        controls: cached.controls.clone(),
                         tool: *t,
                         scope: scope.clone(),
                         score: cached.score,

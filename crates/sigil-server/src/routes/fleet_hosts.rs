@@ -284,14 +284,7 @@ pub async fn get_fleet_host_by_id(
             let tool_str = serde_json::to_value(tool).unwrap();
             (
                 tool_str.as_str().unwrap().to_string(),
-                json!({
-                    "score": entry.score,
-                    "bucket": entry.bucket,
-                    "assessed_ts": rfc3339(entry.assessed_ts),
-                    "is_reattestation": entry.is_reattestation,
-                    "scope": entry.scope,
-                    "reasons": entry.reasons,
-                }),
+                serde_json::to_value(entry).expect("risk entry serializes"),
             )
         })
         .collect();

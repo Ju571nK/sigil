@@ -53,6 +53,7 @@ pub fn apply_event(host: &mut HostSummary, event: &Event) {
         }
         Evidence::AiGuardRiskAssessed {
             tool,
+            controls,
             scope,
             score,
             bucket,
@@ -63,6 +64,7 @@ pub fn apply_event(host: &mut HostSummary, event: &Event) {
             host.current_risk.insert(
                 *tool,
                 crate::fleet_index::RiskEntry {
+                    controls: controls.clone(),
                     score: *score,
                     bucket: *bucket,
                     assessed_ts: event.ts,
@@ -172,6 +174,7 @@ mod tests {
 
         fn ai_guard(bucket: AiGuardBucket) -> Evidence {
             Evidence::AiGuardRiskAssessed {
+                controls: None,
                 tool: AiTool::ClaudeCode,
                 scope: AiGuardScope::UserGlobal,
                 score: 5.0,
@@ -320,6 +323,7 @@ mod tests {
         let mut h = HostSummary::new("h".into());
         let e = ev(
             Evidence::AiGuardRiskAssessed {
+                controls: None,
                 tool: AiTool::ClaudeCode,
                 scope: AiGuardScope::UserGlobal,
                 score: 7.2,
@@ -451,6 +455,7 @@ mod tests {
             &mut h,
             &ev(
                 Evidence::AiGuardRiskAssessed {
+                    controls: None,
                     tool: AiTool::ClaudeCode,
                     scope: AiGuardScope::UserGlobal,
                     score: 8.0,
@@ -527,6 +532,7 @@ mod tests {
             &mut h,
             &ev(
                 Evidence::AiGuardRiskAssessed {
+                    controls: None,
                     tool: AiTool::ClaudeCode,
                     scope: AiGuardScope::UserGlobal,
                     score: 2.0,

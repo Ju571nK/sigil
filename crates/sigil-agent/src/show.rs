@@ -979,6 +979,7 @@ mod tests {
         use sigil_core::event::{AiGuardBucket, AiGuardScope, AiTool};
         let payload = RiskPayload {
             assessments: vec![RiskSummary {
+                controls: None,
                 tool: AiTool::ClaudeCode,
                 scope: AiGuardScope::UserGlobal,
                 score: 3.5,
@@ -1020,6 +1021,7 @@ mod tests {
         use sigil_core::event::{AiGuardBucket, AiGuardScope, AiTool};
         let payload = RiskPayload {
             assessments: vec![RiskSummary {
+                controls: None,
                 tool: AiTool::Codex,
                 scope: AiGuardScope::Project {
                     path: std::path::PathBuf::from("/Users/alice/repo/.claude"),
