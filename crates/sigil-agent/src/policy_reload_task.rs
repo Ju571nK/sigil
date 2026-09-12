@@ -192,8 +192,8 @@ pub(crate) fn read_bundle_state(path: &std::path::Path) -> BundleState {
 }
 
 /// Inputs for the reload task. The `WatcherHandle` lives here for the task's
-/// lifetime (so the OS watcher stays alive); `watched_roots` is the diff base
-/// for the next reconcile (start it equal to the roots `run` registered).
+/// lifetime (so the OS watcher stays alive); `watched_roots` is the desired-root
+/// diff base, including missing roots retained for retry.
 pub struct ReloadCtx {
     pub policy_yaml_path: PathBuf,
     pub policy_version_rx: watch::Receiver<i64>,
@@ -236,6 +236,8 @@ pub struct ReloadCtx {
 
 pub async fn run(mut ctx: ReloadCtx) {
     let plat = ActivePlatform::new();
+    let mut root_tick = tokio::time::interval(crate::watcher::ROOT_RECHECK_INTERVAL);
+    root_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             biased;
@@ -254,6 +256,7 @@ pub async fn run(mut ctx: ReloadCtx) {
                 }
                 reload(&mut ctx, &plat);
             }
+            _ = root_tick.tick() => ctx.watcher.reconcile(),
         }
     }
 }
@@ -563,8 +566,14 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     // Re-seed the critical-tier warmup cache (idempotent — overwrites).
     let _ = crate::runtime::perform_warmup(&effective, &expanded_paths, &ctx.cache);
 
+    // Publish matchers before newly registered roots replay files from their gap.
+    let _ = ctx.targets_tx.send(Arc::new(normalizer::compile_targets(
+        &effective,
+        &expanded_paths,
+    )));
+
     // Reconcile watch roots on the live watcher. `watch`/`unwatch` failures are
-    // logged and tolerated, same as the startup `watch_all`.
+    // logged and tolerated; failed registrations remain pending for retry.
     let mut added = 0usize;
     let mut removed = 0usize;
     for old in &ctx.watched_roots {
@@ -588,11 +597,6 @@ pub(crate) fn reload(ctx: &mut ReloadCtx, plat: &ActivePlatform) {
     ctx.watched_roots = new_roots;
 
     let target_count = effective.targets.len();
-    let _ = ctx.targets_tx.send(Arc::new(normalizer::compile_targets(
-        &effective,
-        &expanded_paths,
-    )));
-
     tracing::info!(
         version,
         roots_added = added,

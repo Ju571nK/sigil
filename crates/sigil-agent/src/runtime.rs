@@ -1047,16 +1047,19 @@ pub(crate) fn expand_targets(
                 } else {
                     p.parent().map(PathBuf::from).unwrap_or_else(|| p.clone())
                 };
-                if parent.exists() {
-                    watch_roots.push((parent, t.recursive));
-                }
+                // Keep desired roots even before they exist; the watcher retries them (#219).
+                watch_roots.push((parent, t.recursive));
                 paths.push(p);
             }
         }
         expanded_paths.insert(t.id.clone(), paths);
     }
-    watch_roots.sort();
-    watch_roots.dedup();
+    // One backend subscription per path; recursive coverage wins shared roots.
+    let mut unique = std::collections::BTreeMap::new();
+    for (path, recursive) in watch_roots {
+        *unique.entry(path).or_insert(false) |= recursive;
+    }
+    let watch_roots = unique.into_iter().collect();
     (expanded_paths, watch_roots)
 }
 
@@ -1837,5 +1840,27 @@ mod tests {
             super::glob_root_dir(std::path::Path::new("/a/b/hooks")),
             std::path::PathBuf::from("/a/b/hooks")
         );
+    }
+
+    #[test]
+    fn expand_targets_retains_missing_roots_and_merges_recursive_coverage() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("absent/cache");
+        let yaml = format!(
+            "version: 1\ntargets:\n  - id: literal\n    description: literal\n    tier: standard\n    platform: any\n    paths: ['{}']\n    recursive: false\n  - id: recursive\n    description: recursive\n    tier: standard\n    platform: any\n    paths: ['{}']\n    recursive: true\n",
+            root.join("settings.json").display(), root.join("*").display(),
+        );
+        let eff = sigil_core::policy::merge(
+            sigil_core::policy::defaults().unwrap(),
+            Some(sigil_core::policy::parse(&yaml).unwrap()),
+            None,
+            sigil_core::policy::current_platform(),
+        )
+        .unwrap();
+        let (_, roots) = super::expand_targets(&eff, &crate::platform::ActivePlatform::new());
+        let expected = crate::normalizer::canonicalize_glob_prefix(&root);
+        let matching: Vec<_> = roots.iter().filter(|(path, _)| path == &expected).collect();
+        assert_eq!(matching, vec![&(expected, true)]);
+        assert!(!root.exists());
     }
 }
