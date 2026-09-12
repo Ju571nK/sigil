@@ -39,6 +39,8 @@ targets:
       - "%USERPROFILE%\\.claude\\settings.json"
       - "%USERPROFILE%\\.claude\\settings.local.json"
       - "%USERPROFILE%\\.claude\\hooks\\"
+      - "C:\\Program Files\\ClaudeCode\\managed-settings.json"
+      - "C:\\Program Files\\ClaudeCode\\managed-settings.d\\"
     recursive: true
     follow_symlinks: false
 
@@ -48,7 +50,10 @@ targets:
     platform: windows
     paths:
       - "%USERPROFILE%\\.codex\\config.toml"
-    recursive: false
+      - "%ProgramData%\\OpenAI\\Codex\\requirements.toml"
+      - "%USERPROFILE%\\.codex\\cache\\codex_apps_tools\\"
+      - "%USERPROFILE%\\.codex\\cache\\codex_apps_server_info\\"
+    recursive: true
     follow_symlinks: false
 
   - id: ai-guard-continue-config-windows
@@ -59,4 +64,3 @@ targets:
       - "%USERPROFILE%\\.continue\\config.json"
     recursive: false
     follow_symlinks: false
-

@@ -2,7 +2,7 @@
 
 Date: 2026-09-12. Design for #207; implementation contract for #199 gap 6 and
 #200 gap 5. Status: mechanism implemented on `codex/issue-207-controls`;
-product-specific reporting and manager display remain follow-ups.
+product-specific reporting and manager display are tracked separately.
 
 ## Decision
 
@@ -11,10 +11,14 @@ Record observed hardening settings as `controls` alongside `reasons` in
 plane preserves them. Controls are report-only and never subtract risk weights,
 change buckets, suppress findings, or authorize actions.
 
-An observation means that a supported configuration source explicitly enables a
-recognized restriction. It does not attest that the running product enforced it.
+An observation means that a supported configuration source explicitly configures a
+recognized restriction. It does not attest that the running product loaded or enforced it.
 Absent settings are silent. Disabled, malformed, unsupported, or overridden
-settings must not be presented as active controls.
+settings must not be presented as active controls. The product follow-up uses
+`PRODUCT.configured.KEY` identifiers for local-file observations, resolves
+overrides within that source, and explicitly leaves effective cloud/MDM/session
+policy unverified. No local-file observation is an active-control attestation.
+See [the compatibility check](policy-controls-compatibility-2026-09-12.md).
 
 This issue settles the representation and delivery contract. Product-specific
 parsers and claims about current vendor behavior remain in #199/#200, subject to

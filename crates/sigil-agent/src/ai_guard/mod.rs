@@ -8,6 +8,7 @@
 pub mod assess;
 pub mod command_scan;
 pub mod ext_script;
+pub(crate) mod mcp_baseline;
 pub mod parser;
 pub mod remediation;
 pub mod rubric;
@@ -66,10 +67,19 @@ pub fn default_rubric_handle() -> RubricHandle {
 /// `Application{app:"codex-mcp-tools"}`, so it renders as its own scan row
 /// distinct from `CodexParser`'s user-global row (scan groups by (tool,scope)).
 pub fn user_global_parsers() -> Vec<std::sync::Arc<dyn parser::AiGuardParser>> {
+    user_global_parsers_with_baseline(None)
+}
+
+pub(crate) fn user_global_parsers_with_baseline(
+    baseline: Option<std::path::PathBuf>,
+) -> Vec<std::sync::Arc<dyn parser::AiGuardParser>> {
     vec![
         std::sync::Arc::new(ClaudeCodeParser),
         std::sync::Arc::new(CodexParser),
-        std::sync::Arc::new(CodexToolCacheParser),
+        std::sync::Arc::new(match baseline {
+            Some(path) => CodexToolCacheParser::with_baseline(path),
+            None => CodexToolCacheParser::default(),
+        }),
         std::sync::Arc::new(ClaudeDesktopParser),
         std::sync::Arc::new(ContinueDevParser),
         std::sync::Arc::new(GeminiParser),

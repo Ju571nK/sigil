@@ -20,7 +20,7 @@ impl AiGuardParser for ClaudeCodeParser {
     }
 
     fn watched_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
-        vec![
+        let mut paths = vec![
             home_dir.join(".claude").join("settings.json"),
             home_dir.join(".claude").join("settings.local.json"),
             home_dir.join(".claude").join("hooks"),
@@ -30,7 +30,20 @@ impl AiGuardParser for ClaudeCodeParser {
             home_dir.join(".claude").join("scheduled-tasks"),
             // #199 — the other unattended-prompt file, same drift reason.
             home_dir.join(".claude").join("loop.md"),
-        ]
+        ];
+        paths.extend(super::policy_controls::claude_paths(
+            &super::policy_controls::claude_policy_dir(),
+        ));
+        paths
+    }
+
+    fn assess_posture(&self, home_dir: &Path) -> Result<super::AiGuardAssessment, AssessError> {
+        Ok(super::AiGuardAssessment {
+            reasons: self.assess(home_dir)?,
+            controls: Some(super::policy_controls::claude_controls(
+                &super::policy_controls::claude_policy_dir(),
+            )?),
+        })
     }
 
     fn collect_external_script_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
@@ -112,16 +125,29 @@ impl AiGuardParser for ClaudeCodeParser {
     }
 }
 
-/// Shallow merge: top-level keys from `overlay` win over `base`. Adequate for
-/// Claude's settings.json structure (permissions, hooks, mcpServers are each
-/// either fully overridden or absent in the overlay).
+/// Merge security settings recursively; permission/hook lists accumulate.
+/// The classifier's autoMode block is evaluated separately from the base file.
 pub(crate) fn merge_overlay(mut base: Value, overlay: Option<Value>) -> Value {
     let Some(overlay) = overlay else {
         return base;
     };
     if let (Value::Object(base_obj), Value::Object(over_obj)) = (&mut base, overlay) {
         for (k, v) in over_obj {
-            base_obj.insert(k, v);
+            match base_obj.get_mut(&k) {
+                Some(existing @ Value::Object(_)) if v.is_object() => {
+                    *existing = merge_overlay(existing.take(), Some(v));
+                }
+                Some(Value::Array(existing)) if v.is_array() => {
+                    for item in v.as_array().expect("array checked") {
+                        if !existing.contains(item) {
+                            existing.push(item.clone());
+                        }
+                    }
+                }
+                _ => {
+                    base_obj.insert(k, v);
+                }
+            }
         }
     }
     base
@@ -1179,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_local_overlay_overrides_base() {
+    fn settings_local_overlay_preserves_base_lists() {
         let dir = tempdir().unwrap();
         let claude = dir.path().join(".claude");
         std::fs::create_dir_all(&claude).unwrap();
@@ -1189,7 +1215,7 @@ mod tests {
             r#"{"permissions": {"allow": ["Read"], "deny": ["Bash"]}}"#,
         )
         .unwrap();
-        // Local overlay: empty deny → should win.
+        // An empty local list cannot erase inherited deny rules.
         std::fs::write(
             claude.join("settings.local.json"),
             r#"{"permissions": {"deny": []}}"#,
@@ -1198,11 +1224,32 @@ mod tests {
         let p = ClaudeCodeParser;
         let reasons = p.assess(dir.path()).unwrap();
         assert!(
-            reasons
+            !reasons
                 .iter()
                 .any(|r| matches!(r, AiGuardReason::PermissionsDenyEmpty)),
-            "overlay's empty deny should produce PermissionsDenyEmpty in {reasons:?}"
+            "overlay must retain inherited deny rules: {reasons:?}"
         );
+    }
+
+    #[test]
+    fn overlay_retains_broad_allow_and_combines_lists() {
+        let merged = merge_overlay(
+            serde_json::json!({"permissions":{"allow":["Bash(*)"],"deny":["Read(.env)"]}}),
+            Some(serde_json::json!({"permissions":{"allow":["Read","Bash(*)"],"deny":[]}})),
+        );
+        assert_eq!(
+            merged["permissions"]["allow"],
+            serde_json::json!(["Bash(*)", "Read"])
+        );
+        assert_eq!(
+            merged["permissions"]["deny"],
+            serde_json::json!(["Read(.env)"])
+        );
+        let mut reasons = Vec::new();
+        emit_permission_reasons(&merged, &mut reasons);
+        assert!(reasons
+            .iter()
+            .any(|r| matches!(r, AiGuardReason::PermissionsAllowBroad { .. })));
     }
 
     #[test]

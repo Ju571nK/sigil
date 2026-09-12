@@ -189,19 +189,29 @@ pub enum AiGuardReason {
         script_path: PathBuf,
     },
     /// Hook executes in host shell with no sandbox boundary.
-    NoSandbox { executor: String },
+    NoSandbox {
+        executor: String,
+    },
     /// Hook matcher catches all/most tool invocations.
-    BroadMatcher { hook_event: String, matcher: String },
+    BroadMatcher {
+        hook_event: String,
+        matcher: String,
+    },
     /// Permission deny array empty / missing.
     PermissionsDenyEmpty,
     /// Permission allow includes a wildcard rule.
-    PermissionsAllowBroad { rule: String },
+    PermissionsAllowBroad {
+        rule: String,
+    },
     /// Codex sandbox is fully disabled: top-level `sandbox_mode = "danger-full-access"`.
     /// Codex-only reason — Claude Code uses `NoSandbox{executor:"host_shell"}`
     /// instead, since Claude Code has no built-in sandbox concept.
     SandboxDisabled,
     /// MCP server pointing at a remote URL was added.
-    McpServerRemote { server_name: String, url: String },
+    McpServerRemote {
+        server_name: String,
+        url: String,
+    },
     /// MCP server using a local command (stdio transport) was added.
     /// Phase 3b.7 — rule pack engine emits this when a `command:` key is
     /// found under `mcpServers.*` in Gemini/Cursor settings files.
@@ -211,10 +221,14 @@ pub enum AiGuardReason {
     },
     /// Phase 3b.8 — an MCP server is marked `trust: true`, bypassing
     /// per-tool confirmation for every tool it exposes (Gemini).
-    TrustedMcpServer { server_name: String },
+    TrustedMcpServer {
+        server_name: String,
+    },
     /// Phase 3b.8 — the agent's default approval mode auto-approves a class
     /// of tool calls without prompting (e.g. Gemini `defaultApprovalMode: "auto_edit"`).
-    AutoApprovalEnabled { mode: String },
+    AutoApprovalEnabled {
+        mode: String,
+    },
     /// #127 — stdio MCP launcher matches an attack shape (shell + inline-exec
     /// flag, or a transient/writable path in command or args). Emitted in
     /// ADDITION to the `McpServerLocalCommand` baseline.
@@ -233,7 +247,9 @@ pub enum AiGuardReason {
     /// `mechanism` names the specific auto-enable signal (a settings key, or
     /// a tool's folder-trust default). Emitted as POSTURE; the launched
     /// server's own command is scored separately via `emit_one_server`.
-    ProjectMcpAutoEnabled { mechanism: String },
+    ProjectMcpAutoEnabled {
+        mechanism: String,
+    },
     /// #146 — a repo-local agent instruction file (CLAUDE.md / AGENTS.md /
     /// .cursorrules / .cursor/rules) contains a high-signal exec or
     /// prompt-injection directive. POSTURE only (advisory, never a hook block).
@@ -246,7 +262,9 @@ pub enum AiGuardReason {
     /// (`~/.claude/scheduled-tasks/<name>/SKILL.md` exists). The readable,
     /// persistent equivalent of a loop/goal running without a human in the
     /// loop. POSTURE only; `name` is the task subdir name.
-    UnattendedScheduledTask { name: String },
+    UnattendedScheduledTask {
+        name: String,
+    },
     /// #148 — an MCP tool's advertised description (or its namespace
     /// description) contains an imperative aimed at the model/client rather
     /// than documenting the tool — i.e. prompt injection embedded in tool
@@ -275,14 +293,42 @@ pub enum AiGuardReason {
     /// shadow a trusted tool's name so calls route to it. `servers` lists the
     /// colliding server names. POSTURE only. Cross-tool (computed over the
     /// whole snapshot, not per-tool).
-    McpToolNameShadow { tool: String, servers: Vec<String> },
+    McpToolNameShadow {
+        tool: String,
+        servers: Vec<String>,
+    },
+    /// Cached metadata differs from the daemon's first observed baseline.
+    /// Advisory only: a baseline is not a user approval or a signature.
+    McpToolSurfaceDrift {
+        server: String,
+        tool: String,
+        baseline_hash: String,
+        current_hash: String,
+    },
+    McpUnapprovedNewTool {
+        server: String,
+        tool: String,
+        current_hash: String,
+    },
+    McpSchemaPrivilegeExpansion {
+        server: String,
+        tool: String,
+    },
+    /// Server-supplied readOnlyHint conflicts with an execution/write parameter.
+    /// This heuristic does not prove the implementation writes or skips approval.
+    McpReadOnlyHintContradiction {
+        server: String,
+        tool: String,
+    },
     /// #199 — a classifier-mediated auto-approval mode (Claude Code's
     /// `autoMode`) had its built-in safety rules discarded. The deny lists
     /// splice the defaults in via a `"$defaults"` marker; a list written
     /// without it silently replaces them rather than extending them, so the
     /// shipped protections stop applying. `list` names which one
     /// (`soft_deny` | `hard_deny`). POSTURE only. Static.
-    AutoModeDefaultsDropped { list: String },
+    AutoModeDefaultsDropped {
+        list: String,
+    },
     /// #199 — a hook forwards the tool call off-box instead of running a local
     /// command: Claude Code's `http` hook type POSTs the full tool-call JSON to
     /// a URL, so every intercepted call (and its arguments) leaves the machine.
@@ -296,13 +342,17 @@ pub enum AiGuardReason {
     /// exists on disk (`loop.md`). Same class as
     /// [`AiGuardReason::UnattendedScheduledTask`]: work that repeats with no
     /// human watching. `source` is `user` or `project`. POSTURE only. Static.
-    UnattendedLoopPrompt { source: String },
+    UnattendedLoopPrompt {
+        source: String,
+    },
     /// #200 — a standing rule auto-approves commands by prefix without
     /// prompting (Codex's `~/.codex/rules/*.rules`
     /// `prefix_rule(pattern=[…], decision="allow")`). Unlike a session
     /// approval this persists, so every future command matching the prefix
     /// runs unattended. `pattern` is the approved prefix. POSTURE only. Static.
-    StandingCommandApproval { pattern: String },
+    StandingCommandApproval {
+        pattern: String,
+    },
 }
 
 /// #146 — category of instruction-file directive. Stable wire strings

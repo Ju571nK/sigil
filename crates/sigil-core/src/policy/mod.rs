@@ -913,6 +913,33 @@ targets:
     }
 
     #[test]
+    fn builtin_policies_watch_mcp_caches_and_local_managed_sources() {
+        for yaml in [
+            sigil_rules_basic::DEFAULTS_MACOS,
+            sigil_rules_basic::DEFAULTS_LINUX,
+            sigil_rules_basic::DEFAULTS_WINDOWS,
+        ] {
+            let doc = parse(yaml).unwrap();
+            for leaf in [
+                "codex_apps_tools",
+                "codex_apps_server_info",
+                "managed-settings.json",
+                "managed-settings.d",
+                "requirements.toml",
+            ] {
+                let target = doc
+                    .targets
+                    .iter()
+                    .find(|t| t.paths.iter().any(|p| p.contains(leaf)))
+                    .unwrap_or_else(|| panic!("missing watcher: {leaf}"));
+                assert_eq!(target.tier, Tier::Critical);
+                assert!(!target.disabled);
+                assert!(!target.follow_symlinks);
+            }
+        }
+    }
+
+    #[test]
     fn policy_document_continue_workspaces_round_trip() {
         let yaml = r#"version: 1
 host_id_strategy: machine_id
