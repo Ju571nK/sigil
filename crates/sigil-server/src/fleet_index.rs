@@ -10,6 +10,8 @@ use time::OffsetDateTime;
 /// without re-reading JSONL.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RiskEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<Vec<sigil_core::event::AiGuardControl>>,
     pub score: f32,
     pub bucket: AiGuardBucket,
     #[serde(with = "time::serde::rfc3339")]

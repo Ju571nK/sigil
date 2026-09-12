@@ -151,6 +151,8 @@ pub struct RiskPayload {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RiskSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<Vec<crate::event::AiGuardControl>>,
     pub tool: AiTool,
     pub scope: AiGuardScope,
     pub score: f32,
@@ -391,6 +393,7 @@ mod tests {
             targets: None,
             risk: Some(RiskPayload {
                 assessments: vec![RiskSummary {
+                    controls: None,
                     tool: AiTool::Codex,
                     scope: AiGuardScope::UserGlobal,
                     score: 2.0,
@@ -410,6 +413,22 @@ mod tests {
         let back: Response = serde_json::from_str(&s).unwrap();
         assert!(back.risk.is_some());
         assert_eq!(back.risk.as_ref().unwrap().assessments.len(), 1);
+        let legacy = serde_json::to_value(&resp).unwrap();
+        for controls in [
+            serde_json::json!([]),
+            serde_json::json!([{
+                "id":"fixture.restricted", "source_path":"/fixture/config",
+                "setting":"restricted", "value":true
+            }]),
+        ] {
+            let mut wire = legacy.clone();
+            wire["risk"]["assessments"][0]["controls"] = controls.clone();
+            let decoded: Response = serde_json::from_value(wire).unwrap();
+            assert_eq!(
+                serde_json::to_value(decoded).unwrap()["risk"]["assessments"][0]["controls"],
+                controls
+            );
+        }
     }
 
     #[test]
@@ -475,6 +494,7 @@ mod tests {
                     codex: 1,
                 },
                 latest_risk: vec![RiskSummary {
+                    controls: None,
                     tool: AiTool::ClaudeCode,
                     scope: AiGuardScope::UserGlobal,
                     score: 8.0,

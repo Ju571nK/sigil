@@ -26,6 +26,7 @@ pub struct ScanArgs {
 
 /// One assessed (tool, scope) — a configured tool, even if it scored clean.
 struct Row {
+    controls: Option<Vec<sigil_core::event::AiGuardControl>>,
     tool: AiTool,
     scope: AiGuardScope,
     score: f32,
@@ -88,20 +89,31 @@ fn build_report(home: &Path, cwd: Option<&Path>) -> Report {
         parsers.extend(project_parsers_for_dir(dir));
     }
 
+    build_report_with_parsers(home, &parsers)
+}
+
+fn build_report_with_parsers(home: &Path, parsers: &[Arc<dyn AiGuardParser>]) -> Report {
     let mut rows = Vec::new();
     let mut not_configured = Vec::new();
     let mut errors = Vec::new();
 
-    for p in &parsers {
+    for p in parsers {
         let configured = p.watched_paths(home).iter().any(|path| path.exists());
-        match p.assess(home) {
-            Ok(reasons) => {
-                if reasons.is_empty() && !configured {
+        match p.assess_posture(home) {
+            Ok(mut assessment) => {
+                assessment.normalize();
+                let reasons = assessment.reasons;
+                let controls = assessment.controls;
+                if reasons.is_empty()
+                    && controls.as_ref().map_or(true, Vec::is_empty)
+                    && !configured
+                {
                     // Tool not installed / not used — summarize in the footer.
                     not_configured.push(p.tool());
                 } else {
                     let score = rubric::score(&reasons);
                     rows.push(Row {
+                        controls,
                         tool: p.tool(),
                         scope: p.scope(),
                         score,
@@ -299,6 +311,24 @@ fn render_human(report: &Report) -> String {
         let _ = writeln!(out, "No configured AI agents found to assess.\n");
     }
 
+    let mut controls_heading = false;
+    for row in &report.rows {
+        for control in row.controls.iter().flatten() {
+            if !controls_heading {
+                let _ = writeln!(out, "Observed controls");
+                controls_heading = true;
+            }
+            let _ = writeln!(
+                out,
+                "  {} ({}) {} = {} [{}]",
+                tool_cli_label(row.tool),
+                scope_str(&row.scope),
+                control.setting,
+                control.value,
+                control.source_path.display()
+            );
+        }
+    }
     if !report.not_configured.is_empty() {
         let names = report
             .not_configured
@@ -358,7 +388,8 @@ fn report_json(report: &Report) -> serde_json::Value {
             "tools_assessed": tools,
             "findings": findings,
         },
-        "results": report.rows.iter().map(|r| json!({
+        "results": report.rows.iter().map(|r| {
+            let mut value = json!({
             "tool": tool_cli_label(r.tool),
             "scope": scope_str(&r.scope),
             "score": round1(r.score),
@@ -377,7 +408,12 @@ fn report_json(report: &Report) -> serde_json::Value {
                 }
                 v
             }).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+            });
+            if let Some(controls) = &r.controls {
+                value["controls"] = json!(controls);
+            }
+            value
+        }).collect::<Vec<_>>(),
         "not_configured": report.not_configured.iter()
             .map(|t| tool_cli_label(*t)).collect::<Vec<_>>(),
         "errors": report.errors.iter().map(|(t, s, m)| json!({
@@ -386,4 +422,61 @@ fn report_json(report: &Report) -> serde_json::Value {
             "error": m,
         })).collect::<Vec<_>>(),
     })
+}
+
+#[cfg(test)]
+mod controls_tests {
+    use super::*;
+    use crate::ai_guard::parser::{AiGuardAssessment, AssessError};
+    use sigil_core::event::AiGuardControl;
+
+    struct Fixture(Option<Vec<AiGuardControl>>);
+    impl AiGuardParser for Fixture {
+        fn tool(&self) -> AiTool {
+            AiTool::Codex
+        }
+        fn scope(&self) -> AiGuardScope {
+            AiGuardScope::UserGlobal
+        }
+        fn watched_paths(&self, _: &Path) -> Vec<PathBuf> {
+            vec![]
+        }
+        fn assess(&self, _: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
+            panic!("must use posture")
+        }
+        fn assess_posture(&self, _: &Path) -> Result<AiGuardAssessment, AssessError> {
+            Ok(AiGuardAssessment {
+                reasons: vec![],
+                controls: self.0.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn control_only_scan_is_visible_normalized_and_unscored() {
+        let c = AiGuardControl {
+            id: "fixture.restricted".into(),
+            source_path: "/fixture/config".into(),
+            setting: "restricted".into(),
+            value: serde_json::json!(true),
+        };
+        let report = build_report_with_parsers(
+            Path::new("/unused"),
+            &[Arc::new(Fixture(Some(vec![c.clone(), c.clone()])))],
+        );
+        let json = report_json(&report);
+        assert_eq!(json["headline"]["score"], 0.0);
+        assert_eq!(json["headline"]["findings"], 0);
+        assert_eq!(json["results"][0]["controls"], serde_json::json!([c]));
+        assert!(json["not_configured"].as_array().unwrap().is_empty());
+        let text = render_human(&report);
+        assert!(text.contains("Observed controls"));
+        assert!(text.contains("restricted = true [/fixture/config]"));
+        assert!(!text.contains("How to reduce"));
+        for controls in [None, Some(vec![])] {
+            let empty =
+                build_report_with_parsers(Path::new("/unused"), &[Arc::new(Fixture(controls))]);
+            assert!(!render_human(&empty).contains("Observed controls"));
+        }
+    }
 }

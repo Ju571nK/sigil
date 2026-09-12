@@ -612,6 +612,9 @@ pub enum Evidence {
     /// agent's local guard surface (hooks, permissions, sandbox).
     /// Emitted by ai_guard_task. Sigil measures, does not block.
     AiGuardRiskAssessed {
+        /// None = unreported; Some(empty) = inspected with no active observations.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        controls: Option<Vec<AiGuardControl>>,
         tool: AiTool,
         scope: AiGuardScope,
         /// 0.0..=10.0 (CVSS-style continuous; higher = more risk).
@@ -621,7 +624,7 @@ pub enum Evidence {
         /// Per-finding breakdown. Empty array = clean assessment.
         reasons: Vec<AiGuardReason>,
         /// `true` iff this is the periodic re-attestation heartbeat (no
-        /// reason set change since last emission). `false` = something changed.
+        /// reason or control change since last emission). `false` = something changed.
         is_reattestation: bool,
         /// Phase 3b.7.2 — Some(pack id) when emitted by an operator rule-pack
         /// parser; None (omitted) for built-in structural parsers. Forward-compat.
@@ -669,8 +672,62 @@ pub enum Evidence {
     Unknown,
 }
 
+/// Supported configuration observations, not runtime enforcement attestations.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AiGuardControl {
+    /// Stable, namespaced ID; unknown future IDs remain readable.
+    pub id: String,
+    pub source_path: PathBuf,
+    pub setting: String,
+    /// Parser-allowlisted restriction value, never a raw configuration object.
+    pub value: serde_json::Value,
+}
+
 /// Schema version. Bumps follow the policy in spec section 3.3.
 pub const SCHEMA_VERSION: u32 = 1;
+
+#[cfg(test)]
+mod controls_compat_tests {
+    use super::*;
+
+    #[test]
+    fn controls_preserve_reporting_state_and_unknown_ids() {
+        let legacy = serde_json::json!({
+            "kind": "ai_guard_risk_assessed", "tool": "codex",
+            "scope": AiGuardScope::UserGlobal, "score": 0.0, "bucket": "low",
+            "reasons": [], "is_reattestation": false
+        });
+        let mut legacy = legacy;
+        let old: Evidence = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(serde_json::to_value(&old)
+            .unwrap()
+            .get("controls")
+            .is_none());
+        for controls in [
+            serde_json::json!([]),
+            serde_json::json!([{
+                "id": "future.unknown", "source_path": "/fixture/settings",
+                "setting": "restricted", "value": false, "future_field": 1
+            }]),
+        ] {
+            let expected_len = controls.as_array().unwrap().len();
+            let mut wire = legacy.clone();
+            wire["controls"] = controls;
+            let new: Evidence = serde_json::from_value(wire).unwrap();
+            let roundtrip = serde_json::to_value(&new).unwrap();
+            assert_eq!(
+                roundtrip["controls"].as_array().unwrap().len(),
+                expected_len
+            );
+            if expected_len > 0 {
+                assert_eq!(roundtrip["controls"][0]["id"], "future.unknown");
+            }
+            assert_eq!(serde_json::from_value::<Evidence>(roundtrip).unwrap(), new);
+        }
+        legacy["controls"] = serde_json::Value::Null;
+        assert_eq!(serde_json::from_value::<Evidence>(legacy).unwrap(), old);
+    }
+}
 
 /// `env!("CARGO_PKG_VERSION")` of the agent crate at build time.
 pub const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -961,6 +1018,7 @@ mod tests {
     #[test]
     fn ai_guard_risk_assessed_serializes_with_kind_and_round_trips() {
         let ev = Evidence::AiGuardRiskAssessed {
+            controls: None,
             tool: AiTool::ClaudeCode,
             scope: AiGuardScope::UserGlobal,
             score: 7.5,
@@ -1052,6 +1110,7 @@ mod tests {
     #[test]
     fn ai_guard_risk_assessed_omits_tool_label_when_none() {
         let ev = Evidence::AiGuardRiskAssessed {
+            controls: None,
             tool: AiTool::ClaudeCode,
             scope: AiGuardScope::UserGlobal,
             score: 0.0,
@@ -1069,6 +1128,7 @@ mod tests {
     #[test]
     fn ai_guard_risk_assessed_round_trips_tool_label() {
         let ev = Evidence::AiGuardRiskAssessed {
+            controls: None,
             tool: AiTool::Other,
             scope: AiGuardScope::UserGlobal,
             score: 1.0,
@@ -1111,6 +1171,7 @@ mod tests {
     #[test]
     fn ai_guard_risk_assessed_clean_assessment_empty_reasons_round_trips() {
         let ev = Evidence::AiGuardRiskAssessed {
+            controls: None,
             tool: AiTool::Codex,
             scope: AiGuardScope::UserGlobal,
             score: 0.0,
@@ -1407,6 +1468,7 @@ mod tests {
     #[test]
     fn ai_guard_risk_assessed_omits_rule_pack_id_when_none() {
         let ev = Evidence::AiGuardRiskAssessed {
+            controls: None,
             tool: AiTool::Gemini,
             scope: AiGuardScope::UserGlobal,
             score: 0.0,
@@ -1424,6 +1486,7 @@ mod tests {
     #[test]
     fn ai_guard_risk_assessed_round_trips_rule_pack_id() {
         let ev = Evidence::AiGuardRiskAssessed {
+            controls: None,
             tool: AiTool::Gemini,
             scope: AiGuardScope::Project { path: "/r".into() },
             score: 1.0,

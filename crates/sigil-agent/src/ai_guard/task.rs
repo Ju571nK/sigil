@@ -3,7 +3,7 @@
 //! Trigger model:
 //! - **Boot**: every parser runs once, force-emit even if score is 0.
 //! - **File change**: hasher broadcasts each canonical path it just hashed;
-//!   matching parser re-evaluates and emits only if `canonical_hash(reasons)`
+//!   matching parser re-evaluates and emits if the reasons or controls hash
 //!   changed. NOTE: the hasher only emits paths it processed, which means
 //!   only paths covered by an active policy target. The baseline OSS policy
 //!   (sigil-rules-basic) includes `~/.claude/` and `~/.codex/`, so this
@@ -35,10 +35,11 @@ use tokio::sync::{broadcast, mpsc};
 pub type StateMap = HashMap<(AiTool, AiGuardScope, Option<String>), CachedAssessment>;
 
 /// One parser's last emitted state, kept in `StateMap` for change-detection
-/// and IPC introspection. The `reasons_blake3` field is what
-/// `eval_and_maybe_emit` compares against to decide whether to emit.
+/// and IPC introspection. Both hashes participate in emission change detection.
 #[derive(Clone, Debug)]
 pub struct CachedAssessment {
+    pub controls: Option<Vec<sigil_core::event::AiGuardControl>>,
+    pub controls_blake3: [u8; 32],
     pub score: f32,
     pub bucket: AiGuardBucket,
     pub reasons_blake3: [u8; 32],
@@ -153,13 +154,17 @@ fn path_matches(incoming: &std::path::Path, watched: &std::path::Path) -> bool {
 }
 
 async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_emit: bool) {
-    let reasons = match parser.assess(&ctx.home_dir) {
+    let mut assessment = match parser.assess_posture(&ctx.home_dir) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = ?e, tool = ?parser.tool(), "ai_guard assess failed; skip cycle");
             return;
         }
     };
+    assessment.normalize();
+    let controls_hash = assessment.controls_hash();
+    let reasons = assessment.reasons;
+    let controls = assessment.controls;
     // Phase 3b.5 — snapshot-clone the Rubric BEFORE any subsequent await.
     // Cheap: weights is a small HashMap.
     let rubric_snapshot = ctx.rubric.read().clone();
@@ -174,13 +179,13 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
     let prev = ctx.state.read().get(&key).cloned();
     let changed = prev
         .as_ref()
-        .map(|p| p.reasons_blake3 != reasons_hash)
+        .map(|p| p.reasons_blake3 != reasons_hash || p.controls_blake3 != controls_hash)
         .unwrap_or(true);
     if !changed && !force_emit {
         return;
     }
     let now = OffsetDateTime::now_utc();
-    // Reattestation iff this emit is force-driven AND the reason set is
+    // Reattestation iff this emit is force-driven AND reasons and controls are
     // unchanged from the previous one. Boot (no prior state) is NOT a
     // reattestation even though it's force-emitted.
     let is_reattestation = force_emit && prev.is_some() && !changed;
@@ -221,6 +226,8 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
     ctx.state.write().insert(
         key.clone(),
         CachedAssessment {
+            controls: controls.clone(),
+            controls_blake3: controls_hash,
             score,
             bucket,
             reasons_blake3: reasons_hash,
@@ -276,6 +283,7 @@ async fn eval_and_maybe_emit(parser: &dyn AiGuardParser, ctx: &TaskCtx, force_em
         source: SourceKind::Agent,
         subject: Subject::Self_,
         evidence: Evidence::AiGuardRiskAssessed {
+            controls,
             tool: key.0,
             scope: key.1.clone(),
             score,
@@ -347,7 +355,7 @@ mod tests {
     }
 
     fn ctx_with(
-        parser: ScriptedParser,
+        parser: impl AiGuardParser + 'static,
         fc_rx: broadcast::Receiver<PathBuf>,
         hb: Duration,
     ) -> (TaskCtx, mpsc::Receiver<CommittableEvent>) {
@@ -382,6 +390,121 @@ mod tests {
             }
             return ev;
         }
+    }
+
+    struct ControlsParser(
+        StdMutex<Option<Vec<sigil_core::event::AiGuardControl>>>,
+        std::sync::atomic::AtomicBool,
+    );
+
+    impl AiGuardParser for ControlsParser {
+        fn tool(&self) -> AiTool {
+            AiTool::Codex
+        }
+        fn scope(&self) -> AiGuardScope {
+            AiGuardScope::UserGlobal
+        }
+        fn watched_paths(&self, _: &std::path::Path) -> Vec<PathBuf> {
+            vec![]
+        }
+        fn assess(&self, _: &std::path::Path) -> Result<Vec<AiGuardReason>, AssessError> {
+            panic!("posture path must be used")
+        }
+        fn assess_posture(
+            &self,
+            _: &std::path::Path,
+        ) -> Result<crate::ai_guard::parser::AiGuardAssessment, AssessError> {
+            if self.1.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(AssessError::Io {
+                    path: "fixture".into(),
+                    source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                });
+            }
+            Ok(crate::ai_guard::parser::AiGuardAssessment {
+                reasons: vec![AiGuardReason::SandboxDisabled],
+                controls: self.0.lock().unwrap().clone(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn controls_changes_emit_without_changing_risk() {
+        let (_tx, fc_rx) = broadcast::channel(8);
+        let (ctx, mut events) = ctx_with(
+            ControlsParser(StdMutex::new(None), false.into()),
+            fc_rx,
+            Duration::from_secs(60),
+        );
+        let parser = ControlsParser(StdMutex::new(None), false.into());
+        let control = sigil_core::event::AiGuardControl {
+            id: "fixture.restricted".into(),
+            source_path: "/fixture/settings".into(),
+            setting: "restricted".into(),
+            value: serde_json::json!(true),
+        };
+        let mut changed = control.clone();
+        changed.value = serde_json::json!("managed");
+        let mut moved = changed.clone();
+        moved.source_path = "/fixture/managed".into();
+        for controls in [
+            None,
+            Some(vec![]),
+            Some(vec![control.clone()]),
+            Some(vec![changed]),
+            Some(vec![moved]),
+            Some(vec![]),
+            None,
+        ] {
+            *parser.0.lock().unwrap() = controls.clone();
+            eval_and_maybe_emit(&parser, &ctx, false).await;
+            let ev = events.try_recv().unwrap().event;
+            match ev.evidence {
+                Evidence::AiGuardRiskAssessed {
+                    score,
+                    controls: got,
+                    is_reattestation,
+                    ..
+                } => {
+                    assert_eq!(score, rubric::score(&[AiGuardReason::SandboxDisabled]));
+                    assert_eq!(got, controls);
+                    assert!(!is_reattestation);
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+            assert!(events.try_recv().is_err());
+        }
+        *parser.0.lock().unwrap() = Some(vec![control.clone(), {
+            let mut c = control.clone();
+            c.id = "fixture.other".into();
+            c
+        }]);
+        eval_and_maybe_emit(&parser, &ctx, false).await;
+        events.try_recv().unwrap();
+        {
+            let mut lock = parser.0.lock().unwrap();
+            let values = lock.as_mut().unwrap();
+            values.reverse();
+            values.push(control);
+        }
+        eval_and_maybe_emit(&parser, &ctx, false).await;
+        assert!(
+            events.try_recv().is_err(),
+            "order and duplicates are not changes"
+        );
+        eval_and_maybe_emit(&parser, &ctx, true).await;
+        assert!(matches!(
+            events.try_recv().unwrap().event.evidence,
+            Evidence::AiGuardRiskAssessed {
+                is_reattestation: true,
+                ..
+            }
+        ));
+        let previous = ctx.state.read().values().next().unwrap().controls.clone();
+        *parser.0.lock().unwrap() = Some(vec![]);
+        parser.1.store(true, std::sync::atomic::Ordering::Relaxed);
+        eval_and_maybe_emit(&parser, &ctx, true).await;
+        assert!(events.try_recv().is_err());
+        assert_eq!(ctx.state.read().values().next().unwrap().controls, previous);
     }
 
     #[tokio::test(start_paused = true)]

@@ -13,9 +13,30 @@ pub(crate) mod instruction_scan;
 pub mod mcp_scan;
 
 use serde_json::Value;
-use sigil_core::event::{AiGuardReason, AiGuardScope, AiTool};
+use sigil_core::event::{AiGuardControl, AiGuardReason, AiGuardScope, AiTool};
 use std::io;
 use std::path::{Path, PathBuf};
+
+#[derive(Default, Debug)]
+pub struct AiGuardAssessment {
+    pub reasons: Vec<AiGuardReason>,
+    pub controls: Option<Vec<AiGuardControl>>,
+}
+
+impl AiGuardAssessment {
+    /// Normalize once before display, hashing, or emission; retain source identity.
+    pub fn normalize(&mut self) {
+        if let Some(controls) = &mut self.controls {
+            controls.sort_by_cached_key(|c| serde_json::to_string(c).expect("control serializes"));
+            controls.dedup();
+        }
+    }
+
+    /// Hash normalized observations, including whether inspection was supported.
+    pub fn controls_hash(&self) -> [u8; 32] {
+        *blake3::hash(&serde_json::to_vec(&self.controls).expect("controls serialize")).as_bytes()
+    }
+}
 
 /// Per-tool guard-surface reader.
 pub trait AiGuardParser: Send + Sync {
@@ -38,6 +59,14 @@ pub trait AiGuardParser: Send + Sync {
     /// Missing primary config file = empty Vec (operator hasn't enabled the
     /// tool — not a finding). I/O / parse errors bubble up.
     fn assess(&self, home_dir: &Path) -> Result<Vec<AiGuardReason>, AssessError>;
+
+    /// Migrated parsers return findings and observations from the same inputs.
+    fn assess_posture(&self, home_dir: &Path) -> Result<AiGuardAssessment, AssessError> {
+        Ok(AiGuardAssessment {
+            reasons: self.assess(home_dir)?,
+            controls: None,
+        })
+    }
 
     /// Phase 3b.7 — downcast hook for hot-reload reconciliation. Default
     /// returns a static unit reference; only RulePackParser overrides to

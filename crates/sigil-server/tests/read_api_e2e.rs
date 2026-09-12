@@ -62,6 +62,83 @@ async fn healthz_returns_ok_without_auth() {
 }
 
 #[tokio::test]
+async fn controls_survive_ingest_replay_and_scope_replacement() {
+    use serde_json::json;
+    use sigil_core::event::{AiGuardScope, Event};
+    let dir = tempfile::tempdir().unwrap();
+    let state = state_with_token(dir.path(), "tok");
+    let app = build_router(state.clone());
+    let host = uuid::Uuid::now_v7().to_string();
+    let controls = json!([{"id":"future.restricted", "setting":"restricted", "value":true, "source_path":"/fixture/config"}]);
+    for (i, observed) in [controls.clone(), json!([]), serde_json::Value::Null]
+        .into_iter()
+        .enumerate()
+    {
+        let scope = if i == 0 {
+            AiGuardScope::UserGlobal
+        } else {
+            AiGuardScope::Project {
+                path: "/fixture/repo".into(),
+            }
+        };
+        let id = uuid::Uuid::now_v7();
+        let mut payload = json!({
+            "schema_version":1, "event_id":id,
+            "ts": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap(),
+            "host_id":host, "agent_version":"fixture", "severity":"warn",
+            "source":{"kind":"agent"}, "subject":{"kind":"self"},
+            "evidence":{"kind":"ai_guard_risk_assessed", "tool":"codex", "scope":scope,
+                "score":0.0, "bucket":"low", "reasons":[], "is_reattestation":false}
+        });
+        if !observed.is_null() {
+            payload["evidence"]["controls"] = observed.clone();
+        }
+        // Also pin decoding of historical events without the new field.
+        serde_json::from_value::<Event>(payload.clone()).unwrap();
+        let body = json!({"envelope":{"host_id":host,"schema_version":1}, "events":[{"event_id":id,"sequence":i+1,"payload":payload}]});
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/events")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let ack: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ack["accepted"].as_array().unwrap().len(), 1, "{ack}");
+        for replay in [false, true] {
+            if replay {
+                state
+                    .fleet_index
+                    .replace(sigil_server::boot_rebuild::rebuild_from_jsonl(dir.path()).unwrap());
+            }
+            let (status, detail) = get(&app, &format!("/v1/fleet/hosts/{host}"), Some("tok")).await;
+            assert_eq!(status, StatusCode::OK);
+            let entry = &detail["ai_guard"]["by_tool"]["codex"];
+            assert_eq!(entry["controls"], observed);
+            assert_eq!(entry["scope"], json!(scope));
+            assert_eq!(entry["score"], 0.0);
+        }
+    }
+    let (_, history) = get(&app, &format!("/v1/events?host_id={host}"), Some("tok")).await;
+    assert!(history["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["evidence"]["controls"] == controls));
+}
+
+#[tokio::test]
 async fn meta_returns_alerts_default() {
     let dir = tempfile::tempdir().unwrap();
     let app = build_router(state_with_token(dir.path(), "tok"));
