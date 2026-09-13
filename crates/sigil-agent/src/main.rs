@@ -28,7 +28,10 @@ fn main() -> anyhow::Result<()> {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
-            let code = rt.block_on(runtime::run(cfg))?;
+            let result = rt.block_on(runtime::run(cfg));
+            // A timed-out blocking worker must not make Runtime::drop wait forever.
+            rt.shutdown_timeout(std::time::Duration::from_secs(1));
+            let code = result?;
             std::process::exit(code);
         }
         cli::Command::Doctor {

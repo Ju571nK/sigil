@@ -2,7 +2,6 @@
 
 use crate::state_task::{commit_baseline, CommittableEvent};
 use parking_lot::Mutex;
-use sigil_core::sink::jsonl::JsonlSink;
 use sigil_core::sink::EventSink;
 use sigil_core::state::HashCache;
 use sigil_core::stats::Stats;
@@ -11,11 +10,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub async fn run(
-    mut sink: JsonlSink,
+    mut sink: impl EventSink,
     mut rx: mpsc::Receiver<CommittableEvent>,
     cache: Arc<Mutex<HashCache>>,
     stats: Arc<Stats>,
-) {
+) -> std::io::Result<()> {
     let mut fsync_tick = tokio::time::interval(Duration::from_secs(1));
     fsync_tick.tick().await;
     loop {
@@ -23,10 +22,7 @@ pub async fn run(
             biased;
             maybe = rx.recv() => {
                 let Some(committable) = maybe else { break; };
-                if let Err(e) = sink.write(&committable.event) {
-                    tracing::error!(error = ?e, "sink write failed");
-                    continue;
-                }
+                sink.write(&committable.event).map_err(std::io::Error::other)?;
                 stats.record_emit(evidence_kind_str(&committable.event.evidence));
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -35,11 +31,11 @@ pub async fn run(
                 commit_baseline(&cache, &committable, now_ms);
             }
             _ = fsync_tick.tick() => {
-                let _ = sink.flush_durable();
+                sink.flush_durable().map_err(std::io::Error::other)?;
             }
         }
     }
-    let _ = sink.shutdown();
+    sink.shutdown().map_err(std::io::Error::other)
 }
 
 fn evidence_kind_str(e: &sigil_core::event::Evidence) -> &'static str {
@@ -80,6 +76,35 @@ fn evidence_kind_str(e: &sigil_core::event::Evidence) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn final_durable_flush_failure_is_returned() {
+        struct FailingFlush;
+        impl EventSink for FailingFlush {
+            fn write(
+                &mut self,
+                _: &sigil_core::event::Event,
+            ) -> Result<(), sigil_core::sink::SinkError> {
+                Ok(())
+            }
+            fn flush_durable(&mut self) -> Result<(), sigil_core::sink::SinkError> {
+                Err(std::io::Error::other("test fsync failure").into())
+            }
+            fn shutdown(&mut self) -> Result<(), sigil_core::sink::SinkError> {
+                self.flush_durable()
+            }
+        }
+        let td = tempfile::tempdir().unwrap();
+        let cache = Arc::new(Mutex::new(
+            HashCache::open(&td.path().join("state.db")).unwrap(),
+        ));
+        let (tx, rx) = mpsc::channel(1);
+        drop(tx);
+        let error = run(FailingFlush, rx, cache, Arc::new(Stats::default()))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("test fsync failure"));
+    }
 
     #[test]
     fn possible_hook_activity_silent_has_sink_label() {

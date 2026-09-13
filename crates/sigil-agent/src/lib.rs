@@ -25,6 +25,7 @@ pub mod hook_listener;
 pub mod host_meta_snapshot;
 pub mod host_meta_snapshot_task;
 pub mod host_meta_task;
+mod ipc_lifecycle;
 pub mod jsonl_gc;
 pub mod jsonl_gc_task;
 pub mod normalizer;

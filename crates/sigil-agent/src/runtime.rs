@@ -635,7 +635,7 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         }),
     );
 
-    sup.track(
+    sup.track_result(
         "sink",
         tokio::spawn({
             let cache = cache.clone();
@@ -804,25 +804,15 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         #[cfg(windows)]
         let pipe = cfg.control_pipe_name.clone();
         let ctx_c = control_ctx.clone();
-        sup.track(
+        let shutdown = cancel.clone();
+        sup.track_result(
             "control",
             tokio::spawn(async move {
                 #[cfg(unix)]
-                if let Err(e) = crate::control::serve(&socket, ctx_c).await {
-                    tracing::error!(
-                        error = ?e,
-                        socket = %socket.display(),
-                        "control IPC server exited; control plane (apply_policy, sigil show) unavailable"
-                    );
-                }
+                let result = crate::control::serve_until(&socket, ctx_c, shutdown).await;
                 #[cfg(windows)]
-                if let Err(e) = crate::control::serve(&pipe, ctx_c).await {
-                    tracing::error!(
-                        error = ?e,
-                        pipe = %pipe,
-                        "control IPC server exited; control plane (apply_policy, sigil show) unavailable"
-                    );
-                }
+                let result = crate::control::serve_until(&pipe, ctx_c, shutdown).await;
+                result
             }),
         );
     }
@@ -841,23 +831,18 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         let tx_hook = tx_sink.clone();
         let host_id_hook = host_id.clone();
         let hook_activity_map = activity_map.clone();
-        sup.track(
+        let shutdown = cancel.clone();
+        sup.track_result(
             "hook_listener",
             tokio::spawn(async move {
-                if let Err(e) = crate::hook_listener::serve(
+                crate::hook_listener::serve_until(
                     hook_sock.clone(),
                     tx_hook,
                     host_id_hook,
                     hook_activity_map,
+                    shutdown,
                 )
                 .await
-                {
-                    tracing::error!(
-                        error = ?e,
-                        socket = %hook_sock.display(),
-                        "hook IPC listener exited; hook events will not be captured"
-                    );
-                }
             }),
         );
     }
@@ -873,24 +858,19 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         let host_id_decide = host_id.clone();
         let decide_activity_map = activity_map.clone();
         let se = shared_evaluator.clone();
-        sup.track(
+        let shutdown = cancel.clone();
+        sup.track_result(
             "hook_decide_listener",
             tokio::spawn(async move {
-                if let Err(e) = crate::hook_decide_listener::serve(
+                crate::hook_decide_listener::serve_until(
                     decide_sock.clone(),
                     tx_decide,
                     host_id_decide,
                     se,
                     decide_activity_map,
+                    shutdown,
                 )
                 .await
-                {
-                    tracing::error!(
-                        error = ?e,
-                        socket = %decide_sock.display(),
-                        "hook-decide listener exited"
-                    );
-                }
             }),
         );
     }
@@ -902,25 +882,19 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
         let host_id_decide = host_id.clone();
         let decide_activity_map = activity_map.clone();
         let se = shared_evaluator.clone();
-        let pipe_for_log = decide_pipe.clone();
-        sup.track(
+        let shutdown = cancel.clone();
+        sup.track_result(
             "hook_decide_listener",
             tokio::spawn(async move {
-                if let Err(e) = crate::hook_decide_listener::serve_pipe(
+                crate::hook_decide_listener::serve_pipe_until(
                     decide_pipe,
                     tx_decide,
                     host_id_decide,
                     se,
                     decide_activity_map,
+                    shutdown,
                 )
                 .await
-                {
-                    tracing::error!(
-                        error = ?e,
-                        pipe = %pipe_for_log,
-                        "hook-decide listener exited"
-                    );
-                }
             }),
         );
     }
@@ -968,8 +942,13 @@ pub async fn run(cfg: RuntimeConfig) -> anyhow::Result<i32> {
     }
 
     tracing::info!("runtime: all tasks spawned; running");
-    // Wait for shutdown.
-    let exit_code = sup.run(host_id.clone(), tx_sink.clone()).await?;
+    // Only running producers may retain strong senders while the pipeline drains.
+    let emergency = tx_sink.downgrade();
+    drop(tx_sink);
+    drop(control_ctx);
+    drop(apply_ctx);
+    drop(ai_guard_fc_tx);
+    let exit_code = sup.run(host_id.clone(), emergency).await?;
     Ok(exit_code)
 }
 
@@ -1047,7 +1026,9 @@ pub(crate) fn expand_targets(
                 } else {
                     p.parent().map(PathBuf::from).unwrap_or_else(|| p.clone())
                 };
-                // Keep desired roots even before they exist; the watcher retries them (#219).
+                // Keep desired roots even before they exist (#219). Nonrecursive
+                // roots can contain wildcard directory components; the watcher
+                // resolves and rediscovers those without broad ancestor watches (#223).
                 watch_roots.push((parent, t.recursive));
                 paths.push(p);
             }

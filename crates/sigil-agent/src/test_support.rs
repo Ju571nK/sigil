@@ -17,6 +17,7 @@ pub struct TestAgent {
 
 pub struct TestAgentBuilder {
     policy_yaml: String,
+    poll_watcher: bool,
     /// JSON bytes of a policy-signing keystore the agent should load. `None` →
     /// no keystore (Phase 1 mode; `apply_policy` rejects every envelope).
     keystore_json: Option<Vec<u8>>,
@@ -32,12 +33,18 @@ impl TestAgentBuilder {
     pub fn new() -> Self {
         Self {
             policy_yaml: String::new(),
+            poll_watcher: false,
             keystore_json: None,
         }
     }
 
     pub fn policy(mut self, yaml: &str) -> Self {
         self.policy_yaml = yaml.to_string();
+        self
+    }
+
+    pub fn poll_watcher(mut self, enabled: bool) -> Self {
+        self.poll_watcher = enabled;
         self
     }
 
@@ -68,7 +75,7 @@ impl TestAgentBuilder {
             events_dir: events_dir.clone(),
             control_socket: control_socket.clone(),
             control_pipe_name: control_pipe_name.clone(),
-            poll_watcher: false,
+            poll_watcher: self.poll_watcher,
             keystore_path,
         };
         let join = tokio::spawn(async move {

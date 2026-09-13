@@ -7,6 +7,18 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+### Fixed
+
+- Drain the agent pipeline on Unix SIGINT/SIGTERM and Windows Ctrl-C. Release
+  retained channel senders, stop IPC acceptance, drain accepted requests for up
+  to five seconds, and remove Unix socket files. Supervise failures concurrently
+  and report a nonzero exit on storage errors or a 30-second shutdown timeout
+  instead of waiting indefinitely (#225).
+- Resolve wildcard directory ancestors into concrete watch roots and rediscover
+  matches every five seconds with native and polling backends. Catch up newly
+  discovered or replaced directories without recursively watching broad parent
+  trees, and preserve shared-root ownership across policy reloads (#223).
+
 ## [0.8.2] - 2026-09-12
 
 ### Fixed

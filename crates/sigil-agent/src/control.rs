@@ -507,6 +507,15 @@ async fn handle(ctx: &ControlContext, req: Request) -> Response {
 
 #[cfg(unix)]
 pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Result<()> {
+    serve_until(socket_path, ctx, tokio_util::sync::CancellationToken::new()).await
+}
+
+#[cfg(unix)]
+pub async fn serve_until(
+    socket_path: &Path,
+    ctx: Arc<ControlContext>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> std::io::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
 
@@ -517,6 +526,8 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
         std::fs::create_dir_all(parent)?;
     }
     let listener = UnixListener::bind(socket_path)?;
+    let _socket_file = crate::ipc_lifecycle::SocketFile::new(socket_path)?;
+    let mut connections = crate::ipc_lifecycle::Connections::default();
     // Lock the control socket to owner+group rw, no world access (issue #4). The
     // agent runs as root; group ownership (root by default; `sigil` under the
     // future hardened install, epic #10) gates non-root control access. Set this
@@ -527,7 +538,10 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
     }
     tracing::info!(path = ?socket_path, "control IPC listening");
     loop {
-        let (stream, _) = match listener.accept().await {
+        let Some(accepted) = connections.accept(listener.accept(), &shutdown).await else {
+            break;
+        };
+        let (stream, _) = match accepted {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = ?e, "control IPC accept failed");
@@ -535,7 +549,7 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
             }
         };
         let ctx = ctx.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             let (rd, mut wr) = stream.into_split();
             let mut reader = BufReader::new(rd);
             let mut line = String::new();
@@ -562,22 +576,37 @@ pub async fn serve(socket_path: &Path, ctx: Arc<ControlContext>) -> std::io::Res
             }
         });
     }
+    drop(listener);
+    connections.drain().await
 }
 
 #[cfg(windows)]
 pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result<()> {
+    serve_until(pipe_name, ctx, tokio_util::sync::CancellationToken::new()).await
+}
+
+#[cfg(windows)]
+pub async fn serve_until(
+    pipe_name: &str,
+    ctx: Arc<ControlContext>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> std::io::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::windows::named_pipe::ServerOptions;
 
+    let mut connections = crate::ipc_lifecycle::Connections::default();
     loop {
         let server = ServerOptions::new()
             .first_pipe_instance(false)
             .access_inbound(true)
             .access_outbound(true)
             .create(pipe_name)?;
-        server.connect().await?;
+        let Some(connected) = connections.accept(server.connect(), &shutdown).await else {
+            break;
+        };
+        connected?;
         let ctx = ctx.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             let (rd, mut wr) = tokio::io::split(server);
             let mut reader = BufReader::new(rd);
             let mut line = String::new();
@@ -604,4 +633,5 @@ pub async fn serve(pipe_name: &str, ctx: Arc<ControlContext>) -> std::io::Result
             }
         });
     }
+    connections.drain().await
 }
