@@ -47,6 +47,24 @@ pub async fn serve(
     host_id: String,
     activity_map: crate::hook_silence::ActivityMap,
 ) -> std::io::Result<()> {
+    serve_until(
+        socket,
+        tx,
+        host_id,
+        activity_map,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+}
+
+#[cfg(unix)]
+pub async fn serve_until(
+    socket: PathBuf,
+    tx: mpsc::Sender<CommittableEvent>,
+    host_id: String,
+    activity_map: crate::hook_silence::ActivityMap,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     // Remove a stale socket file from a previous run.
@@ -59,6 +77,8 @@ pub async fn serve(
     }
 
     let listener = UnixListener::bind(&socket)?;
+    let _socket_file = crate::ipc_lifecycle::SocketFile::new(&socket)?;
+    let mut connections = crate::ipc_lifecycle::Connections::default();
     // Set 0660 explicitly — do not rely on process umask.
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
 
@@ -66,7 +86,10 @@ pub async fn serve(
     tracing::info!(path = ?socket, "hook IPC listening");
 
     loop {
-        let (stream, _) = match listener.accept().await {
+        let Some(accepted) = connections.accept(listener.accept(), &shutdown).await else {
+            break;
+        };
+        let (stream, _) = match accepted {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = ?e, "hook accept failed");
@@ -94,7 +117,7 @@ pub async fn serve(
         let host_id = host_id.clone();
         let activity_map = activity_map.clone();
 
-        tokio::spawn(async move {
+        connections.spawn(async move {
             // Permit is held for the lifetime of this task.
             let _permit = permit;
 
@@ -163,6 +186,8 @@ pub async fn serve(
             }
         });
     }
+    drop(listener);
+    connections.drain().await
 }
 
 #[derive(serde::Deserialize)]

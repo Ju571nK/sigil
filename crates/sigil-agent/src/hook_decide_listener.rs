@@ -29,6 +29,26 @@ pub async fn serve(
     evaluator: crate::hook_deny::SharedEvaluator,
     activity_map: crate::hook_silence::ActivityMap,
 ) -> std::io::Result<()> {
+    serve_until(
+        socket,
+        tx,
+        host_id,
+        evaluator,
+        activity_map,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+}
+
+#[cfg(unix)]
+pub async fn serve_until(
+    socket: PathBuf,
+    tx: mpsc::Sender<CommittableEvent>,
+    host_id: String,
+    evaluator: crate::hook_deny::SharedEvaluator,
+    activity_map: crate::hook_silence::ActivityMap,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     if socket.exists() {
         let _ = std::fs::remove_file(&socket);
@@ -37,12 +57,17 @@ pub async fn serve(
         std::fs::create_dir_all(p)?;
     }
     let listener = UnixListener::bind(&socket)?;
+    let _socket_file = crate::ipc_lifecycle::SocketFile::new(&socket)?;
+    let mut connections = crate::ipc_lifecycle::Connections::default();
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
     let sem = Arc::new(Semaphore::new(MAX_INFLIGHT));
     tracing::info!(path = ?socket, "hook-decide IPC listening");
 
     loop {
-        let (stream, _) = match listener.accept().await {
+        let Some(accepted) = connections.accept(listener.accept(), &shutdown).await else {
+            break;
+        };
+        let (stream, _) = match accepted {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = ?e, "hook-decide accept failed");
@@ -65,11 +90,13 @@ pub async fn serve(
         let host_id = host_id.clone();
         let evaluator = evaluator.clone();
         let activity_map = activity_map.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             let _permit = permit;
             handle_decide_conn(stream, peer_uid, tx, host_id, evaluator, activity_map).await;
         });
     }
+    drop(listener);
+    connections.drain().await
 }
 
 /// Windows hook-decide listener over a named pipe (#162). Mirrors the control
@@ -84,16 +111,40 @@ pub async fn serve_pipe(
     evaluator: crate::hook_deny::SharedEvaluator,
     activity_map: crate::hook_silence::ActivityMap,
 ) -> std::io::Result<()> {
+    serve_pipe_until(
+        pipe_name,
+        tx,
+        host_id,
+        evaluator,
+        activity_map,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+}
+
+#[cfg(windows)]
+pub async fn serve_pipe_until(
+    pipe_name: String,
+    tx: mpsc::Sender<CommittableEvent>,
+    host_id: String,
+    evaluator: crate::hook_deny::SharedEvaluator,
+    activity_map: crate::hook_silence::ActivityMap,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> std::io::Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
     let sem = Arc::new(Semaphore::new(MAX_INFLIGHT));
     tracing::info!(pipe = %pipe_name, "hook-decide IPC listening");
+    let mut connections = crate::ipc_lifecycle::Connections::default();
     loop {
         let server = ServerOptions::new()
             .first_pipe_instance(false)
             .access_inbound(true)
             .access_outbound(true)
             .create(&pipe_name)?;
-        server.connect().await?;
+        let Some(connected) = connections.accept(server.connect(), &shutdown).await else {
+            break;
+        };
+        connected?;
         // Overload: drop the connection. The hook treats no-answer-within-deadline
         // as the no-verdict case and applies its local on_failure (fail-open default).
         let permit = match sem.clone().try_acquire_owned() {
@@ -108,11 +159,12 @@ pub async fn serve_pipe(
         let host_id = host_id.clone();
         let evaluator = evaluator.clone();
         let activity_map = activity_map.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             let _permit = permit;
             handle_decide_conn(server, u32::MAX, tx, host_id, evaluator, activity_map).await;
         });
     }
+    connections.drain().await
 }
 
 /// Transport-independent per-connection handler shared by the Unix-socket and

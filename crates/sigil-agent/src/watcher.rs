@@ -33,6 +33,7 @@ pub struct WatcherHandle {
     pub backend_name: &'static str,
     watcher: BackendWatcher,
     desired: BTreeMap<PathBuf, bool>,
+    resolved: BTreeMap<PathBuf, bool>,
     active: BTreeMap<PathBuf, (bool, RootIdentity)>,
     catchups: BTreeMap<PathBuf, tokio::task::JoinHandle<()>>,
     tx: Arc<mpsc::Sender<RawFsEvent>>,
@@ -97,12 +98,19 @@ impl BackendWatcher {
 impl WatcherHandle {
     /// Record desired coverage, including failed registrations, for retry.
     pub fn watch(&mut self, root: &Path, recursive: bool) -> notify::Result<()> {
+        let requested = resolve_directory_pattern(root);
         self.desired.insert(root.to_path_buf(), recursive);
-        self.refresh_root(root, true)
+        let mut errors = self.rebuild_roots(true);
+        for path in requested {
+            if let Some(error) = errors.remove(&path) {
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     fn refresh_root(&mut self, root: &Path, catch_up: bool) -> notify::Result<()> {
-        let recursive = self.desired[root];
+        let recursive = self.resolved[root];
         let identity = RootIdentity::read(root);
         if let (Some((mode, previous)), Ok(current)) = (self.active.get(root), &identity) {
             if *mode == recursive && previous == current {
@@ -138,19 +146,51 @@ impl WatcherHandle {
         Ok(())
     }
 
+    /// Expand only the directory components of configured patterns. Discovery
+    /// never creates a recursive subscription on a broad ancestor (#223).
+    fn rebuild_roots(&mut self, catch_up: bool) -> BTreeMap<PathBuf, notify::Error> {
+        let mut resolved = BTreeMap::new();
+        for (pattern, recursive) in &self.desired {
+            for root in resolve_directory_pattern(pattern) {
+                *resolved.entry(root).or_default() |= recursive;
+            }
+        }
+        let obsolete: Vec<_> = self
+            .resolved
+            .keys()
+            .filter(|root| !resolved.contains_key(*root))
+            .cloned()
+            .collect();
+        for root in obsolete {
+            // Backends may already have forgotten a deleted directory.
+            let _ = self.remove_active(&root);
+        }
+        self.resolved = resolved;
+        let mut errors = BTreeMap::new();
+        for root in self.resolved.keys().cloned().collect::<Vec<_>>() {
+            if let Err(error) = self.refresh_root(&root, catch_up) {
+                tracing::debug!(root = %root.display(), %error, "watch root unavailable; will retry");
+                errors.insert(root, error);
+            }
+        }
+        errors
+    }
+
     /// Check only configured roots, never recursively subscribe to an ancestor.
     pub(crate) fn reconcile(&mut self) {
         self.catchups.retain(|_, task| !task.is_finished());
-        for root in self.desired.keys().cloned().collect::<Vec<_>>() {
-            if let Err(e) = self.refresh_root(&root, true) {
-                tracing::debug!(root = %root.display(), error = %e, "watch root still unavailable; will retry");
-            }
-        }
+        let _ = self.rebuild_roots(true);
     }
 
     /// Stop watching a root.
     pub fn unwatch(&mut self, root: &Path) -> notify::Result<()> {
         self.desired.remove(root);
+        // Other desired patterns may still own some of the same concrete roots.
+        self.reconcile();
+        Ok(())
+    }
+
+    fn remove_active(&mut self, root: &Path) -> notify::Result<()> {
         if let Some(task) = self.catchups.remove(root) {
             task.abort();
         }
@@ -160,6 +200,61 @@ impl WatcherHandle {
             Ok(())
         }
     }
+}
+
+fn has_glob(path: &Path) -> bool {
+    path.to_string_lossy()
+        .contains(['*', '?', '[', ']', '{', '}'])
+}
+
+/// Walk one directory level per pattern component, not an entire subtree.
+/// Literal missing roots retain #219's retry behavior; wildcard roots are
+/// discovered afresh so installation/removal/replacement needs no restart.
+fn resolve_directory_pattern(pattern: &Path) -> Vec<PathBuf> {
+    if !has_glob(pattern) {
+        return vec![pattern.to_path_buf()];
+    }
+    let mut candidates = vec![PathBuf::new()];
+    let mut in_pattern = false;
+    for component in pattern.components() {
+        let part = Path::new(component.as_os_str());
+        if has_glob(part) {
+            in_pattern = true;
+            let Ok(glob) = sigil_core::policy::glob::CompiledGlob::new(&part.to_string_lossy())
+            else {
+                return Vec::new();
+            };
+            let mut matches = Vec::new();
+            for parent in candidates {
+                let Ok(entries) = std::fs::read_dir(&parent) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    if entry.file_type().is_ok_and(|kind| kind.is_dir())
+                        && glob.is_match(Path::new(&entry.file_name()))
+                    {
+                        matches.push(entry.path());
+                    }
+                }
+            }
+            candidates = matches;
+        } else {
+            candidates = candidates
+                .into_iter()
+                .filter_map(|mut parent| {
+                    parent.push(part);
+                    // Do not follow a wildcard match's symlink descendants outside
+                    // the policy's canonical prefix (normalizer paths must agree).
+                    if !in_pattern || std::fs::symlink_metadata(&parent).is_ok_and(|m| m.is_dir()) {
+                        Some(parent)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+    }
+    candidates
 }
 
 impl Drop for WatcherHandle {
@@ -283,6 +378,7 @@ pub fn spawn_watcher(
         backend_name,
         watcher: backend,
         desired: BTreeMap::new(),
+        resolved: BTreeMap::new(),
         active: BTreeMap::new(),
         catchups: BTreeMap::new(),
         tx,
@@ -291,11 +387,7 @@ pub fn spawn_watcher(
     for (root, recursive) in roots {
         *handle.desired.entry(root).or_default() |= recursive;
     }
-    for root in handle.desired.keys().cloned().collect::<Vec<_>>() {
-        if let Err(e) = handle.refresh_root(&root, false) {
-            tracing::warn!(root = %root.display(), error = %e, "watch root unavailable; will retry");
-        }
-    }
+    let _ = handle.rebuild_roots(false);
     Ok((rx, handle))
 }
 
@@ -408,6 +500,117 @@ mod tests {
         recovers_missing_root(Some(Duration::from_millis(100))).await;
     }
 
+    async fn wildcard_directory_lifecycle(poll: Option<Duration>) {
+        let td = TempDir::new().unwrap();
+        let apps = td.path().join("Applications");
+        let existing = apps.join("Existing.app/Contents");
+        fs::create_dir_all(&existing).unwrap();
+        fs::create_dir_all(apps.join("Unrelated/Contents/deep")).unwrap();
+        let pattern = apps.join("*.app/Contents");
+        let (mut rx, mut watcher) = spawn_watcher(
+            vec![(pattern.clone(), false)],
+            tokio::runtime::Handle::current(),
+            32,
+            poll,
+        )
+        .unwrap();
+        assert_eq!(watcher.active.len(), 1);
+        assert!(watcher.active.contains_key(&existing));
+        assert!(!watcher.active[&existing].0);
+        assert!(!watcher.active.contains_key(&apps));
+        assert!(!watcher.active.contains_key(&pattern));
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let first = existing.join("Info.plist");
+        fs::write(&first, b"live existing app").unwrap();
+        receive_path(&mut rx, &first).await;
+
+        let late = apps.join("New.app/Contents");
+        fs::create_dir_all(&late).unwrap();
+        let late_file = late.join("Info.plist");
+        fs::write(&late_file, b"written once before discovery").unwrap();
+        watcher.reconcile();
+        receive_path(&mut rx, &late_file).await;
+        assert_eq!(watcher.active.len(), 2);
+        if let Some(task) = watcher.catchups.remove(&late) {
+            task.await.unwrap();
+        }
+        watcher.reconcile();
+        assert!(watcher.catchups.is_empty(), "stable roots must not rescan");
+
+        fs::rename(&late, td.path().join("old-contents")).unwrap();
+        fs::create_dir(&late).unwrap();
+        let replaced = late.join("replacement.json");
+        fs::write(&replaced, b"replacement").unwrap();
+        watcher.reconcile();
+        receive_path(&mut rx, &replaced).await;
+        fs::remove_dir_all(apps.join("New.app")).unwrap();
+        watcher.reconcile();
+        assert!(!watcher.active.contains_key(&late));
+
+        // Removing a glob on policy reload must retain a shared literal root.
+        watcher.watch(&existing, true).unwrap();
+        watcher.unwatch(&pattern).unwrap();
+        assert_eq!(watcher.active.len(), 1);
+        assert!(watcher.active[&existing].0);
+        watcher.unwatch(&existing).unwrap();
+        assert!(watcher.active.is_empty());
+        assert!(watcher.resolved.is_empty());
+        assert!(watcher.catchups.is_empty());
+        fs::create_dir_all(&late).unwrap();
+        watcher.reconcile();
+        assert!(watcher.active.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_wildcard_directory_lifecycle() {
+        wildcard_directory_lifecycle(None).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn polling_wildcard_directory_lifecycle() {
+        wildcard_directory_lifecycle(Some(Duration::from_millis(100))).await;
+    }
+
+    #[test]
+    fn nested_directory_patterns_use_policy_glob_syntax() {
+        let td = TempDir::new().unwrap();
+        let expected = td.path().join("GroupA/App1.app/Contents");
+        fs::create_dir_all(&expected).unwrap();
+        fs::create_dir_all(td.path().join("GroupB/App2.app/Contents")).unwrap();
+        fs::create_dir_all(td.path().join("GroupA/App22.app/Contents")).unwrap();
+        assert_eq!(
+            resolve_directory_pattern(&td.path().join("Group[A]/{App,Tool}?.app/Contents")),
+            vec![expected]
+        );
+        assert!(resolve_directory_pattern(&td.path().join("Missing*/*.app/Contents")).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn mixed_windows_separators_resolve_the_same_directories() {
+        let td = TempDir::new().unwrap();
+        let expected = td.path().join("Example.app/Contents");
+        fs::create_dir_all(&expected).unwrap();
+        let pattern = PathBuf::from(format!("{}/*.app/Contents", td.path().display()));
+        assert_eq!(resolve_directory_pattern(&pattern), vec![expected]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wildcard_discovery_does_not_follow_symlink_directories() {
+        let td = TempDir::new().unwrap();
+        let outside = td.path().join("outside");
+        fs::create_dir_all(outside.join("Contents")).unwrap();
+        std::os::unix::fs::symlink(&outside, td.path().join("Link.app")).unwrap();
+        fs::create_dir(td.path().join("Real.app")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.join("Contents"),
+            td.path().join("Real.app/Contents"),
+        )
+        .unwrap();
+        assert!(resolve_directory_pattern(&td.path().join("*.app/Contents")).is_empty());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn removed_pending_root_is_not_retried() {
         let td = TempDir::new().unwrap();
@@ -426,6 +629,22 @@ mod tests {
         watcher.reconcile();
         assert!(watcher.active.is_empty());
         assert!(watcher.catchups.is_empty());
+    }
+
+    #[tokio::test]
+    async fn watch_result_does_not_report_an_unrelated_missing_root() {
+        let td = TempDir::new().unwrap();
+        let (_rx, mut watcher) = spawn_watcher(
+            vec![(td.path().join("missing"), false)],
+            tokio::runtime::Handle::current(),
+            16,
+            Some(Duration::from_secs(60)),
+        )
+        .unwrap();
+        let existing = td.path().join("existing");
+        fs::create_dir(&existing).unwrap();
+        watcher.watch(&existing, false).unwrap();
+        assert!(watcher.active.contains_key(&existing));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -510,6 +729,31 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_watcher_during_catchup_closes_raw_channel() {
+        let td = TempDir::new().unwrap();
+        let root = td.path().join("missing");
+        let (mut rx, mut watcher) = spawn_watcher(
+            vec![(root.clone(), true)],
+            tokio::runtime::Handle::current(),
+            1,
+            Some(Duration::from_secs(60)),
+        )
+        .unwrap();
+        fs::create_dir(&root).unwrap();
+        for i in 0..20 {
+            fs::write(root.join(format!("{i}.json")), b"x").unwrap();
+        }
+        watcher.reconcile();
+        rx.recv().await.unwrap();
+        drop(watcher);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while rx.recv().await.is_some() {}
+        })
+        .await
+        .expect("shutdown retained a raw-event sender");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
