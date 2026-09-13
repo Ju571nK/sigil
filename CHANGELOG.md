@@ -7,6 +7,8 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-13
+
 ### Fixed
 
 - Drain the agent pipeline on Unix SIGINT/SIGTERM and Windows Ctrl-C. Release
