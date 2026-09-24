@@ -7,6 +7,7 @@ pub mod cli;
 pub mod control;
 pub mod control_client;
 pub mod debouncer;
+pub mod deployment;
 pub mod doctor;
 pub mod effective_policy;
 pub mod gc_config;

@@ -7,6 +7,8 @@ use thiserror::Error;
 
 pub mod atomic_writer;
 pub mod canonical;
+pub mod deployment;
+pub mod deployment_store;
 pub mod expand;
 pub mod glob;
 pub mod pubkeys;

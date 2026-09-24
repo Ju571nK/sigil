@@ -1,0 +1,29 @@
+{
+  "manifest_digest": "ae12898d2386bf8b94fb926b815cce1abb0d02c4d621af3d7c78a6e34b938493",
+  "policy_utf8": "version: 1\ntargets: []\n",
+  "public_key": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+  "rule_packs_utf8": "version: 1\nrule_packs: []\n",
+  "signed": {
+    "manifest": {
+      "deployment_id": "01234567-89ab-4cde-8fab-0123456789ab",
+      "issued_at": 1790121600,
+      "policy": {
+        "blake3": "bb05b0a9baae92810ad1aa29e6a771cc25db06ab0401223bd1141cc8e071b9b7",
+        "kind": "policy",
+        "size_bytes": 23
+      },
+      "rule_packs": {
+        "blake3": "8c81218855aa0e4566974b2a639d89a158581b57bc69b5fc700b716d62e87a64",
+        "kind": "rule_packs",
+        "size_bytes": 26
+      },
+      "schema_version": 2,
+      "sequence": 42,
+      "signing_pubkey_id": "fixture-key",
+      "target_host_id": "host-a",
+      "valid_until": 1790208000
+    },
+    "signature": "4W1xfGIJ01n48pNrJIqVW/tJYxOu/2fS2PxrxKhIcAiqhT8Xf9fwc9h45jMlX97+qx6leOGitKzktQv3btrQDw=="
+  },
+  "signing_bytes_utf8": "sigil.targeted-deployment.v2\u0000{\"deployment_id\":\"01234567-89ab-4cde-8fab-0123456789ab\",\"issued_at\":1790121600,\"policy\":{\"blake3\":\"bb05b0a9baae92810ad1aa29e6a771cc25db06ab0401223bd1141cc8e071b9b7\",\"kind\":\"policy\",\"size_bytes\":23},\"rule_packs\":{\"blake3\":\"8c81218855aa0e4566974b2a639d89a158581b57bc69b5fc700b716d62e87a64\",\"kind\":\"rule_packs\",\"size_bytes\":26},\"schema_version\":2,\"sequence\":42,\"signing_pubkey_id\":\"fixture-key\",\"target_host_id\":\"host-a\",\"valid_until\":1790208000}"
+}
