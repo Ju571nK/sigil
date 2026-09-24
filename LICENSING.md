@@ -1,13 +1,13 @@
 # Sigil Licensing & Module-Split Policy
 
 This document describes which parts of Sigil are open source under
-[Apache License 2.0](LICENSE), and which parts are reserved for
-binary-only / commercial distribution. It is the canonical reference
-when adding new modules or rule packs.
+[Apache License 2.0](LICENSE), and which parts are distributed separately —
+as signed rule-pack bundles, separate repositories, or hosted services. It is
+the canonical reference when adding new modules or rule packs.
 
-The intent is to keep the **detection mechanism** open and auditable
-while protecting **detection content** (rule knowledge, enterprise
-integrations) as the project's commercial value.
+The rule is simple: the **detection mechanism** lives here, open and
+auditable. **Detection content** — rule knowledge, threat-intel, upstream
+integrations — is distributed separately and verified by that mechanism.
 
 ---
 
@@ -36,7 +36,7 @@ verified, and *how* data is persisted. Mechanism transparency builds
 that trust. Open contributors also accelerate platform support and
 edge-case fixes.
 
-## Binary-only / commercial (private)
+## Distributed separately (not in this repository)
 
 These deliverables are **not** part of the public repository and ship as
 either signed policy bundles, separate private crates, or hosted
@@ -50,10 +50,13 @@ services. The choice depends on integration depth.
 | Hosted policy service        | Cloud service                   | Enterprise rule distribution + telemetry       |
 | SIEM / EDR connectors        | Separate private crates         | One per upstream (Splunk/Sentinel/CrowdStrike) |
 
-**Why these are closed**: detection knowledge is the product's commercial
-moat. Closed *content* combined with open *mechanism* is the standard
-split for security tooling (cf. Falco/Sysdig, Snort/Talos, Suricata/Pro
-ETPro).
+**Why these are separate**: this repository carries the *mechanism* — the code
+that captures, verifies, persists, and enforces. Detection *content* is
+distributed as signed bundles that the mechanism verifies (see below), on its
+own cadence and from its own sources. Separating the two keeps the mechanism
+auditable by operators and lets content ship without an agent rebuild. The
+same split is standard in security tooling (cf. Falco/Sysdig, Snort/Talos,
+Suricata/ET Pro).
 
 **Trust boundary by distribution form**: Personal installs use *unsigned* local
 rule packs distributed via git — trust derives from the git repository (the pack
@@ -79,8 +82,10 @@ When adding a new file or crate, ask:
 3. **Does it integrate with an enterprise upstream (SIEM, IdP, ticketing)?**
    → Closed (separate private crate or service).
 
-When in doubt, open it. Closing later is reversible; opening leaked
-content is not.
+Publishing is one-way: code released under Apache-2.0 stays available under
+Apache-2.0 in the versions it shipped in, and a later decision to close it
+does not retract those. So settle the boundary before the first release, not
+after. When rule 1 applies, open it deliberately.
 
 ---
 
@@ -151,56 +156,6 @@ consumed via the signed-bundle test fixtures used by `verify.rs`.
 
 ---
 
-## Issuing licenses (vendor key ceremony)
-
-Commercial licenses are vendor-signed and verified by the OSS agent against the
-compiled-in `SIGIL_LICENSE_PUBKEYS` trust anchor. The signing tool is OSS
-(`sigil-sign license`); only the vendor private key is secret.
-
-1. **Generate the vendor keypair** (once, in a secure environment):
-
-   ```
-   sigil-sign keygen --id sigil-license-2026 --out vendor-license.key
-   ```
-
-   The `--id` becomes the `signing_pubkey_id` stamped on every license you issue.
-
-2. **Secure the private key.** Store `vendor-license.key` in a password manager,
-   encrypted volume, or HSM. NEVER commit it; never leave it in a repo working
-   tree. Anyone with this file can forge licenses.
-
-3. **Publish the public key.** Copy the printed `ed25519_pubkey_b64` into
-   `SIGIL_LICENSE_PUBKEYS` in `crates/sigil-core/src/license/mod.rs`:
-
-   ```
-   pub const SIGIL_LICENSE_PUBKEYS: &[(&str, &str)] = &[
-       ("sigil-license-2026", "ed25519:<ed25519_pubkey_b64>"),
-   ];
-   ```
-
-   Cut a release so deployed servers trust licenses signed by this key.
-
-4. **Issue a license:**
-
-   ```
-   sigil-sign license \
-     --key vendor-license.key \
-     --customer-id ACME \
-     --max-hosts 1000 \
-     --valid-days 365 \
-     --out acme.license.json
-   ```
-
-5. **Deliver** `acme.license.json` to the customer; they point their
-   `sigil-server` config's `license.path` at it.
-
-**Rotation:** `SIGIL_LICENSE_PUBKEYS` holds multiple entries. To rotate,
-generate a new keypair with a new `--id`, add its pubkey alongside the old one,
-and sign new licenses with the new key. Old licenses keep verifying until you
-remove the old pubkey in a later release.
-
----
-
 ## Audit log tamper-evidence (and its limits)
 
 `sigil-server` writes a signed, hash-chained `license-audit.jsonl`: each line is
@@ -219,8 +174,8 @@ head*: the signed head is exposed at `GET /v1/meta` (`audit_head`), and any
 external party (a vendor audit, monitoring, sigil-manager) that records a head
 pins the operator to that history. Capture heads off-box to anchor the chain.
 
-This is corroborating evidence, not an automatic legal proof of usage.
-Automatic push-anchoring and public timestamping are future work.
+This is corroborating evidence, not automatic proof. Automatic push-anchoring
+and public timestamping are future work.
 
 ## Build self-verification (and its limits)
 
@@ -239,4 +194,4 @@ verifier itself. Pair this with the externally-anchored, harder-to-forge
 `gh attestation verify` (Sigstore-backed build provenance) for defense in depth.
 
 This slice ships the mechanism; `SIGIL_BUILD_PUBKEYS` is empty until a signed release
-populates it (the build-signing key ceremony, mirroring the license vendor key).
+populates it.
