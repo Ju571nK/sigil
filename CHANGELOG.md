@@ -7,6 +7,18 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+### Added
+
+- Define the targeted deployment v2 core manifest contract, domain-separated
+  signature verification, paired artifact validation, and replay/migration
+  checks with a shared golden fixture (#230, first stage). Runtime activation,
+  server distribution, and signer CLI integration are not enabled yet.
+- Add a FULL-synchronous transactional deployment store and agent preparation
+  coordinator (#230, second stage). Commit manifest, both artifacts, and replay
+  state together; reverify on recovery and compile one coherent policy/rubric/
+  evaluator generation before publication. This remains an internal API, not
+  daemon activation or an `applied` acknowledgement.
+
 ## [0.8.3] - 2026-09-13
 
 ### Fixed
