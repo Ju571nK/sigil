@@ -7,6 +7,8 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-09
+
 ### Added
 
 - Define the targeted deployment v2 core manifest contract, domain-separated
@@ -43,6 +45,16 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
   existing chain is left untouched: its head is still read at startup and
   exposed as `/v1/meta.audit_head`, the record format is frozen, and
   `sigil-sign verify-audit` still verifies it.
+
+### Fixed
+
+- Native (glibc) `.rpm` builds use rpm's `find-requires` for dependency
+  generation. With Rust 1.99+ binaries, cargo-generate-rpm's builtin fallback
+  wrote weak glibc version references as unsatisfiable requirements such as
+  `libc.so.6(GLIBC_2.18)[WEAK](64bit)`, so `rpm -i` failed on Rocky 9.
+  `packaging/build.sh` now stops with an error when `find-requires` is missing
+  for a dynamic build. Release packages are static musl builds and were not
+  affected (#234).
 
 ## [0.8.3] - 2026-09-13
 
