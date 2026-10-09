@@ -81,11 +81,14 @@ merge SHA for each shipped phase.
   defaults shipped for **Gemini CLI** (`~/.gemini/settings.json`) and
   **Cursor** (`~/.cursor/mcp.json`) — replaces the originally-planned
   hardcoded Phase 3b.2.
-- **License enforcement structure — shipped 7905559.** `sigil-server` verifies a
-  vendor-signed license, measures active fleet size against a free tier (200
-  active hosts) or licensed limit, surfaces `license` status on `/v1/meta`, and
-  writes an append-only `license-audit.jsonl` record. Structure for future
-  commercial licensing — no billing and no blocking (measures, doesn't block).
+- **Fleet size reporting + audit-chain verification.** `GET /v1/meta` reports
+  `fleet.active_host_count` and `fleet.active_window_days` (top-level
+  `active_window_days` in server config, default 7). The earlier license
+  verification module and its `/v1/meta.license` block were removed; `license:`
+  in server config is deprecated (its window value is still honored). Existing
+  signed, hash-chained `license-audit.jsonl` chains are no longer appended to but
+  remain verifiable: the record format is frozen, the head is still exposed at
+  `/v1/meta.audit_head`, and `sigil-sign verify-audit` checks them.
 - **Phase 3b.8 — shipped 3d8a227.** Hardcoded Gemini CLI + Cursor guard-surface
   parsers: per-repo scope, destructive scanning, full Gemini surface coverage.
   Retired the declarative default packs shipped in 3b.7; new shared `mcp_scan`
@@ -94,7 +97,7 @@ merge SHA for each shipped phase.
   `BuildManifest` (`sigil-core::manifest`, ed25519 over RFC 8785 canonical bytes,
   compiled-in `SIGIL_BUILD_PUBKEYS` trust anchor), `sigil-sign manifest` signer, and
   `sigil doctor --verify-self` (hashes the running binary with blake3, checks it
-  against the manifest). Mirrors the license module; mechanism ships with the anchor
+  against the manifest). Mirrors the policy signing pattern; mechanism ships with the anchor
   empty until the build-signing key ceremony.
 
 ## Planned
