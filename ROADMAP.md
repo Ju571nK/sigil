@@ -81,7 +81,7 @@ merge SHA for each shipped phase.
   defaults shipped for **Gemini CLI** (`~/.gemini/settings.json`) and
   **Cursor** (`~/.cursor/mcp.json`) — replaces the originally-planned
   hardcoded Phase 3b.2.
-- **Fleet size reporting + audit-chain verification.** `GET /v1/meta` reports
+- **Fleet size reporting + audit-chain verification — shipped f14bd86.** `GET /v1/meta` reports
   `fleet.active_host_count` and `fleet.active_window_days` (top-level
   `active_window_days` in server config, default 7). The earlier license
   verification module and its `/v1/meta.license` block were removed; `license:`
