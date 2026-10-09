@@ -68,7 +68,9 @@ This installs `/usr/bin/sigil-server`, the unit at
 
 > Prefer to build the package yourself? `cargo install cargo-deb
 > cargo-generate-rpm && packaging/build.sh server` produces them under
-> `target/debian/` and `target/generate-rpm/`.
+> `target/debian/` and `target/generate-rpm/`. A native (glibc) `.rpm` build
+> also needs rpm's `find-requires` — install `rpm-build` on RHEL/Rocky first;
+> `build.sh` stops with an error if it is missing.
 
 You also need `sigil-sign` (operator CLI) on a trusted workstation to produce
 the signed policy bundle — install the `sigil-signer` package or use `install.sh`.

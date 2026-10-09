@@ -48,7 +48,8 @@ jobs:
     container: rockylinux:9
     steps:
       - name: install build deps
-        run: dnf -y install git gcc perl
+        # rpm-build provides /usr/lib/rpm/find-requires for packaging/build.sh (#234).
+        run: dnf -y install git gcc perl rpm-build
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -84,6 +85,11 @@ jobs:
             rpm -qpi "$rpm"
             rpm -qpl "$rpm"
             rpm -qp --scripts "$rpm"
+            # Weak glibc version references must not become requirements (#234).
+            if rpm -qp --requires "$rpm" | grep -F '[WEAK]'; then
+              echo "::error::$rpm has [WEAK] requirements that dnf cannot satisfy (#234)"
+              exit 1
+            fi
             rpm -qpl "$rpm" | grep -qx "/usr/bin/${bin}"
             if [ -n "$unit" ]; then
               rpm -qpl "$rpm" | grep -qx "/usr/lib/systemd/system/${unit}"
