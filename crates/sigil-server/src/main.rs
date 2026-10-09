@@ -121,6 +121,13 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         sigil_server::audit_chain::read_head(&sigil_server::audit_chain::chain_path(audit_dir));
     if let Some(h) = &audit_head {
         tracing::info!(seq = h.seq, hash = %h.hash, "existing audit chain head loaded (read-only)");
+        if audit_key.as_ref().map(|k| &k.pubkey_id) != Some(&h.pubkey_id) {
+            tracing::warn!(
+                head_pubkey_id = %h.pubkey_id,
+                "audit chain head was signed by a key this server does not hold; \
+                 /v1/meta.audit_head omits `pubkey` (verify with the key named by pubkey_id)"
+            );
+        }
     }
 
     // #184 — enrollment state. Off unless cert+key+tokens AND host_allowlist are
