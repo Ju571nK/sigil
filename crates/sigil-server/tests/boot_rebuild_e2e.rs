@@ -61,7 +61,6 @@ async fn boot_rebuild_populates_fleet_hosts() {
         high_water: Mutex::new(HighWater::default()),
         fleet_index: idx,
         read_token: ReadToken(Some("tok".into())),
-        license_state: sigil_core::license::status::LicenseState::Free,
         active_window_days: 7,
         audit_key: None,
         rule_packs_bundle_path: None,

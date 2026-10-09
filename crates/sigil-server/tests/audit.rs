@@ -2,7 +2,6 @@
 //! (audit_head is Some + audit_key is Some) and disabled (both None).
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
-use sigil_core::license::status::LicenseState;
 use sigil_server::app::{build_router, AppState};
 use sigil_server::auth::ReadToken;
 use sigil_server::fleet_index::FleetIndex;
@@ -26,7 +25,6 @@ async fn meta_reports_audit_head_when_signing_enabled() {
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: ReadToken(Some("tok".into())),
-        license_state: LicenseState::Free,
         active_window_days: 7,
         audit_key,
         audit_head: Mutex::new(Some(sigil_core::audit::AuditHead {
@@ -81,7 +79,6 @@ async fn meta_reports_null_audit_head_when_disabled() {
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: ReadToken(Some("tok".into())),
-        license_state: LicenseState::Free,
         active_window_days: 7,
         audit_key: None,
         audit_head: Mutex::new(None),
@@ -110,4 +107,62 @@ async fn meta_reports_null_audit_head_when_disabled() {
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
     assert!(body["audit_head"].is_null());
+}
+
+/// A chain written by an earlier release is still surfaced read-only: the
+/// boot path's `audit_chain::read_head` result lands in `/v1/meta.audit_head`.
+#[tokio::test]
+async fn meta_reports_head_of_existing_chain_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../sigil-core/tests/fixtures/audit/legacy-chain-v1.jsonl"
+    );
+    let chain = sigil_server::audit_chain::chain_path(dir.path());
+    std::fs::copy(fixture, &chain).unwrap();
+    let before = std::fs::read(&chain).unwrap();
+    let head = sigil_server::audit_chain::read_head(&chain);
+    assert!(head.is_some());
+
+    let state = Arc::new(AppState {
+        events_out_dir: dir.path().to_path_buf(),
+        policy_bundle_path: dir.path().join("p.json"),
+        rule_packs_bundle_path: None,
+        artifacts_dir: None,
+        high_water_path: dir.path().join(".hw.json"),
+        allowlist: parking_lot::RwLock::new(None::<HashSet<String>>),
+        high_water: Mutex::new(HighWater::default()),
+        fleet_index: FleetIndex::new(),
+        read_token: ReadToken(Some("tok".into())),
+        active_window_days: 7,
+        audit_key: sigil_server::audit_key::AuditKey::load_or_create(dir.path()),
+        audit_head: Mutex::new(head),
+        allowlist_path: None,
+        enroll: None,
+        events_require_cert_host_match: false,
+    });
+    let resp = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/meta")
+                .header(header::AUTHORIZATION, "Bearer tok")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["audit_head"]["seq"], 2);
+    assert_eq!(
+        body["audit_head"]["hash"],
+        "3f119e2fe76f1c3cbf8a267419db1cda7e137514d1ba48e3ddfa9d763c8c8df2"
+    );
+    assert_eq!(body["audit_head"]["pubkey_id"], "sigil-audit-fixt01");
+    // Read-only: the chain file is never appended to.
+    assert_eq!(std::fs::read(&chain).unwrap(), before);
 }

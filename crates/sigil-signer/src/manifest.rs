@@ -1,4 +1,4 @@
-//! Build + sign a BuildManifest into a SignedBuildManifest. Mirrors license.rs:
+//! Build + sign a BuildManifest into a SignedBuildManifest:
 //! per-artifact blake3 -> canonical bytes -> ed25519 sign -> base64.
 
 use crate::keygen::SigningKeyFile;

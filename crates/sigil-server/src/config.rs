@@ -5,13 +5,16 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// License configuration block (optional). Absent ⇒ free tier.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct LicenseConfig {
-    /// Path to the SignedLicense bundle (JSON). Absent ⇒ free tier.
+/// Default rolling window (days) for active-host counting.
+pub const DEFAULT_ACTIVE_WINDOW_DAYS: u32 = 7;
+
+/// DEPRECATED `license:` block from earlier releases. Parsed only so existing
+/// configs keep loading: `active_window_days` is honored when the top-level
+/// key is absent; `path` is ignored. Both log a deprecation warning at load.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct DeprecatedLicenseBlock {
     #[serde(default)]
     pub path: Option<PathBuf>,
-    /// Rolling window for "active host" counting. Absent ⇒ DEFAULT_ACTIVE_WINDOW_DAYS.
     #[serde(default)]
     pub active_window_days: Option<u32>,
 }
@@ -82,9 +85,15 @@ pub struct ServerConfig {
     /// across restarts). Defaults to `<events_out_dir>/.high-water.json`.
     #[serde(default)]
     pub high_water_path: Option<PathBuf>,
-    /// Optional license configuration. Absent ⇒ free tier (no enforcement).
+    /// Rolling window (days) for active-host counting, reported in
+    /// `GET /v1/meta` under `fleet`. Read through [`Self::active_window_days`]:
+    /// absent ⇒ deprecated `license.active_window_days`, else
+    /// [`DEFAULT_ACTIVE_WINDOW_DAYS`]. An explicit top-level value always wins.
     #[serde(default)]
-    pub license: Option<LicenseConfig>,
+    pub active_window_days: Option<u32>,
+    /// DEPRECATED — see [`DeprecatedLicenseBlock`]. Never serialized.
+    #[serde(default, rename = "license", skip_serializing)]
+    pub deprecated_license: Option<DeprecatedLicenseBlock>,
 }
 
 impl ServerConfig {
@@ -98,7 +107,47 @@ impl ServerConfig {
             source,
         })?;
         cfg.validate(path)?;
+        cfg.warn_deprecated();
         Ok(cfg)
+    }
+
+    /// Effective active-host window: top-level `active_window_days`, else the
+    /// deprecated `license.active_window_days`, else the default.
+    pub fn active_window_days(&self) -> u32 {
+        self.active_window_days
+            .or_else(|| {
+                self.deprecated_license
+                    .as_ref()
+                    .and_then(|l| l.active_window_days)
+            })
+            .unwrap_or(DEFAULT_ACTIVE_WINDOW_DAYS)
+    }
+
+    /// One `warn!` per deprecated `license:` key that is set.
+    fn warn_deprecated(&self) {
+        let Some(l) = &self.deprecated_license else {
+            return;
+        };
+        if let Some(days) = l.active_window_days {
+            if self.active_window_days.is_some() {
+                tracing::warn!(
+                    "config: `license.active_window_days` is deprecated and overridden \
+                     by top-level `active_window_days`; remove the `license:` block"
+                );
+            } else {
+                tracing::warn!(
+                    active_window_days = days,
+                    "config: `license.active_window_days` is deprecated; still honored, \
+                     move it to top-level `active_window_days`"
+                );
+            }
+        }
+        if l.path.is_some() {
+            tracing::warn!(
+                "config: `license.path` is no longer used and is ignored; \
+                 remove the `license:` block"
+            );
+        }
     }
 
     /// Cross-field boot validation. #194.2: `events_require_cert_host_match`
@@ -164,8 +213,8 @@ mod tests {
         let mut out = String::new();
         for line in raw.lines() {
             let t = line.trim_start();
-            // Uncomment lines that document a setting (`# key:`, `#   - item`,
-            // nested `# path:` / `# active_window_days:`); drop prose comments.
+            // Uncomment lines that document a setting (`# key:`, `#   - item`);
+            // drop prose comments.
             let is_setting = t
                 .strip_prefix('#')
                 .map(|r| {
@@ -195,6 +244,11 @@ mod tests {
         assert!(cfg.enroll_issuer_fingerprints.is_some());
         assert!(cfg.events_require_cert_host_match);
         assert!(cfg.artifacts_dir.is_some());
+        assert!(cfg.active_window_days.is_some());
+        assert!(
+            cfg.deprecated_license.is_none(),
+            "example must not document `license:`"
+        );
     }
 
     #[test]
@@ -337,33 +391,84 @@ events_require_cert_host_match: true
         assert!(matches!(err, ConfigError::Read { .. }));
     }
 
-    #[test]
-    fn parses_optional_license_block() {
-        let yaml = r#"
+    const BASE: &str = r#"
 bind: "127.0.0.1:8443"
 events_out_dir: "/var/lib/sigil-server/events"
 policy_bundle_path: "/var/lib/sigil-server/signed-policy.json"
-license:
-  path: /etc/sigil/license.bundle
-  active_window_days: 14
 "#;
-        let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
-        let lic = cfg.license.expect("license block present");
-        assert_eq!(
-            lic.path.as_deref(),
-            Some(std::path::Path::new("/etc/sigil/license.bundle"))
-        );
-        assert_eq!(lic.active_window_days, Some(14));
+
+    #[test]
+    fn active_window_defaults_when_absent() {
+        let cfg: ServerConfig = serde_yaml::from_str(BASE).unwrap();
+        assert_eq!(cfg.active_window_days, None);
+        assert!(cfg.deprecated_license.is_none());
+        assert_eq!(cfg.active_window_days(), DEFAULT_ACTIVE_WINDOW_DAYS);
     }
 
     #[test]
-    fn license_block_absent_is_none() {
-        let yaml = r#"
-bind: "127.0.0.1:8443"
-events_out_dir: "/var/lib/sigil-server/events"
-policy_bundle_path: "/var/lib/sigil-server/signed-policy.json"
-"#;
-        let cfg: ServerConfig = serde_yaml::from_str(yaml).unwrap();
-        assert!(cfg.license.is_none());
+    fn top_level_active_window_is_used() {
+        let yaml = format!("{BASE}active_window_days: 30\n");
+        let cfg: ServerConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(cfg.active_window_days(), 30);
+    }
+
+    /// Configs written for earlier releases (with a `license:` block holding
+    /// both keys) must still load through `ServerConfig::load`.
+    #[test]
+    fn legacy_license_block_still_parses() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("server.yaml");
+        std::fs::write(
+            &p,
+            format!(
+                "{BASE}license:\n  path: /etc/sigil/license.bundle\n  active_window_days: 14\n"
+            ),
+        )
+        .unwrap();
+        let cfg = ServerConfig::load(&p).expect("legacy config loads");
+        let l = cfg.deprecated_license.as_ref().expect("legacy block kept");
+        assert_eq!(
+            l.path.as_deref(),
+            Some(Path::new("/etc/sigil/license.bundle"))
+        );
+        // A path-only legacy block also loads and falls back to the default.
+        std::fs::write(
+            &p,
+            format!("{BASE}license:\n  path: /etc/sigil/license.bundle\n"),
+        )
+        .unwrap();
+        let cfg = ServerConfig::load(&p).expect("path-only legacy config loads");
+        assert_eq!(cfg.active_window_days(), DEFAULT_ACTIVE_WINDOW_DAYS);
+    }
+
+    #[test]
+    fn legacy_active_window_is_honored_when_top_level_absent() {
+        let yaml = format!("{BASE}license:\n  active_window_days: 14\n");
+        let cfg: ServerConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(cfg.active_window_days, None);
+        assert_eq!(cfg.active_window_days(), 14);
+    }
+
+    /// Top-level wins even when it equals the default (so the default value
+    /// is not mistaken for "absent").
+    #[test]
+    fn top_level_active_window_wins_over_legacy() {
+        let yaml = format!("{BASE}active_window_days: 30\nlicense:\n  active_window_days: 14\n");
+        let cfg: ServerConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(cfg.active_window_days(), 30);
+
+        let yaml = format!(
+            "{BASE}active_window_days: {DEFAULT_ACTIVE_WINDOW_DAYS}\nlicense:\n  active_window_days: 14\n"
+        );
+        let cfg: ServerConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(cfg.active_window_days(), DEFAULT_ACTIVE_WINDOW_DAYS);
+    }
+
+    #[test]
+    fn deprecated_block_is_not_serialized() {
+        let yaml = format!("{BASE}license:\n  active_window_days: 14\n");
+        let cfg: ServerConfig = serde_yaml::from_str(&yaml).unwrap();
+        let out = serde_yaml::to_string(&cfg).unwrap();
+        assert!(!out.contains("license"), "{out}");
     }
 }

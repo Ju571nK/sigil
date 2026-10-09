@@ -1,9 +1,9 @@
-//! GET /v1/meta — server build info + alerts default + license status. Bearer auth.
+//! GET /v1/meta — server build info + alerts default + fleet size + audit head.
+//! Bearer auth.
 use crate::app::SharedState;
 use axum::{extract::State, response::IntoResponse, Json};
 use serde_json::json;
 use sigil_core::event::SCHEMA_VERSION;
-use sigil_core::license::status::compute_status;
 use time::{Duration, OffsetDateTime};
 
 /// Canonical alert definition surfaced by `GET /v1/meta`. Extracted so the
@@ -25,7 +25,6 @@ pub async fn get_meta(State(state): State<SharedState>) -> impl IntoResponse {
     let now = OffsetDateTime::now_utc();
     let window = Duration::days(state.active_window_days as i64);
     let active = state.fleet_index.active_host_count(now, window);
-    let license = compute_status(&state.license_state, active, state.active_window_days);
 
     let audit_head = state.audit_head.lock().unwrap().clone();
     let audit_head_json = match (&audit_head, state.audit_key.as_ref()) {
@@ -46,7 +45,10 @@ pub async fn get_meta(State(state): State<SharedState>) -> impl IntoResponse {
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap(),
         "alerts_definition_default": alerts_definition_default(),
-        "license": license,
+        "fleet": {
+            "active_host_count": active,
+            "active_window_days": state.active_window_days,
+        },
         "audit_head": audit_head_json
     }))
 }

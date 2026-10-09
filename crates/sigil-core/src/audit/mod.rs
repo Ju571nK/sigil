@@ -1,7 +1,15 @@
-//! Tamper-evident license-audit log: per-record ed25519 signature + linear
-//! blake3 hash-chain. Pure model + sign + verify — no file I/O, no RNG; the
-//! caller (sigil-server) owns the key lifecycle. Mirrors the policy/license
-//! signing pattern: ed25519 over `to_canonical_bytes`.
+//! Tamper-evident audit log: per-record ed25519 signature + linear blake3
+//! hash-chain. Pure model + sign + verify — no file I/O, no RNG; the caller
+//! (sigil-server) owns the key lifecycle. Mirrors the policy signing pattern:
+//! ed25519 over `to_canonical_bytes`.
+//!
+//! FROZEN SCHEMA: `sigil-server` no longer appends records of this shape, but
+//! chains written by earlier releases must keep verifying (`sigil-sign
+//! verify-audit`, `/v1/meta.audit_head`). `verify_record`/`verify_chain`
+//! re-derive the canonical bytes from [`AuditRecord`], so adding, removing,
+//! renaming or retyping ANY field turns every existing chain into `BadHash`.
+//! Do not change `AuditRecord`; the fixture test
+//! `legacy_chain_fixture_still_verifies` guards this.
 //!
 //! HONEST LIMITATION: this fully defends against third-party tampering and
 //! accidental corruption — any edit, reorder, deletion, or truncation breaks a
@@ -22,6 +30,10 @@ pub const GENESIS_PREV_HASH: &str =
 
 /// The signed payload. `prev_hash` carries the chain link; `seq` is monotonic.
 /// Does NOT contain its own hash/sig (those wrap it in `SignedAuditRecord`).
+///
+/// Frozen: the field set, names and types are part of the on-disk format of
+/// existing chains (see module docs). The status-shaped fields are retained
+/// only so historical records keep verifying.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuditRecord {
     pub v: u8,
@@ -293,6 +305,32 @@ mod tests {
         let chain = signed_chain(&sk, 2);
         let head = verify_chain(&chain, None).unwrap();
         assert_eq!(head.seq, 1);
+    }
+
+    /// A chain written by an earlier release (generated with this exact
+    /// `AuditRecord` shape and a fixed test key) must keep verifying, both
+    /// structurally and with signatures. Fails with `BadHash` if the frozen
+    /// schema is changed.
+    #[test]
+    fn legacy_chain_fixture_still_verifies() {
+        const FIXTURE: &str = include_str!("../../tests/fixtures/audit/legacy-chain-v1.jsonl");
+        const PUBKEY_B64: &str = "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=";
+        let lines: Vec<SignedAuditRecord> = FIXTURE
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 3);
+        let raw = data_encoding::BASE64.decode(PUBKEY_B64.as_bytes()).unwrap();
+        let vk = VerifyingKey::from_bytes(&raw.try_into().unwrap()).unwrap();
+        let head = verify_chain(&lines, Some(&vk)).unwrap();
+        assert_eq!(head.seq, 2);
+        assert_eq!(
+            head.hash,
+            "3f119e2fe76f1c3cbf8a267419db1cda7e137514d1ba48e3ddfa9d763c8c8df2"
+        );
+        assert_eq!(head.pubkey_id, "sigil-audit-fixt01");
+        verify_chain(&lines, None).unwrap();
     }
 
     #[test]

@@ -27,7 +27,6 @@ fn state(scratch: &Path, artifacts_dir: Option<PathBuf>, token: Option<&str>) ->
         high_water: Mutex::new(HighWater::default()),
         fleet_index: FleetIndex::new(),
         read_token: ReadToken(token.map(str::to_string)),
-        license_state: sigil_core::license::status::LicenseState::Free,
         active_window_days: 7,
         audit_key: None,
         audit_head: Mutex::new(None),

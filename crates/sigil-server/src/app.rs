@@ -36,13 +36,12 @@ pub struct AppState {
     pub fleet_index: FleetIndex,
     /// Phase 3b.4 — bearer token for the read API. `None` ⇒ read endpoints 404.
     pub read_token: ReadToken,
-    /// Loaded + verified at boot. Read-only thereafter. Free if none configured.
-    pub license_state: sigil_core::license::status::LicenseState,
-    /// Rolling window (days) for active-host counting.
+    /// Rolling window (days) for active-host counting (`/v1/meta.fleet`).
     pub active_window_days: u32,
     /// Audit signing key (auto-generated). `None` ⇒ audit signing disabled.
     pub audit_key: Option<crate::audit_key::AuditKey>,
-    /// Latest signed audit-chain head, updated by the audit task; read by /v1/meta.
+    /// Head of an audit chain written by an earlier release, read once at boot
+    /// (`audit_chain::read_head`); `None` if no chain exists. Read by /v1/meta.
     pub audit_head: Mutex<Option<sigil_core::audit::AuditHead>>,
     /// Path to the optional `hosts.json` allowlist file (for atomic add on
     /// enroll). `None` ⇒ no on-disk allowlist (and enrollment is disabled). #184

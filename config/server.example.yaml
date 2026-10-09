@@ -65,7 +65,9 @@ policy_bundle_path: "/var/lib/sigil-server/signed-policy.json"
 # (CN = SAN = host_id) satisfy it immediately.
 # events_require_cert_host_match: true
 
-# Optional — commercial license bundle. Absent ⇒ free tier.
-# license:
-#   path: "/etc/sigil/license.bundle"
-#   active_window_days: 30
+# Optional — rolling window (days) for counting a host as active. Reported by
+# GET /v1/meta under `fleet` (`active_host_count`, `active_window_days`).
+# Default 7. (The former `license:` block is deprecated: its
+# `active_window_days` is still honored when this key is absent, and its
+# `path` is ignored. Both log a warning at startup.)
+# active_window_days: 30
