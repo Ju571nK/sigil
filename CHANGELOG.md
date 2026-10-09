@@ -7,6 +7,16 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+### Fixed
+
+- `GET /v1/meta.audit_head` no longer pairs the chain head's `pubkey_id` with
+  the server's current audit key when the two differ (for example after the
+  key was regenerated or the chain was moved between installs). `pubkey` is now
+  reported only when the current key signed the head; otherwise it is omitted,
+  and `pubkey_id` names the key to verify with. The head is also reported when
+  no audit key is loaded. The server logs a warning at startup when the head's
+  key is not the one it holds (#237).
+
 ## [0.9.0] - 2026-10-09
 
 ### Added

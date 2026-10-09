@@ -27,15 +27,30 @@ pub async fn get_meta(State(state): State<SharedState>) -> impl IntoResponse {
     let active = state.fleet_index.active_host_count(now, window);
 
     let audit_head = state.audit_head.lock().unwrap().clone();
-    let audit_head_json = match (&audit_head, state.audit_key.as_ref()) {
-        (Some(h), Some(k)) => json!({
-            "seq": h.seq,
-            "hash": h.hash,
-            "sig": h.sig,
-            "pubkey_id": h.pubkey_id,
-            "pubkey": format!("ed25519:{}", k.pubkey_b64),
-        }),
-        _ => serde_json::Value::Null,
+    let audit_head_json = match &audit_head {
+        Some(h) => {
+            let mut head = json!({
+                "seq": h.seq,
+                "hash": h.hash,
+                "sig": h.sig,
+                "pubkey_id": h.pubkey_id,
+            });
+            // `pubkey` must be the key that signed the head. The chain is
+            // frozen, so it may have been signed by a key other than the one
+            // this server holds now (regenerated key, chain moved between
+            // installs). Report `pubkey` only when the ids match; otherwise
+            // leave it out and let `pubkey_id` name the key to verify with
+            // (#237).
+            if let Some(k) = state
+                .audit_key
+                .as_ref()
+                .filter(|k| k.pubkey_id == h.pubkey_id)
+            {
+                head["pubkey"] = json!(format!("ed25519:{}", k.pubkey_b64));
+            }
+            head
+        }
+        None => serde_json::Value::Null,
     };
 
     Json(json!({

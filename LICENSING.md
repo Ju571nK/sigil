@@ -168,6 +168,9 @@ frozen so old chains keep verifying. The verification logic lives in OSS
 `sigil-core::audit`; anyone can check a chain with
 `sigil-sign verify-audit --in <file> --pubkey ed25519:<b64>` (add
 `--expect-head <hash>` to assert against a head recorded earlier).
+`audit_head.pubkey` is included only when the server's current key signed the
+head; if the key has changed since, only `pubkey_id` is reported and the
+matching public key must be supplied to the verifier.
 
 The same signing key and primitives also sign the enrollment audit log
 (`enrollment-audit.jsonl`, a separate chain with its own record shape).
