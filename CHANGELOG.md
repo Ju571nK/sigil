@@ -7,6 +7,8 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-10
+
 ### Fixed
 
 - `GET /v1/meta.audit_head` no longer pairs the chain head's `pubkey_id` with
