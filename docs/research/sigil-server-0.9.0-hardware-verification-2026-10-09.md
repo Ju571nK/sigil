@@ -1,4 +1,4 @@
-# sigil-server 0.9.0 hardware verification — 2026-10-09
+# sigil-server 0.9.0 / 0.9.1 hardware verification — 2026-10-09
 
 Hardware-verified behavior of the v0.9.0 release on a real server, plus the
 follow-up fix found during the run (#237, PR #238).
@@ -80,10 +80,37 @@ sigil-server`), both instances restarted on it:
 Both chain files unchanged. Server still reports version `0.9.0`; the fix
 ships in the next release.
 
+## Follow-up: v0.9.1 packaged upgrade (2026-10-10)
+
+The two gaps left open above were closed with the v0.9.1 release RPMs.
+
+Baseline: the installed 0.2.0 packages (`sigil`, `sigil-sender`,
+`sigil-server`) with `/etc/sigil/server.yaml` (loopback port) and a systemd
+drop-in for the read token. `sigil-server.service` was started on 0.2.0; it
+created `audit-signing.key` and a 1-line `license-audit.jsonl` under
+`/var/lib/sigil-server/events`, and accepted one event (1 active host).
+
+`sudo rpm -Uvh` of the three 0.9.1 aarch64 RPMs with the 0.2.0 service running:
+
+| Check | Result |
+|---|---|
+| `SHA256SUMS`, `rpm -qpR` | match; only `/bin/sh` and rpmlib entries |
+| Upgrade | exit 0; 0.2.0 packages removed, 0.9.1 installed |
+| Service | restarted automatically by the package scriptlet (new PID), active on 0.9.1; enablement unchanged |
+| Operator files | `/etc/sigil/server.yaml` and the drop-in left in place |
+| `/v1/meta` | `server_version` 0.9.1, no `license`, `fleet` 1 / 7 days |
+| `audit_head` | seq 0, existing key `sigil-audit-xhk2i9` reused, `pubkey` present and matching (#237 fix in the packaged build) |
+| Read API | no token → 401; `/v1/fleet/hosts` lists the host; host detail 200 |
+| State files | chain and key checksums unchanged |
+| Chain | `sigil-sign verify-audit` (0.9.1 signer, extracted from its RPM) → `AUDIT CHAIN OK (1 lines)` with the reported pubkey and head |
+| SELinux (enforcing) | no AVC denials |
+
 ## Not covered
 
-- Actual RPM install/upgrade on a managed host (only `rpm -U --test`).
-- The #238 fix in a packaged build (verified from a source build only).
+- Installing the 0.9.1 signer package itself (the binary was extracted from the
+  RPM for verification only).
+- A mismatched-key chain under the packaged build (covered by the source build
+  above and by tests).
 
 ## Cleanup
 
