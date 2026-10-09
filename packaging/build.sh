@@ -137,6 +137,30 @@ fi
 
 mkdir -p "$ROOT/target/generate-rpm"
 
+# Requires generation for .rpm (#234). A static musl build has no shared-library
+# requirements, so the default is fine. A dynamic (glibc) build must use rpm's
+# own find-requires: cargo-generate-rpm's builtin fallback, used when
+# find-requires is absent, copies ldd's "[WEAK]" marker into requirements such
+# as libc.so.6(GLIBC_2.18)[WEAK](64bit), which dnf/rpm cannot satisfy. Rust 1.99+
+# binaries carry such weak glibc version references.
+RPM_AUTO_REQ_ARG=""
+case "$FORMAT" in
+    rpm|all)
+        case "$TARGET" in
+            *-musl*) ;;
+            *)
+                if [ ! -x /usr/lib/rpm/find-requires ]; then
+                    echo "error: dynamic .rpm builds need /usr/lib/rpm/find-requires" >&2
+                    echo "       (install rpm-build on RHEL/Rocky/Fedora, or rpm on Debian/Ubuntu)," >&2
+                    echo "       or build static: --target <arch>-unknown-linux-musl. See #234." >&2
+                    exit 1
+                fi
+                RPM_AUTO_REQ_ARG="--auto-req find-requires"
+                ;;
+        esac
+        ;;
+esac
+
 for c in $CRATES; do
     cd "$ROOT/crates/$c"
     case "$FORMAT" in
@@ -154,7 +178,7 @@ for c in $CRATES; do
             RPM_ARCH_ARG=""
             [ -n "$RPM_ARCH" ] && RPM_ARCH_ARG="--arch $RPM_ARCH"
             # shellcheck disable=SC2086
-            cargo generate-rpm $RPM_ARCH_ARG --output "$ROOT/target/generate-rpm/"
+            cargo generate-rpm $RPM_ARCH_ARG $RPM_AUTO_REQ_ARG --output "$ROOT/target/generate-rpm/"
             ;;
     esac
 done
