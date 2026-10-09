@@ -104,16 +104,7 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
     // listener can open immediately and boot_gate can serve 503 until ready (#19).
     let fleet_index = FleetIndex::new();
 
-    let now = time::OffsetDateTime::now_utc();
-    let active_window_days = cfg
-        .license
-        .as_ref()
-        .and_then(|l| l.active_window_days)
-        .unwrap_or(sigil_server::license_state::DEFAULT_ACTIVE_WINDOW_DAYS);
-    let license_state = sigil_server::license_state::load_and_log(
-        cfg.license.as_ref().and_then(|l| l.path.as_deref()),
-        now,
-    );
+    let active_window_days = cfg.active_window_days();
 
     let audit_dir = cfg.high_water_path();
     let audit_dir = audit_dir
@@ -122,7 +113,14 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
     let audit_key = sigil_server::audit_key::AuditKey::load_or_create(audit_dir);
     match &audit_key {
         Some(k) => tracing::info!(pubkey_id = %k.pubkey_id, "audit signing key ready"),
-        None => tracing::warn!("audit signing key unavailable; license audit log disabled"),
+        None => tracing::warn!("audit signing key unavailable; audit signing disabled"),
+    }
+    // Earlier releases appended a signed chain here; it is no longer written,
+    // but an existing chain's head stays visible at /v1/meta.audit_head.
+    let audit_head =
+        sigil_server::audit_chain::read_head(&sigil_server::audit_chain::chain_path(audit_dir));
+    if let Some(h) = &audit_head {
+        tracing::info!(seq = h.seq, hash = %h.hash, "existing audit chain head loaded (read-only)");
     }
 
     // #184 — enrollment state. Off unless cert+key+tokens AND host_allowlist are
@@ -152,10 +150,9 @@ fn build_state(cfg: &ServerConfig) -> Result<SharedState> {
         high_water: Mutex::new(high_water),
         fleet_index,
         read_token,
-        license_state,
         active_window_days,
         audit_key,
-        audit_head: Mutex::new(None),
+        audit_head: Mutex::new(audit_head),
         allowlist_path: cfg.host_allowlist_path.clone(),
         enroll,
         // #194.2 — ServerConfig::load refused to start if this is set
@@ -198,65 +195,6 @@ async fn run(cfg: ServerConfig) -> Result<()> {
             // only way this is skipped is if the spawned task itself panics before here —
             // not reachable today: replace() is infallible and the join is matched above.)
             boot_complete.store(true, Ordering::Relaxed);
-        });
-    }
-
-    // License audit task: append a durable, signed, hash-chained record on
-    // boot, every 6h, and on any ok/over_limit transition. Append-only;
-    // never blocks serving. No signing key ⇒ no lines (measure-don't-block).
-    {
-        let state = state.clone();
-        let audit_path = state
-            .high_water_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join("license-audit.jsonl");
-        let window_days = state.active_window_days;
-        let version = env!("CARGO_PKG_VERSION");
-        tokio::spawn(async move {
-            use sigil_core::audit::{sign_record, AuditHead, GENESIS_PREV_HASH};
-            use sigil_core::license::status::{compute_status, LicenseStatusState};
-            use sigil_server::license_state::{
-                append_audit_line, build_audit_record, resume_chain, should_audit,
-            };
-
-            let key = match state.audit_key.as_ref() {
-                Some(k) => k,
-                None => return,
-            };
-            let (mut seq, mut prev_hash) =
-                resume_chain(&audit_path).unwrap_or((0, GENESIS_PREV_HASH.to_string()));
-            let mut last: Option<LicenseStatusState> = None;
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
-            loop {
-                tick.tick().await;
-                let now = time::OffsetDateTime::now_utc();
-                let active = state
-                    .fleet_index
-                    .active_host_count(now, time::Duration::days(window_days as i64));
-                let status = compute_status(&state.license_state, active, window_days);
-                if should_audit(last, status.state) {
-                    let record = build_audit_record(&status, seq, prev_hash.clone(), now, version);
-                    match sign_record(record, &key.signing_key, &key.pubkey_id) {
-                        Ok(signed) => {
-                            append_audit_line(
-                                &audit_path,
-                                &serde_json::to_string(&signed).unwrap(),
-                            );
-                            prev_hash = signed.hash.clone();
-                            seq += 1;
-                            *state.audit_head.lock().unwrap() = Some(AuditHead {
-                                seq: signed.record.seq,
-                                hash: signed.hash,
-                                sig: signed.sig,
-                                pubkey_id: signed.pubkey_id,
-                            });
-                            last = Some(status.state);
-                        }
-                        Err(e) => tracing::warn!(%e, "license audit sign failed"),
-                    }
-                }
-            }
         });
     }
 

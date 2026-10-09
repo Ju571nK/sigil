@@ -58,7 +58,6 @@ async fn ingested_host_meta_appears_in_detail_block() {
         high_water: Mutex::new(HighWater::default()),
         fleet_index: idx,
         read_token: ReadToken(Some("tok".into())),
-        license_state: sigil_core::license::status::LicenseState::Free,
         active_window_days: 7,
         audit_key: None,
         audit_head: std::sync::Mutex::new(None),

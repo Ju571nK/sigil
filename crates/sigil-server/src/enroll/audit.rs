@@ -2,7 +2,7 @@
 //!
 //! FAIL-CLOSED: if the signed append fails, the handler returns 500 and does NOT
 //! return the cert. Each line is an ed25519-signed record over canonical+blake3
-//! bytes, hash-chained to the prior line (same primitives as the license audit
+//! bytes, hash-chained to the prior line (same primitives as the audit chain
 //! in `sigil-core::audit`, but a distinct record shape). The appended line is
 //! fsync'd before we report success.
 

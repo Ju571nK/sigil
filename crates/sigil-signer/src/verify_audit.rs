@@ -141,6 +141,36 @@ mod tests {
         }
     }
 
+    /// A chain written by an earlier `sigil-server` release (frozen
+    /// `AuditRecord` shape; fixed fixture key) still verifies end to end.
+    #[test]
+    fn legacy_chain_fixture_verifies() {
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../sigil-core/tests/fixtures/audit/legacy-chain-v1.jsonl"
+        ));
+        let out = verify_audit(VerifyAuditArgs {
+            file: path,
+            pubkey: Some("ed25519:6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=".into()),
+            expect_head: Some(
+                "3f119e2fe76f1c3cbf8a267419db1cda7e137514d1ba48e3ddfa9d763c8c8df2".into(),
+            ),
+        })
+        .unwrap();
+        match out {
+            VerifyAuditOutcome::Ok {
+                seq,
+                lines,
+                authenticity_checked,
+                ..
+            } => {
+                assert_eq!((seq, lines), (2, 3));
+                assert!(authenticity_checked);
+            }
+            VerifyAuditOutcome::Failed(m) => panic!("expected Ok, got {m}"),
+        }
+    }
+
     #[test]
     fn tampered_file_fails() {
         let dir = tempfile::tempdir().unwrap();

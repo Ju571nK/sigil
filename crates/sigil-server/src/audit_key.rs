@@ -1,5 +1,7 @@
 //! Server audit-signing key: auto-generate on first boot, persist (0600),
-//! reuse across boots. Lives next to `license-audit.jsonl`. measure-don't-block:
+//! reuse across boots. Lives in the server state dir (next to the high-water
+//! file); signs `enrollment-audit.jsonl`, and its pubkey identifies the head of
+//! any pre-existing `license-audit.jsonl` chain. measure-don't-block:
 //! ANY failure returns `None` (audit signing disabled) — never panics.
 
 use ed25519_dalek::SigningKey;

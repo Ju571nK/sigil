@@ -158,10 +158,19 @@ consumed via the signed-bundle test fixtures used by `verify.rs`.
 
 ## Audit log tamper-evidence (and its limits)
 
-`sigil-server` writes a signed, hash-chained `license-audit.jsonl`: each line is
-an ed25519-signed record whose `prev_hash` links to the previous line. The
-verification logic lives in OSS `sigil-core::audit`; anyone can check a chain
-with `sigil-sign verify-audit <file> --pubkey ed25519:<b64>`.
+Earlier `sigil-server` releases appended a signed, hash-chained
+`license-audit.jsonl` to the server state directory: each line is an
+ed25519-signed record whose `prev_hash` links to the previous line. Current
+releases no longer write new records to it. An existing chain is kept as-is
+and stays verifiable: the server reads its last line at startup and still
+exposes that head at `GET /v1/meta` (`audit_head`), and the record format is
+frozen so old chains keep verifying. The verification logic lives in OSS
+`sigil-core::audit`; anyone can check a chain with
+`sigil-sign verify-audit --in <file> --pubkey ed25519:<b64>` (add
+`--expect-head <hash>` to assert against a head recorded earlier).
+
+The same signing key and primitives also sign the enrollment audit log
+(`enrollment-audit.jsonl`, a separate chain with its own record shape).
 
 **What it proves.** Any edit, reordering, deletion, or truncation of the log
 breaks a hash or a signature and is detected by the verifier. This fully covers
@@ -171,8 +180,10 @@ third-party tampering and accidental corruption.
 own host, so a determined operator who controls that host can re-sign a forged
 chain. The operator is bound only for history *before an externally-observed
 head*: the signed head is exposed at `GET /v1/meta` (`audit_head`), and any
-external party (a vendor audit, monitoring, sigil-manager) that records a head
+external party (monitoring, sigil-manager, an auditor) that records a head
 pins the operator to that history. Capture heads off-box to anchor the chain.
+Because no new records are appended, the head of an existing chain no longer
+advances.
 
 This is corroborating evidence, not automatic proof. Automatic push-anchoring
 and public timestamping are future work.

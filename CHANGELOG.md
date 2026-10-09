@@ -19,6 +19,31 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
   evaluator generation before publication. This remains an internal API, not
   daemon activation or an `applied` acknowledgement.
 
+### Changed
+
+- `GET /v1/meta` reports the active host count and its rolling window under
+  `fleet` (`{"active_host_count": <u32>, "active_window_days": <u32>}`). The
+  window is configured with the new top-level `active_window_days` key in
+  server config (default 7).
+
+### Deprecated
+
+- The `license:` block in server config. `license.active_window_days` is still
+  honored when top-level `active_window_days` is absent; `license.path` is
+  ignored. Both log a warning at startup; configs that contain the block keep
+  loading.
+
+### Removed
+
+- The license verification module (`sigil_core::license`), the server's boot
+  license load, and the `license` object in `GET /v1/meta`; active host count
+  and window are now reported under `fleet`.
+- The `sigil-sign license` subcommand.
+- `sigil-server` no longer appends records to `license-audit.jsonl`. An
+  existing chain is left untouched: its head is still read at startup and
+  exposed as `/v1/meta.audit_head`, the record format is frozen, and
+  `sigil-sign verify-audit` still verifies it.
+
 ## [0.8.3] - 2026-09-13
 
 ### Fixed

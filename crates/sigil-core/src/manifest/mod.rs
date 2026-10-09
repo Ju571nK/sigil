@@ -63,7 +63,7 @@ impl BuildManifest {
     }
 }
 
-/// license::parse_vendor_key 와 동일 로직(그쪽은 private 이라 import 불가 — 복제).
+/// `ed25519:<base64>` trust-anchor entry → VerifyingKey. 실패 시 None.
 fn parse_build_key(entry: &str) -> Option<ed25519_dalek::VerifyingKey> {
     let b64 = entry.strip_prefix("ed25519:")?;
     let bytes = data_encoding::BASE64.decode(b64.as_bytes()).ok()?;
