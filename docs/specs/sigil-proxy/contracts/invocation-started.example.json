@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "event_id": "01998932-4100-7000-8000-000000000001",
+  "proxy_id": "proxy-demo",
+  "sequence": 1,
+  "occurred_at": "2026-09-27T08:00:00Z",
+  "event_type": "invocation.started",
+  "payload": {
+    "invocation_id": "01998932-4100-7000-8000-000000000002",
+    "upstream_id": "fixture",
+    "route_revision": 1,
+    "protocol_version": "2025-11-25",
+    "method": "tools/call",
+    "actor": {
+      "actor_id": "client-demo",
+      "actor_kind": "non_human",
+      "authentication_method": "bearer"
+    },
+    "tool": {
+      "status": "identified",
+      "metadata_ref": "0c635e55-7e09-4e3d-978f-4b88870428f1"
+    }
+  }
+}

@@ -99,6 +99,8 @@ merge SHA for each shipped phase.
 
 ## Planned
 
+- **Sigil Proxy — P0 research/contracts/fixtures in progress; production proxy not implemented.** Optional, independently deployed MCP observation/control service in this workspace, managed through sigil-server and the existing sigil-manager UI. See the [specification and implementation plan](docs/specs/sigil-proxy/README.md). Compatibility/contracts precede the observation MVP; enforcement and human approvals follow separate gates.
+
 - **Phase 3c (remaining) — planned.** CI manifest generation + build-signing key
   ceremony (populate `SIGIL_BUILD_PUBKEYS`), bit-identical reproducibility audit;
   additional posture signals.

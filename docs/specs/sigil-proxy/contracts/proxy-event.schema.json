@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sigil Proxy P1 invocation audit candidate v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "proxy_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "event_type": {
+      "enum": [
+        "invocation.started",
+        "invocation.completed",
+        "invocation.cancel_requested"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "event_id",
+    "proxy_id",
+    "sequence",
+    "occurred_at",
+    "event_type",
+    "payload"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "invocation.started"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "invocation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "upstream_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+              },
+              "route_revision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "protocol_version": {
+                "enum": [
+                  "2025-11-25",
+                  "unknown"
+                ],
+                "description": "Fixed audit vocabulary, not a support claim. Use unknown unless validated negotiated context maps to a listed revision; never copy headers or rejected proposals."
+              },
+              "method": {
+                "enum": [
+                  "initialize",
+                  "ping",
+                  "tools/list",
+                  "tools/call",
+                  "unknown"
+                ],
+                "description": "Exact parser-recognized audit constants only; all other, missing or malformed methods map to unknown. This vocabulary does not authorize forwarding."
+              },
+              "actor": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "actor_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+                  },
+                  "actor_kind": {
+                    "enum": [
+                      "non_human",
+                      "unknown"
+                    ]
+                  },
+                  "authentication_method": {
+                    "enum": [
+                      "bearer",
+                      "mtls"
+                    ]
+                  },
+                  "credential_owner_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+                  }
+                },
+                "required": [
+                  "actor_id",
+                  "actor_kind",
+                  "authentication_method"
+                ]
+              },
+              "tool": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "const": "identified"
+                      },
+                      "metadata_ref": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "metadata_ref"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "const": "unavailable"
+                      },
+                      "reason": {
+                        "enum": [
+                          "malformed",
+                          "unresolved"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "reason"
+                    ]
+                  }
+                ],
+                "description": "Opaque random reference allocated by the controlled metadata registry, never raw tool name, client-supplied ID or name hash. Unavailable is only for calls rejected before dispatch; ingestion verifies provenance and lifecycle correlation."
+              }
+            },
+            "required": [
+              "invocation_id",
+              "upstream_id",
+              "route_revision",
+              "protocol_version",
+              "method",
+              "actor"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "method": {
+                      "const": "tools/call"
+                    }
+                  },
+                  "required": [
+                    "method"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "tool"
+                  ]
+                },
+                "else": {
+                  "not": {
+                    "required": [
+                      "tool"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "invocation.completed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "invocation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "outcome": {
+                "enum": [
+                  "success",
+                  "tool_error",
+                  "protocol_error",
+                  "timeout",
+                  "unknown",
+                  "denied"
+                ]
+              },
+              "delivery_state": {
+                "enum": [
+                  "not_sent",
+                  "sent",
+                  "unknown"
+                ]
+              },
+              "duration_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "response_bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "invocation_id",
+              "outcome",
+              "delivery_state",
+              "duration_ms",
+              "response_bytes"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "success",
+                        "tool_error"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "delivery_state": {
+                      "const": "sent"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "outcome": {
+                      "const": "denied"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "delivery_state": {
+                      "const": "not_sent"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "invocation.cancel_requested"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "invocation_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "invocation_id"
+            ],
+            "description": "Nonterminal observation only; does not prove upstream cancellation, prevent a later completion, or overwrite a completion on late arrival."
+          }
+        }
+      }
+    }
+  ]
+}
