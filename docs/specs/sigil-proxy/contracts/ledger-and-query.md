@@ -13,7 +13,7 @@ Status tags: **[DC]** decided-candidate (reviewable, consistent with frozen text
 
 | Item | Section | Status |
 |---|---|---|
-| (1) retention and tombstone durations | L1 | [DC] formulas and defaults; [OPEN] O-1 (unsent-expiry policy vs validation.md) |
+| (1) retention and tombstone durations | L1 | [DC] formulas and P1 initial defaults; O-1 decided (option A) |
 | (2) invocation projection | L2 | [DC] |
 | (3) query DTOs, cursor, gap rendering | L3, L4 | [DC] DTO shape; [OPEN] gap list endpoint, scope model |
 | (4) cross-event semantic validation | L5 | [DC] SV-1..SV-4, SV-6..SV-8; [OPEN] SV-5 (needs config DTO) and the new fixed error codes |
@@ -89,18 +89,16 @@ Related lifetimes:
 - Retention uses server `received_at`, never `occurred_at`. Ledger lookup never
   depends on receipt date (survey T-00 finding on `find_by_id`).
 
-### Expiry of unsent events [OPEN] O-1
+### Expiry of unsent events (O-1, decided: option A)
 
-validation.md (D-04 spool row) currently says unsent events never auto-expire.
-With no time bound on retransmission, `T >= R + M` has no finite R, so tombstones
-would be unbounded. Two candidates:
-
-| Option | Behaviour | Consequence |
-|---|---|---|
-| A (recommended) | After R, an unsent event is moved unchanged to quarantine and a `spool_expired` gap is reported (proxy-status.schema.json). It is never deleted silently and never looks normal. | Bounded tombstones. Changes the validation.md row (orchestrator decision). |
-| B | Never expire. | Server keeps per-`(proxy_id, epoch_id)` accepted-sequence ranges plus event-ID hashes for the life of the epoch. Unbounded growth. |
-
-Until O-1 is settled these numbers are a worked example only, not a spool policy.
+Decided 2026-10-10 (decisions.md D-02/O-1 row; validation.md updated). After R, an
+unsent event is moved unchanged to local quarantine and a `spool_expired` gap
+(proxy-status.schema.json) is reported. It is never deleted silently and never
+looks normal. This is what bounds retransmission age, so `T >= R + M` has a finite R
+and tombstones are bounded. The numbers in this section are the P1 initial
+defaults adopted with the D-04 values. They are initial test values to be adjusted
+after measurement, not performance or retention guarantees. Option B (never expire,
+unbounded per-epoch ranges and hashes) was rejected.
 
 ### Cases (mirrored in `check_schema.py`)
 
@@ -370,7 +368,7 @@ at most 32 items. `events_total` is the number of constituent events and
 | `registry_conflict` | proxy | `metadata_ref`, `key_id`, `event_ids` (≤ 100), `affected_event_count`, `detected_by` |
 | `event_quarantined` | proxy | `event_ids`, `code` (`conflict`, `sequence_conflict`, `semantic_invalid`) |
 | `local_record_failed` | proxy | `count`, `invocation_ids` (completion could not be stored locally) |
-| `spool_expired` | proxy | `epoch_id`, `from_sequence`, `to_sequence`, `count` (only under O-1 option A) |
+| `spool_expired` | proxy | `epoch_id`, `from_sequence`, `to_sequence`, `count` (events moved to quarantine after R, O-1 option A) |
 | `unrecorded_calls` | proxy | `count`, `from_at`, `to_at` (explicit allow-with-gap observe option only) |
 | `central_outage` | proxy | `started_at`, `ended_at` (null while ongoing) |
 | `inventory_incomplete` | server | `upstream_id`, `credential_scope_id`, `incomplete_reason`, `observed_at` |
@@ -395,7 +393,11 @@ not look healthy.
 Schema validation cannot establish provenance or cross-event consistency (README R2).
 The ledger runs these checks after schema validation and before the durable commit,
 inside the same transaction as dedup (README T-00 boundary). Failures use fixed
-codes and echo no values. Precedence stays 422 > 403 > 409 > 424.
+codes and echo no values. The identity check comes first: a proxy identity mismatch
+or unknown `proxy_id` is 404 `proxy_unknown`, byte-identical for both, evaluated
+before body validation (control-plane.md; decisions.md D-02). Then precedence stays
+422 > 409 > 424. 403 is unused on ingest (`/v1/proxy-events`), status, registry and
+inventory endpoints.
 
 | Rule | Condition | Result |
 |---|---|---|
@@ -480,7 +482,7 @@ A lower `status_sequence` or a stale epoch therefore never drops a gap.
 | Status | When | Body |
 |---|---|---|
 | 200 | whole report valid | `{state_applied, acknowledged_gap_ids, duplicate_gap_ids}` |
-| 403 | body `proxy_id` ≠ mTLS identity | fixed error |
+| 404 | body `proxy_id` ≠ mTLS identity, or `proxy_id` unknown (byte-identical, evaluated first) | `{error:{code:"proxy_unknown",message}}` |
 | 409 | a gap conflicts (table above) | `items:[{index, gap_id, code:"conflict"}]`; nothing from this report is applied |
 | 413 / 429 / 503 | size, backpressure, storage | fixed error |
 | 422 | schema invalid, `affected_event_count < len(event_ids)`, a `registry_conflict` ref or `key_id` unknown to the registry | `items:[{index, code}]`, index only |
@@ -498,4 +500,4 @@ the projection/semantic/cursor rules as fixture models (including all event
 permutations). Not proven: SQLite transaction behaviour, restart durability,
 ledger performance, real producer behaviour, manager rendering, or any hardware
 result. D-03 remains open until a ledger implementation and independent review
-cover these rules, and O-1 and SV-5 are decided.
+cover these rules, and SV-5 is decided.

@@ -38,7 +38,7 @@ client_cert_file, client_key_file, ca_file, limits, credentials.
 secret source는 소유자 읽기 전용 파일이다. 환경 변수 이름 참조는 [candidate, control-plane.md §5.5 U1]이며,
 값은 로그에 남기지 않고 proxy 호스트를 떠나지 않는다. 환경 변수 참조가 채택되면 bootstrap override가 아니라 credentials 항목의 secret source 지정이다.
 `upstream_origins`는 그 ref를 보낼 수 있는 upstream origin의 로컬 바인딩이다
-([control-plane.md §5.5](control-plane.md), [recommended, §9 항목 8; D-02 미결]).
+([control-plane.md §5.5](control-plane.md), [decided 2026-10-10, control-plane.md §9 항목 8; decisions.md "D-02 결정"]).
 원격 config는 이 바인딩을 넓힐 수 없다. 바인딩과 맞지 않는 route나 알 수 없는 ref는
 config 적용 전체를 `apply_failed`로 실패시키고 이전 설정을 유지한다. `upstream_origins`가 없는 ref는 시작 실패다.
 민감 파일은 소유자 읽기만 허용하며 symlink/소유권 검사는 플랫폼별로 검증한다.
@@ -94,13 +94,12 @@ P1 invocation started/completed와 nonterminal cancel_requested 관찰만 정의
 수집 성공은 durable 저장 뒤 `accepted_event_ids`와 `duplicate_event_ids`를 반환한다.
 부분 성공을 만들지 않는다. 요청 전체 유효성 실패는 422,
 크기 초과 413, backpressure 429, 일시 저장 실패 503이다. envelope 전체 raw body를 오류에 넣지 않는다.
-identity mismatch는 현재 동결된 ingest 계약에서 403이다. 미등록 proxy와 구별하지 않는 동일한 답으로
-404 `proxy_unknown` [candidate: control-plane.md §1.2 권고, D-02 미결]이 제안되어 있다.
-채택 전까지 동결된 ingest 계약의 403(identity mismatch)이 기준이며, 채택 시 decisions.md D-03 행·본 절·
-ledger L5/L6b·registry R2·check_schema.py를 함께 개정한다.
-검사 순서(경로 종류별, [candidate]):
+proxy identity 불일치와 미등록 proxy는 구별되지 않는 동일한 답을 한다: 404 `proxy_unknown`
+(decided 2026-10-10, decisions.md "D-02 결정"; [control-plane.md §1.2](control-plane.md)). 이는 D-03 ingest의
+identity 403을 대체하며 body 검증보다 먼저 평가한다. 메시지 문구는 [OPEN]이다.
+검사 순서(경로 종류별):
 - 관리 route: management-caller cert class 404 → bearer 401 → scope 403.
-- proxy route: identity 누락/불일치 → 위 기준(403; 404 채택 시 body 검증보다 먼저), 이후 422 > 403 > 409 > 424.
+- proxy route: identity 누락/불일치 404 선검사, 이후 422 > 403 > 409 > 424.
 - 조회 route: 401, 이어서 ledger-and-query.md L3 규칙(범위 밖은 빈 목록/404).
 
 관리 충돌은 409; 인증 누락/오류 401, 권한 부족 403, 미존재 404.
@@ -108,7 +107,7 @@ ledger L5/L6b·registry R2·check_schema.py를 함께 개정한다.
 수집 오류의 `items`는 `{index, event_id?, code}` 목록이다. 422는 검증 전 값을 신뢰할 수 없으므로
 `index`만 쓰고, 409/424는 검증된 `event_id`와 고정 code(`conflict`, `sequence_conflict`,
 `metadata_ref_pending`)를 쓴다. 424는 검증된 metadata_ref UUID 목록 `pending_metadata_refs`를 추가한다.
-그 외 필드 값은 오류에 넣지 않는다. 여러 조건이 겹치면 422 > 403 > 409 > 424 순으로 하나만 반환한다(identity 404 선검사는 [candidate]).
+그 외 필드 값은 오류에 넣지 않는다. 여러 조건이 겹치면 422 > 403 > 409 > 424 순으로 하나만 반환한다(identity 404 선검사가 이보다 먼저다).
 cursor는 필터·정렬과 결합하고 안정적인 tie-breaker를 포함한다.
 
 오류 코드 후보(고정 message, 값 미echo). [candidate] 코드는 해당 계약 파일(control-plane §1.2,
@@ -116,7 +115,7 @@ ledger-and-query L3/L5, registry R2)에서 [OPEN]이다. "동결"은 D-03 ingest
 
 | code | HTTP | 위치 | 상태 |
 |---|---|---|---|
-| `proxy_unknown` | 404 | 응답 오류. identity 불일치와 미등록 proxy 공통. 채택 전 기준은 403 | [candidate] |
+| `proxy_unknown` | 404 | 응답 오류. identity 불일치와 미등록 proxy 공통. 422>403>409>424보다 먼저 평가 | decided 2026-10-10 |
 | `conflict`, `sequence_conflict` | 409 | `items[]` (수집 N2/M1) | 동결(D-03 ingest, 본 문서) |
 | `registry_conflict` | 409 | `items[]`: registry 업로드의 불변 필드 차이 ([registry.md R2](registry.md)) | candidate([DC]) |
 | `invocation_owner_conflict` | 409 | `items[]`: 이미 다른 proxy가 소유한 `invocation_id` (SV-1) | [candidate] |
@@ -137,8 +136,8 @@ status 보고 오류 코드(상태 필드 값, 응답 오류와 별개): `last_u
 
 위 API는 기존 read bearer를 관리/수집 credential로 인정하지 않는다.
 관리 인증 mapping과 manager 권한은 [control-plane.md §3](control-plane.md)에 후보로 있다.
-manager 범위는 **M0(read-only)** 권고이며 사용자 결정 대기다. M1을 택하는 경우에만
-viewer/operator 매핑과 CSRF R1–R13이 적용된다([control-plane.md §8, §9](control-plane.md)).
+manager 범위는 **M0(read-only)**로 결정했다(2026-10-10): P1에서 manager는 proxy 기능 읽기 전용이고
+관리 조작은 operator CLI가 한다. M1을 택하는 경우에만 viewer/operator 매핑과 CSRF R1–R13이 적용된다([control-plane.md §8, §9](control-plane.md)).
 사용자에게 새 SSO/멀티테넌트 기능을 요구하지 않는 단일 설치 범위다.
 
 ## Traffic와 내구성
@@ -229,18 +228,18 @@ P1은 단일 server 인스턴스의 별도 SQLite proxy ledger를 후보로 둔�
 하나의 transaction durability 경계로 묶고 조회는 receipt 날짜에 의존하지 않는다.
 기존 host high-water dedup을 재사용하지 않는다. event 보존과 dedup tombstone 수명은
 최대 offline spool 재전송 기간과 함께 고정해야 한다. 후보 공식과 기본값은
-[ledger-and-query.md L1](ledger-and-query.md)에 있고 미전송 event 만료 정책(O-1)은 미결이다.
+[ledger-and-query.md L1](ledger-and-query.md)에 있고 미전송 event 만료(O-1)는 옵션 A로 결정했다: R 경과 후 미전송 event를 변경 없이 quarantine으로 옮기고 `spool_expired` gap을 보고하며 조용히 삭제하지 않는다.
 
 기존 daemon baseline 파일은 HOME에 결합되어 있어 공유하지 않는다. 순수 hash/comparison
 알고리즘만 검토하고 proxy 전용 immutable first baseline과 latest complete snapshot을 분리한다.
 키는 upstream/credential scope/protocol/observation source 및 필요한 proxy visibility를 포함한다.
 
-manager의 기존 fleet 조회는 계속 read-only다. manager 범위는 **M0(read-only, `proxy.read`만)**를
-권고하며 사용자 결정 대기다([control-plane.md §3, §9](control-plane.md)).
+manager의 기존 fleet 조회는 계속 read-only다. manager 범위는 **M0(read-only, `proxy.read`만)**로
+결정했다(2026-10-10, [control-plane.md §3, §9](control-plane.md)). 관리 조작은 operator CLI가 한다.
 viewer/operator mapping과 CSRF/Origin 검증(R1–R13)은 M1(관리 write 경로)을 택하는 경우에만 적용한다
 ([control-plane.md §4, §8](control-plane.md)). M0에서도 manager 작업 시 기존 지침과 UI 스펙에
 이 범위의 예외(읽기 측)를 명시한다. 기존 로그인 session 모두를 관리자/승인자로 취급하지 않는다.
-M0은 관리 route를 호출하는 operator CLI의 소유자가 아직 없다는 비용이 있다.
+M0의 비용은 관리 route를 호출하는 operator CLI(`identity` scope 보유)를 sigil-server/proxy 쪽 산출물로 만들어야 한다는 점이다.
 
 ## 계약 검사 실행
 
@@ -256,6 +255,7 @@ python3 -m venv <scratch>/venv
 <scratch>/venv/bin/pip install -r docs/specs/sigil-proxy/contracts/requirements-check.txt
 <scratch>/venv/bin/python -I -B docs/specs/sigil-proxy/contracts/check_schema.py
 PASS: schema, 53 positive cases, 271 rejected cases, 4 JSON-token integer rejections, 10 dedup-model cases, 4 batch-error-model cases, 4 registry-model cases, 12 integrity/requestId/startup-model cases, 5 ref-derivation-model cases (jsonschema 4.26.0, rfc3339-validator 0.1.4, date-time and uuid format checking active)
+PASS W2 (D-03/D-05 candidates): registry/inventory 23 positive and 77 rejected cases, status 22 positive and 57 rejected cases, 9 retention-model cases, 22 projection-model cases, 9 cross-event-validation-model cases, 13 cursor-model cases, 20 inventory/marker-model cases, 4 counter-model cases, 22 status-upsert/gap-model cases
 ```
 
 ## R1–R3 scoped revision — 2026-09-27
@@ -666,9 +666,9 @@ Text-only fold of decided items and cross-references. No schema, fixture or chec
 | Item | Change |
 |---|---|
 | Related contracts | Link list to control-plane, ledger-and-query, registry, the two new schemas and the support matrix. Added `POST /v1/proxy-status` to the API table (candidate). |
-| Identity status | 404 `proxy_unknown` is a [candidate] (control-plane §1.2, D-02 open). The frozen ingest 403 stays the baseline and the 422 > 403 > 409 > 424 precedence is unchanged until adopted. |
+| Identity status | 404 `proxy_unknown` adopted (decisions.md "D-02 결정", 2026-10-10): identity pre-check before 422 > 403 > 409 > 424; replaces the D-03 ingest identity 403. |
 | Error codes | Added a code table: `invocation_owner_conflict`, `semantic_invalid`, `invalid_cursor`, `invalid_filter` [candidate]. |
-| Manager scope | M0 recommended, pending the user; viewer/operator mapping and CSRF R1–R13 only under M1. |
+| Manager scope | M0 decided (2026-10-10): manager read-only, management by operator CLI; viewer/operator mapping and CSRF R1–R13 only under M1. |
 | P1 feature scope | Added "P1 method 범위와 route 거절 응답": GET SSE 405, resources subscribe `-32601`, relayed resources/prompts as `unknown`, client responses, other notifications, batch refusal, DELETE, `*.listChanged`, runtime route refusal `-32603`, post-init header 400 with the audit reason split [OPEN]. |
 | Bootstrap | Local fields `credentials` and `upstream_origins`; remote config cannot widen the binding. |
 | Pending wording | Resolved "후속 계약"/"T-00 조사 뒤"/"아직 미정" wording that the new contracts cover; remaining open items point to each file's [OPEN] marks. |

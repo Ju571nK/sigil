@@ -1781,13 +1781,17 @@ for label, ok in counter_cases:
 
 # --- L6b status endpoint model: state snapshot vs gap upsert (F6) -----------------------------
 class StatusModel:
-    def __init__(self):
+    def __init__(self, registered=("proxy-demo",)):
         self.gaps, self.state, self.epochs = {}, {}, {}
+        self.registered = set(registered)
+
+    PROXY_UNKNOWN = (404, {"error": {"code": "proxy_unknown", "message": "Proxy not found"}})
 
     def submit(self, identity, doc):
         proxy = doc["proxy_id"]
-        if proxy != identity:
-            return 403, None
+        # D-02: identity mismatch and unknown proxy are byte-identical, checked first.
+        if proxy != identity or identity not in self.registered:
+            return self.PROXY_UNKNOWN
         bad_422 = [{"index": i, "code": "schema_invalid"} for i, g in enumerate(doc["gaps"])
                    if g["kind"] == "registry_conflict"
                    and g["affected_event_count"] < len(g["event_ids"])]
@@ -1861,7 +1865,20 @@ code, body = sm.submit("proxy-demo", status(status_sequence=1, epoch_id=other_ep
 status_cases.append(("new epoch resets status_sequence", code == 200 and body["state_applied"]))
 code, body = sm.submit("proxy-demo", status(status_sequence=99))   # old epoch after new one
 status_cases.append(("older epoch report does not apply state", body["state_applied"] is False))
-status_cases.append(("identity mismatch 403", sm.submit("proxy-other", status())[0] == 403))
+status_cases.append(("identity mismatch 404 proxy_unknown", sm.submit(
+    "proxy-other", status()) == (404, {"error": {"code": "proxy_unknown",
+                                                 "message": "Proxy not found"}})))
+status_cases.append(("unknown proxy answer byte-identical to mismatch", json.dumps(
+    sm.submit("proxy-nobody", status(proxy_id="proxy-nobody"))) == json.dumps(
+    sm.submit("proxy-other", status()))))
+status_cases.append(("identity 404 precedes 422 body validation", sm.submit(
+    "proxy-other", status(gaps=[dict(GAPS["registry_conflict"], gap_id=new_uuid(),
+                                     event_ids=[new_uuid(), new_uuid()],
+                                     affected_event_count=1)]))[0] == 404))
+status_cases.append(("403 unused on status ingest", all(
+    sm.submit(who, status(proxy_id=pid))[0] != 403
+    for who, pid in (("proxy-other", "proxy-demo"), ("proxy-demo", "proxy-demo"),
+                     ("proxy-nobody", "proxy-nobody")))))
 status_cases.append(("affected_event_count below ids 422 index only", (lambda r: r[0] == 422
                      and r[1]["error"]["items"] == [{"index": 0, "code": "schema_invalid"}])(
     sm.submit("proxy-demo", status(gaps=[dict(GAPS["registry_conflict"], gap_id=new_uuid(),

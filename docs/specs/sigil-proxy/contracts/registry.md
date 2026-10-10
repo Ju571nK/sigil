@@ -15,7 +15,7 @@ Status tags: **[DC]** decided-candidate, **[OPEN]** needs a decision or evidence
 | Item | Section | Status |
 |---|---|---|
 | Entry DTO and JSON Schema | R1 | [DC] |
-| Upload endpoint request/response | R2 | [DC]; [OPEN] permission wiring (D-02) |
+| Upload endpoint request/response | R2 | [DC]; identity check decided (404 `proxy_unknown`, D-02) |
 | Key-rotation operations | R3 | [DC]; [OPEN] O-2 |
 | History links across key_id | R4 | [DC]; [OPEN] O-3 |
 | Re-baseline marker projection | R5 | [DC] |
@@ -71,12 +71,12 @@ Processing is all-or-nothing like `POST /v1/proxy-events`:
 | Status | When | Body |
 |---|---|---|
 | 200 | every entry registered or an equal duplicate | as above |
-| 403 | body `proxy_id` or any entry `proxy_id` ≠ mTLS identity | fixed error |
+| 404 | body `proxy_id` or any entry `proxy_id` ≠ mTLS identity, or the identity names an unknown proxy (byte-identical, evaluated first, before body validation) | `{error:{code:"proxy_unknown",message}}` |
 | 409 | same `(proxy_id, metadata_ref)`, a different immutable field | `items:[{index, metadata_ref, code:"registry_conflict"}]` |
 | 413 / 429 / 503 | size, backpressure, storage | fixed error |
 | 422 | schema invalid, or the entry's `credential_scope_id` is not one the server assigned to this proxy and `upstream_id` | `items:[{index, code}]`, index only |
 
-Precedence is 422 > 403 > 409. On 409 the producer follows README M2b: quarantine
+Precedence: the identity 404 first, then 422 > 409. 403 is unused on this endpoint. On 409 the producer follows README M2b: quarantine
 the entry unchanged, record the gap, rewrite only dependent never-accepted starts,
 and resend the remaining entries. A key or fingerprint value is never echoed.
 **[OPEN]** the 409/422 `code` strings are new fixed codes to merge into the README
@@ -228,7 +228,7 @@ its own local tool identity. This is producer-asserted.
 
 | Rule | Condition | Result |
 |---|---|---|
-| I-1 | proxy identity, scope assigned to this proxy (as R2) | 403 / 422 |
+| I-1 | proxy identity (404 `proxy_unknown`, evaluated first), scope assigned to this proxy (as R2) | 404 / 422 |
 | I-2 | every member ref is registered for this proxy | 424 `metadata_ref_pending` listing the refs |
 | I-3 | for `compared` with a known previous snapshot: set differences between `members` and the previous snapshot's members are fully covered by `changes` and `changes` contains nothing else (`added` ∈ members ∖ previous; `removed` ∈ previous ∖ members; `changed.metadata_ref` ∈ added side, `changed.previous_metadata_ref` ∈ removed side, each ref used once) | else 422 `semantic_invalid`, index only. When the previous snapshot arrives later (I-5) the same check runs then; a failure never un-ACKs the report. It records a `comparison_inconsistent` gap and derives no drift |
 | I-4 | `report_id` seen with an unequal canonical report | 409 `conflict`; equal → duplicate |
@@ -278,7 +278,10 @@ marker.
 ## R7b. Read projections (AC-02 display)
 
 Candidate endpoints, all `proxy.read` range-checked, base `GET /v1/proxies/{id}/`
-(**[OPEN]** names and permission wiring; DTOs are decided-candidate). Lists use the
+(**[candidate]** endpoint names; DTOs are decided-candidate). Permission wiring follows
+D-02 M0: manager is read-only for proxy features and any management action goes
+through the management credential scopes of control-plane.md, never through these
+read endpoints. Lists use the
 ledger-and-query.md L3 conventions (`limit`, opaque cursor bound to endpoint, sort
 and filters, `{items, next_cursor}`). Order is a ledger commit counter, descending,
 so rows never move.

@@ -1,8 +1,8 @@
-# Control-plane contract draft (D-02) v0.2
+# Control-plane contract draft (D-02) v0.3
 
-2026-10-10 · W3 + W3-fix (review findings H1–H3, M-1–M-10, L1–L5; mapping in the last section) · Draft. **D-02 is not closed by this document.** Nothing here is implemented, hardware-verified or independently reviewed.
+2026-10-10 · W3 + W3-fix (review findings H1–H3, M-1–M-10, L1–L5; mapping in the last section) · v0.3. **D-02 is decided at the contract level** (user decision 2026-10-10, all recommendations adopted; [decisions.md](../decisions.md) "D-02 결정"). **Implementation and hardware verification are P1; none exists yet.** Items still open are listed in section 10.
 Traces: PX-008, PX-009, PX-012, PX-014, PX-016; AC-04, AC-08, AC-13.
-Inputs: [W1 auth-surface research](../../../research/sigil-proxy-auth-surfaces-2026-10-10.md) (cited as W1 §), [contracts v0.3](README.md),
+Inputs: [W1 auth-surface research](../../../research/sigil-proxy-auth-surfaces-2026-10-10.md) (cited as W1 §), [contracts v0.4](README.md),
 [decisions.md](../decisions.md) "D-01 후속 결정", [T-01 probe](../../../research/sigil-proxy-t01-probe-2026-10-10.md).
 Scope: mechanism only. No new SSO, multi-tenancy or per-user RBAC beyond what the options below state.
 
@@ -11,8 +11,8 @@ Scope: mechanism only. No new SSO, multi-tenancy or per-user RBAC beyond what th
 | Label | Meaning |
 |---|---|
 | **decided** | Already fixed in decisions.md or contracts/README.md. Cited, not re-decided here. |
-| **recommended** | This draft's proposal. Needs review; becomes decided only through decisions.md. |
-| **open-for-user** | A user decision is required (section 9). A recommendation is given. |
+| **recommended** | A draft detail not individually listed in decisions.md "D-02 결정". It follows from a decided item and stays a proposal until contract review. Where a section header says "recommended" for an item in section 9, that item is **decided**. |
+| **open-for-user** | Still needs a user decision. After 2026-10-10 only items in section 10 qualify. |
 | **unmeasured** | A number or behaviour with no measurement. Do not publish as a support promise. |
 
 ## 0. Credential classes and the separation rule (PX-009)
@@ -49,7 +49,7 @@ Four secrets exist. None is valid for another's purpose. Every row of "accepted 
 | A2 | Reuse the host CA and `/v1/enroll`, separate by registry only | Enrollment writes the id into the host allowlist and requires a UUID (W1 §1.3). A proxy would become an allowlisted *host*. **Not recommended.** |
 | A3 | Static bearer per proxy | Adds a secret path on a leg that already has mTLS. **Not recommended.** |
 
-**Recommended: A1a**, with A1b recorded as an optional hardening step. (open-for-user, section 9 item 1)
+**Decided (2026-10-10): A1a**, with A1b recorded as an optional hardening step. (section 9 item 1)
 
 ### 1.2 Identity binding (recommended)
 
@@ -60,7 +60,7 @@ Four secrets exist. None is valid for another's purpose. Every row of "accepted 
 | Fingerprint | blake3 hex of the leaf DER, the same value `PeerIdentity.fingerprint` already carries (`tls_accept.rs:58-60`). A registry entry holds up to **two** (current, next) so renewal has no gap. |
 | Issuer field | `PeerIdentity` gains an issuer identity: the issuer subject DN and/or the fingerprint of the issuing CA cert (the leaf's issuer is compared to configured CA fingerprints). Today it is `{fingerprint, cn, san_dns}` (`tls_accept.rs:45-52`). **sigil-server change.** Role is derived from it: issuer == proxy CA ⇒ proxy-class cert; anything else under the bundle ⇒ host-class. |
 | Signing profile | The proxy signer pins the subject and extensions and copies nothing from the CSR: `CA:FALSE`, `clientAuth` only, CN absent or equal to `proxy_id`, exactly one DNS SAN (the proxy SAN above), no `copy_extensions`. It mirrors the host profile (`enroll/sign.rs:126-129`). A CSR carrying other names or extensions is rejected, not trimmed silently. |
-| Check order | Identity is checked before any registry-state or existence lookup (same oracle rule as `events_route.rs:76-86`). An identity mismatch and an unknown `proxy_id` return the **byte-identical** answer. **Recommended/candidate (D-02 미결): 404** with the fixed body `{error:{code:"proxy_unknown" [candidate],message}}` on config GET, events, status and metadata (M-3). Until this is adopted, the **frozen ingest 403** for identity mismatch (README v0.4) is the baseline. The 404 is proposed because a distinct 403 would let a caller enumerate registered `proxy_id`s; adopting it changes that README row. Precedence against README 422>403>409>424: the identity 404 is evaluated **first**, before body validation, so it outranks all four, and a caller without a matching identity never sees 422/409/424 detail. A proxy cert used on a management route (e.g. `PUT /v1/proxies/{id}/config`) gets the same recommended **404** (candidate). A non-matching management credential gets 401 (section 3). |
+| Check order | Identity is checked before any registry-state or existence lookup (same oracle rule as `events_route.rs:76-86`). An identity mismatch and an unknown `proxy_id` return the **byte-identical** answer. **Decided (2026-10-10): 404** with the fixed body `{error:{code:"proxy_unknown",message}}` on config GET, events, status and metadata (M-3). It replaces the D-03 ingest identity-mismatch 403, because a distinct 403 would let a caller enumerate registered `proxy_id`s. The code string `proxy_unknown` is **decided**; only the message text is open (section 10). Precedence against README 422>403>409>424: the identity 404 is evaluated **first**, before body validation, so it outranks all four, and a caller without a matching identity never sees 422/409/424 detail. A proxy cert used on a management route (e.g. `PUT /v1/proxies/{id}/config`) gets the same **404**. A non-matching management credential gets 401 (section 3). |
 | No reuse | Proxy routes never fall back to "any authenticated cert" and never consult `hosts.json`. The host allowlist's default-open behaviour (`allowlist.rs:54-60`) is not copied: an unregistered proxy is rejected. |
 | Host/proxy separation (H2) | Both directions are **unconditional** and independent of `events_require_cert_host_match` (default false, W1 §1.1). Host routes (`/v1/events`, `/v1/policy`, `/v1/rule-packs`) reject any cert whose issuer is the proxy CA or whose fingerprint is in the proxy registry. Proxy routes reject host-class certs. Same answer as an unknown principal. Implementation needs the issuer field above, the new middleware, and distinct CA subject DNs. All of it is a **sigil-server change**. |
 | Persisted | Registry entry: `proxy_id`, `display_name`, `state`, fingerprints, `created_at`, `disabled_at?`, `desired_revision`, `applied_revision`, `last_seen`. `proxy_id` is never reused after retirement (same rule as `key_id`). |
@@ -75,11 +75,11 @@ Four secrets exist. None is valid for another's purpose. Every row of "accepted 
 | Cert lifetime | Proposed default 30 days, matching host enrollment (`enroll/mod.rs:28`). **unmeasured.** |
 | Rotation (renewal / re-key) | Operator submits a new CSR for the same `proxy_id`. Server records the new fingerprint as `next` atomically with signing. The old fingerprint is dropped at the **first request authenticated with `next`**, or at a hard deadline (proposed 7 days, unmeasured), whichever comes first. The server raises an **operator alert** before the deadline (proposed at 50% and 90% of it) while the old fingerprint is still the only one in use, since silently dropping it would lock the proxy out. `disable` removes both (M-8). `proxy_id`, `epoch_id`, spool and key K are unchanged. |
 | Offline CA option | If the user chooses an offline proxy CA, signing happens off the server. A separate **register fingerprint** step then records the issued cert's fingerprint (and its `proxy_id`) through the `identity` scope (section 2.2). A cert never reaches `active` use without that step, so possession of a CA-signed cert alone is not access. |
-| Disable then re-enable | Same `proxy_id`, spool retained. The proxy's events are rejected while disabled and retried from the spool. After re-enable they are accepted. The ledger stores the presenting fingerprint per batch so the period is traceable. Whether events produced during a suspected compromise are accepted is open-for-user (item 6). Spool growth while disabled is bounded by the existing disk-limit rule (new calls blocked at the limit, PX-013); a long disablement therefore turns into an outage of that proxy, which is stated, not hidden (L5). |
+| Disable then re-enable | Same `proxy_id`, spool retained. The proxy's events are rejected while disabled and retried from the spool. After re-enable they are accepted. The ledger stores the presenting fingerprint per batch so the period is traceable. Events produced during a suspected-compromise window are **accepted and tagged** (decided 2026-10-10, section 9 item 6); the tag is the forensic handle, not a trust signal. Spool growth while disabled is bounded by the existing disk-limit rule (new calls blocked at the limit, PX-013); a long disablement therefore turns into an outage of that proxy, which is stated, not hidden (L5). |
 | Re-registration with a new `proxy_id` | The proxy refuses to start if its `state_dir` is bound to a different `proxy_id`. Spool events carry the old id and would fail ownership. The operator must drain the spool or explicitly abandon it: abandoned spool is quarantined, never deleted, and a gap is reported. A new `proxy_id` gets a new `epoch_id`. |
 | `state_dir` loss, same `proxy_id` | Existing README rule: new `epoch_id`, new K and `key_id`, server records `producer_epoch_change`. The registry entry persists and no re-registration is required. |
 | Retirement | State `retired`. Ledger and registry stub are kept per retention. The id is not reissued. |
-| State answers (to an authenticated proxy identity) | `active`: normal. `disabled`: config GET answers the fixed `disabled` code (config.state `disabled`); events/status are rejected with the same code; the server serves this answer **before** it closes the connection. `retired`: the same `disabled`-class answer with code `retired`, and no re-enable path (a new `proxy_id` is required). `pending` (no cert issued yet) cannot present an identity, so the question does not arise; a pending entry with a registered fingerprint answers 404 until activated. Unknown/mismatch: the recommended 404 above (candidate; baseline is the frozen 403). |
+| State answers (to an authenticated proxy identity) | `active`: normal. `disabled`: config GET answers the fixed `disabled` code (config.state `disabled`); events/status are rejected with the same code; the server serves this answer **before** it closes the connection. `retired`: the same `disabled`-class answer with code `retired`, and no re-enable path (a new `proxy_id` is required). `pending` (no cert issued yet) cannot present an identity, so the question does not arise; a pending entry with a registered fingerprint answers 404 until activated. Unknown/mismatch: the 404 above. The HTTP statuses of the `disabled` and `retired` answers are open (section 10). |
 
 ## 2. Management credential for server write APIs (D-02 part 2)
 
@@ -93,7 +93,7 @@ Four secrets exist. None is valid for another's purpose. Every row of "accepted 
 | B3 | Per-user delegation verified by the server | Largest scope; moves manager into the area its AGENTS.md lists as out of scope. Not recommended for P1. |
 | B4 | B1′ or B2 plus `requested_by` carried as an **asserted** field | Gives an audit trail without claiming verification. |
 
-**Recommended: B1′ + B4.** B2 is an optional later hardening. (open-for-user, item 2)
+**Decided (2026-10-10): B1′ + B4.** B2 is an optional later hardening. (section 9 item 2)
 
 ### 2.2 Rules
 
@@ -108,7 +108,7 @@ Four secrets exist. None is valid for another's purpose. Every row of "accepted 
 | Storage (caller) | Environment or owner-only file on the manager host, never in the DB, API responses, or the web bundle. |
 | Compare | Constant-time compare of the verifier, as `auth.rs:39-48`. |
 | Rotation | Add entry 2, switch caller, remove entry 1. No restart. Recommended maximum validity per entry via `not_after` (value unmeasured/operational). |
-| Subject | Valid management auth yields a server-verified principal `{key_id, name, scope}`. The server has no human identity. With at most two entries per scope (overlap for rotation) the verified identity is a **machine** (manager or operator tool), so the human is always only *asserted*. Per-operator keys are allowed: one entry per operator, raising the cap. They give a verified key per operator at the cost of more secrets. (open-for-user, item 2) |
+| Subject | Valid management auth yields a server-verified principal `{key_id, name, scope}`. The server has no human identity. With at most two entries per scope (overlap for rotation) the verified identity is a **machine** (manager or operator tool), so the human is always only *asserted*. Per-operator keys are allowed: one entry per operator, raising the cap. They give a verified key per operator at the cost of more secrets. Per-operator keys are not adopted by the 2026-10-10 decision (B1′ + B4); they stay an allowed extension. |
 | Audit ordering (M-2) | The audit record is appended **before** the effect. If the append fails, the action has no effect and the caller gets 503. This is the enrollment precedent (`routes/enroll.rs:224-232`). Denied attempts (bad credential, wrong scope, 409, 422) are recorded too, with the result code, and with no secret material. |
 | Audit read (AC-13) | A `GET /v1/proxy-management-audit` route (candidate; cursor and limit as other lists) under `proxy.read` returns the records, so AC-13 evidence is inside the API rather than out-of-band. It never returns config bodies, verifiers or tokens. If this route is not built, the evidence is out-of-band (the log file on the server host) and the AC-13 verification must say so. |
 | Audit record | Append-only log, same signed append-only mechanism as the enrollment audit in a separate stream. Fields: sequence, `occurred_at`, action (`proxy.register`, `proxy.identity_issue`, `proxy.config_put`, `proxy.disable`, `proxy.enable`, `proxy.retire`), `proxy_id`, from/to revision, config hash, result code, `management_key_id` and `scope` (**verified**), `requested_by` (**asserted**, see below), request id. Never the verifier, token, or config secrets. |
@@ -129,9 +129,9 @@ PX-012 asks manager only for **observation** screens. Management writes are not 
 | M1 | Manager gets write routes with a static manage list (C2): `PROXY_MANAGE_SUBJECTS` (env), default empty. Checked per request, not stored in the JWT. | Console users not in the list get 403 at manager. Server still authoritative. | Adds write path, permission middleware, CSRF work (section 4), scope amendment. |
 | M2 | One role (C1): every console login manages | A "viewer" cannot exist at the console. | Smallest, but conflicts with PX-023 and the stated viewer requirement. **Not recommended.** |
 
-**Recommended: M0 for P1 as the minimum that satisfies AC-13**; M1 specified below as the conditional design if the user wants console management. (open-for-user, item 3)
+**Decided (2026-10-10): M0 for P1 as the minimum that satisfies AC-13**; M1 is specified below as the conditional design, used only if M1 is later adopted. (section 9 item 3)
 
-**M0 is a deliberate deviation** from README ("Bootstrap/T-00 반영", lines 137–139: manager gets viewer/operator mapping and CSRF/Origin work, and README lines 70–72 defer "관리 인증 mapping") because PX-012 asks manager only for observation. README needs amending: lines 70–72 should reference this document, and lines 137–139 should say mapping and CSRF apply only if M1 is chosen. M0's cost: **no owner for an operator CLI** is defined yet. Someone must build and ship the tool that calls the management routes (and holds the `identity` scope). That is a sigil-server/proxy-side deliverable, not manager.
+**M0 is a deliberate deviation** from README ("Bootstrap/T-00 반영", lines 137–139: manager gets viewer/operator mapping and CSRF/Origin work, and README lines 70–72 defer "관리 인증 mapping") because PX-012 asks manager only for observation. README v0.4 반영 완료. M0's cost: **no owner for an operator CLI** is defined yet. Someone must build and ship the tool that calls the management routes (and holds the `identity` scope). That is a sigil-server/proxy-side deliverable, not manager.
 
 ### 3.2 Permission table
 
@@ -149,7 +149,7 @@ Rejection tests (AC-13), independent of option:
 | Caller | Route | Expected |
 |---|---|---|
 | Read bearer (caller cert in management class) | `PUT /v1/proxies/{id}/config` | 401, no state change |
-| Proxy mTLS identity (any proxy) | `PUT /v1/proxies/{id}/config` | 404 (recommended/candidate, same as unconfigured), no state change |
+| Proxy mTLS identity (any proxy) | `PUT /v1/proxies/{id}/config` | 404 (same as unconfigured), no state change |
 | Proxy mTLS identity **plus** a valid management bearer | `PUT /v1/proxies/{id}/config` | 404, no state change |
 | Host cert **plus** a valid management bearer | any management route | 404, no state change (N-2) |
 | Valid bearer, cert not in the management-caller class | any management route | 404, no state change |
@@ -196,7 +196,7 @@ Applies only if M1 is chosen. In M0 manager has no new write route and this sect
 | Codex 0.162.0 sends a bearer from `bearer_token_env_var`; the value stays in the environment | measured (T-01) |
 | OAuth discovery and client mTLS for HTTP MCP | not measured. Out of P1 for these clients. |
 
-Recommended: **one static bearer per client principal**, 256-bit random, verified by constant-time compare against the applied config. No client OAuth in P1. (open-for-user, item 4 only for the secret generation point)
+Decided mechanism: **one static bearer per client principal**, 256-bit random, verified by constant-time compare against the applied config. No client OAuth in P1. (section 9 item 4, decided)
 
 ### 5.2 Principal provisioning through the config DTO
 
@@ -209,7 +209,7 @@ Recommended: **one static bearer per client principal**, 256-bit random, verifie
 | `verifiers[]` | `{key_id, verifier, not_after?}`. `verifier` = SHA-256 of the 256-bit token. At most two entries per principal for overlap. |
 | `routes[]` | Route ids this principal may use. Others are rejected (PX-008, AC-04). |
 
-Recommended token generation: the **proxy host CLI generates the token and prints it once**; only the verifier is submitted in the config. Then server and manager never see the token. Server/manager responses show `verifier_fingerprint` (first 8 hex) only; the full verifier is returned only to the proxy's own config GET.
+Decided (2026-10-10, item 4): the **proxy host CLI generates the token and prints it once**; only the verifier is submitted in the config. Then server and manager never see the token. Server/manager responses show `verifier_fingerprint` (first 8 hex) only; the full verifier is returned only to the proxy's own config GET.
 Alternative (server generates and shows once): simpler for operators, but the server and, in M1, manager process the secret. Item 4 in section 9.
 
 Cross-principal isolation: a session, stream, and `Last-Event-ID` resume are bound to the principal and route that created them (5.3). Another principal presenting a valid bearer and a foreign session id is rejected (AC-04).
@@ -248,7 +248,7 @@ The fixed message text is not yet defined anywhere in the repo (open question 3)
 
 | Option | Mechanism | Assessment |
 |---|---|---|
-| U1 | Upstream secrets live **only on the proxy host** (owner-only file or environment). Config carries a `credential_ref` name; the proxy resolves it locally. | Secret never crosses the control plane, server, or manager. Rotation is local. **Recommended for P1.** |
+| U1 | Upstream secrets live **only on the proxy host** (owner-only file or environment). Config carries a `credential_ref` name; the proxy resolves it locally. | Secret never crosses the control plane, server, or manager. Rotation is local. **Recommended for P1.** P1 baseline: owner-only file; env reference is [candidate]. |
 | U2 | Server stores and distributes upstream secrets in config | Server becomes a secret store and distribution point; needs encryption at rest and in transit, and manager must never read it. Larger surface. Not P1. |
 
 | Rule | Detail |
@@ -298,7 +298,7 @@ M-6: `upstream_url` **must not carry userinfo or a secret-bearing query or fragm
 | Monotonic | Revision lower than the applied one is not a new apply (README). |
 | Same-revision refresh (M-1) | The same revision with the **same config hash** is a refresh: it extends the TTL deadline and applies nothing. The same revision with a **different hash** is a fault: the proxy keeps its current config, does not extend, and reports `last_update_error = config_hash_mismatch`. |
 | Server counter restored lower | If the server answers with a revision **lower** than the proxy's applied one (state restore, rollback), the proxy keeps its applied config but does **not** extend the deadline, and reports `last_update_error = stale_revision`. Config then expires at TTL and forwarding stops until an operator resolves it. This is an outage, deliberately, rather than silently trusting an old config. |
-| Disabled answer (M-10) | `GET config` for a disabled proxy returns an explicit `disabled` answer (a fixed code, distinct from transport failure). On it the proxy stops forwarding new calls **immediately**, so the delay for disable is bounded by the poll interval when the server is reachable. An unreachable server falls back to TTL. This answer is given only to an authenticated proxy identity whose registry state is `disabled`; an unknown or mismatched identity gets the section 1.2 answer (recommended 404, candidate). A disabled proxy's `POST /v1/proxy-status` is rejected, so `config.state = disabled` is visible only locally (and in the `GET config` answer). The server derives "disabled" for PX-016 from its **registry**, not from a status report. |
+| Disabled answer (M-10) | `GET config` for a disabled proxy returns an explicit `disabled` answer (a fixed code, distinct from transport failure). On it the proxy stops forwarding new calls **immediately**, so the delay for disable is bounded by the poll interval when the server is reachable. An unreachable server falls back to TTL. This answer is given only to an authenticated proxy identity whose registry state is `disabled`; an unknown or mismatched identity gets the section 1.2 answer (404). A disabled proxy's `POST /v1/proxy-status` is rejected, so `config.state = disabled` is visible only locally (and in the `GET config` answer). The server derives "disabled" for PX-016 from its **registry**, not from a status report. |
 | Status names (W2 alignment) | Only these names are used here, matching `proxy-status.schema.json`: status carries `config_hash`; `last_update_error` ∈ {`stale_revision`, `validation_failed`, `fetch_failed`, `apply_failed`, `config_hash_mismatch`}; `config.state` ∈ {`none`, `valid`, `expired`, `disabled`}. A revision regression is reported as `stale_revision`. |
 | Status report | Proxy reports `applied_revision`, apply result, and config hash through `POST /v1/proxy-status`. The proxy identity comes from the mTLS peer, as for `POST /v1/proxy-events`; there is no `proxy_id` in the path, and a body `proxy_id` must equal the peer's. A GET must not carry the side effect. This is also the heartbeat/`last_seen` source. The DTO is owned by W2 (`proxy-status.schema.json`) and is cross-referenced, not defined here. |
 | No merge | Remote config is never merged with local bootstrap (README). The local `upstream_origins` binding is a **constraint** checked against the remote config, not a merge: it adds no route, principal or limit, and a remote config cannot widen it. |
@@ -311,7 +311,7 @@ M-6: `upstream_url` **must not carry userinfo or a secret-bearing query or fragm
 | Clock | Proxy computes its deadline on a **monotonic clock from receipt** (`receipt + ttl_seconds`), so wall-clock skew cannot extend it. `expires_at` is for display. |
 | Expiry | After the deadline the proxy forwards **no new calls**. In-flight calls finish and are audited. New sessions and new requests on existing sessions are refused with the fixed error. |
 | Refresh | Proxy polls at an interval well under TTL, with jitter. The 503 boot gate of the server (`app.rs:140-154`) is treated as a retryable miss, not an apply failure. |
-| Restart | The monotonic deadline does not survive restart. Recommended: a restarted proxy **requires a fresh fetch** before forwarding (fail closed). Alternative: honour a persisted copy until its wall-clock `expires_at`. (open-for-user, item 5) |
+| Restart | The monotonic deadline does not survive restart. **Decided (2026-10-10):** a restarted proxy **requires a fresh fetch** before forwarding (fail closed). The alternative, honouring a persisted copy until its wall-clock `expires_at`, was not adopted. (section 9 item 5) |
 | Proposed values | poll 30 s ± jitter, default TTL 300 s, bounds 60–900 s. **unmeasured**, proposals only. |
 
 ### 6.4 Maximum revocation delay (stated honestly)
@@ -355,13 +355,15 @@ All items are conditional on the option noted. Manager's AGENTS.md requires user
 | 11 | Deployment docs: how manager reaches an mTLS-enabled server | M0, M1 |
 | — | **Separate issue:** harden the existing triage writes (R1–R5) | independent |
 
-## 9. Decisions needed from the user
+## 9. Decisions (user decision 2026-10-10: all recommendations adopted)
 
-| # | Decision | Options | Recommended | Consequences |
+The options column is kept as history. The decided column is binding at the contract level and is mirrored in decisions.md "D-02 결정".
+
+| # | Decision | Options considered | Decided (2026-10-10) | Consequences |
 |---|---|---|---|---|
-| 1 | Proxy identity model | A1a separate proxy CA merged into the bundle with registry authority · A1b second listener · A2 host CA reuse | **A1a** (A1b later) | **Also decides the management-caller cert class (N-2). Sub-choice: separate management CA vs host CA plus fingerprint list (recommended: fingerprint list, fewer CAs; a separate CA if manager and operator CLI certs must rotate independently).** It also fixes that the loopback-behind-terminator topology cannot serve proxy/management routes without re-originated mTLS. A1a needs a **server restart** to load the new CA bundle (`main.rs:256-262`), plus the issuer field, unconditional host/proxy rejection and a proxy signer: all sigil-server changes. A1b adds listener code and operator surface. A2 makes proxies hosts and is not recommended. |
+| 1 | Proxy identity model | A1a separate proxy CA merged into the bundle with registry authority · A1b second listener · A2 host CA reuse | **A1a** (A1b later hardening) | **Also decides the management-caller cert class (N-2): host CA plus a fingerprint list in the verifier file (minimum option); a separate management CA was not adopted.** The proxy CA is never used for management certs. It also fixes that the loopback-behind-terminator topology cannot serve proxy/management routes without re-originated mTLS. A1a needs a **server restart** to load the new CA bundle (`main.rs:256-262`), plus the issuer field, unconditional host/proxy rejection and a proxy signer: all sigil-server changes. A1b adds listener code and operator surface. A2 makes proxies hosts and is not recommended. |
 | 2 | Management credential | B1′ verifier file with rotation · B1 env token (restart to rotate) · B2 manager mTLS | **B1′ + B4** | Adds the H3 `config`/`identity` scopes and a reload path with fail-closed behaviour. At most two entries per scope means the human stays only asserted unless per-operator keys are chosen. B1 needs restarts to rotate. B2 needs a TLS client in manager. |
-| 3 | Manager write scope in P1 | M0 read-only manager · M1 static manage list · M2 single role | **M0** (M1 specified) | M0 leaves **no owner for the operator CLI** that calls management routes and holds `identity`; that deliverable must be assigned. M0 deviates from README lines 70–72 and 137–139 (amendment needed). M1 needs the manager scope amendment, CSRF R1–R13 and the manage list. M2 removes any viewer. |
+| 3 | Manager write scope in P1 | M0 read-only manager · M1 static manage list · M2 single role | **M0** (M1 specified) | M0 leaves **no owner for the operator CLI** that calls management routes and holds `identity`; that deliverable must be assigned. The README deviation is recorded: README v0.4 반영 완료. M1 needs the manager scope amendment, CSRF R1–R13 and the manage list. M2 removes any viewer. |
 | 4 | Where downstream tokens are generated | Proxy host CLI, verifier only submitted · server generates and shows once | **Proxy host CLI** | Server and manager never hold the token, but operators must run a tool on the proxy host. Server generation is simpler and exposes the secret to the server (and to manager under M1). |
 | 5 | Restart with server unreachable | Fail closed until a fresh fetch · honour persisted config to wall-clock expiry | **Fail closed** | Fail closed makes a server outage plus a proxy restart an outage of forwarding. Honouring the persisted copy keeps service up but trusts the wall clock and the file, and a rolled-back clock extends the config. |
 | 6 | Events from a disabled-then-re-enabled proxy | Accept, tagged with presenting fingerprint · quarantine until operator releases | **Accept, tagged** | Accepting includes events from a possibly compromised window, which the ledger then holds as ordinary events (traceable by fingerprint, not distinguished in views). Quarantine needs an operator release step and a quarantine store. |
@@ -371,9 +373,10 @@ All items are conditional on the option noted. Manager's AGENTS.md requires user
 ## 10. Open questions
 
 1. Exact proxy SAN form and whether the extractor change (URI or suffixed DNS) is acceptable; compatibility with `$defs/id`.
-2. Proxy CA key locality (server host vs offline) and the operator tooling that signs CSRs. Same question for the management-caller class: separate management CA vs host CA plus fingerprint list (§9 item 1).
-3. The fixed `-32603` message text. Proposed: `Internal error` (the standard JSON-RPC name for the code).
-4. How a proxy reloads a rotated upstream secret or verifier file: signal, file watch, or restart.
+2. Proxy CA key locality (server host vs offline) and the operator tooling that signs CSRs. (The management-caller class is decided: host CA plus fingerprint list.)
+3. Fixed message texts: the `-32603` message (proposed `Internal error`) and the `proxy_unknown` body message. The code string `proxy_unknown` is decided.
+4. How a proxy reloads a rotated upstream secret or verifier file: signal, file watch, or restart. Includes how a change of an upstream origin in the local `upstream_origins` binding is applied (reload vs restart).
+4a. Lifecycle path names (registration, CSR signing, fingerprint registration, disable/enable, retire) and the HTTP status of the `disabled` and `retired` answers.
 5. `last_seen` semantics beyond what `proxy-status.schema.json` (W2) defines, shared with PX-016 and the gap/heartbeat channel.
 6. Metadata lookup permission (`proxy.metadata`), tied to D-05.
 7. Real-client behaviour at config expiry for open SSE streams (unverified).
@@ -381,7 +384,7 @@ All items are conditional on the option noted. Manager's AGENTS.md requires user
 9. TTL, poll, cert lifetime and body-limit numbers are proposals and need measurement (validation.md D-04 has none for the control plane).
 10. Manager's session lifetime (12 h, no server-side revocation) bounds how long a demoted subject keeps console access if the list is changed without a restart. M1 mitigates by checking per request; list reload mechanism is open.
 
-D-02 stays **open** until the items in section 9 are decided and the contract is independently reviewed.
+D-02 is **decided at the contract level** (items 1–8 of section 9 and the 404 `proxy_unknown`). Implementation and hardware verification are P1. The items in this section remain open and do not change those decisions.
 
 ## 11. Review mapping (W3-fix): finding → change
 
@@ -392,7 +395,7 @@ D-02 stays **open** until the items in section 9 are decided and the contract is
 | H3 | `config` vs `identity` scopes with the ledger-integrity reason; offline-CA "register fingerprint" step | 2.2, 1.3 |
 | M-1 | Same revision and hash extends TTL; same revision, different hash is a fault; lower server revision does not extend | 6.2 |
 | M-2 | Audit appended before the effect, failed append means no effect, denied attempts recorded; audit-read route or explicit out-of-band statement | 2.2 |
-| M-3 | Identical answer for mismatch and unknown; proxy cert on PUT recommended 404 (candidate; D-02 미결, frozen ingest 403 is the baseline until adopted) | 1.2, 3 |
+| M-3 | Identical answer for mismatch and unknown; proxy cert on PUT answers 404 (adopted 2026-10-10) | 1.2, 3 |
 | M-4 | Response header allowlist; foreign principal/route/session same 404 as unknown session | 5.3 |
 | M-5 | Reload failure denies all and alerts; owner-only/ownership checks; two-entry cap means human only asserted, or per-operator keys | 2.2 |
 | M-6 | `upstream_url` rejects userinfo/query/fragment; read DTOs show scheme/host/path only | 6.1 |
@@ -414,7 +417,7 @@ D-02 stays **open** until the items in section 9 are decided and the contract is
 | N-2 | Management-caller cert class (separate issuer or fingerprint list); terminator topology cannot serve proxy/management routes without re-originated mTLS; folded into §9 item 1 | 0.1, 9 |
 | N-3 | Disable cuts only control and ingest planes; recovery needs local rotation of upstream credentials | 6.4 |
 | `enable` scope | Re-enable moved to `identity`; disable stays in `config`; test row | 2.2, 3 |
-| Mismatch/unknown status | Recommended/candidate 404 `proxy_unknown` (D-02 미결; frozen ingest 403 is the baseline); evaluated before 422>403>409>424 | 1.2 |
+| Mismatch/unknown status | 404 `proxy_unknown` adopted (replaces the D-03 ingest 403); evaluated before 422>403>409>424 | 1.2 |
 | State answers | `disabled` served before closing the connection; `retired` and `pending` defined | 1.3 |
 | Old-fingerprint deadline | Operator alert before the deadline | 1.3 |
 | Proxy cert + valid bearer on PUT | Test row ⇒ 404 (plus host cert + bearer) | 3 |
@@ -431,4 +434,14 @@ D-02 stays **open** until the items in section 9 are decided and the contract is
 | 2 | Management-caller issuer options, proxy CA excluded, cross-class rejection; sub-choice in §9 item 1 and open question 2 | 0.1, 9, 10 |
 | 3 | Bootstrap key `upstream_origins`; binding is a constraint, not a merge | 5.5, 6.2 |
 | 4 | Disabled proxy's status POST is rejected; PX-016 disabled derived from registry | 6.2 |
-| — | `proxy_unknown` marked [candidate] | 1.2 |
+| — | `proxy_unknown` was marked [candidate]; superseded by W3-fix-5 (adopted) | 1.2 |
+
+### W3-fix-5 mapping
+
+| Item | Change | Where |
+|---|---|---|
+| §9 items 1–8 | Marked decided 2026-10-10, options kept as history; item 1 sub-choice is the fingerprint list in the verifier file | 9 |
+| 404 `proxy_unknown` | Adopted; candidate/baseline wording removed; replaces the D-03 ingest 403 | 1.2, 1.3, 3, 6.2 |
+| Items 5–8 | Fail closed restart; fingerprint-tagged events; `unknown`/`sent` no reason; local `upstream_origins` binding | 6.3, 1.3, 5.4, 5.5 |
+| Status line | Decided at contract level; implementation and hardware verification are P1 | header, 10 |
+| Open | Message texts, lifecycle path names, disabled/retired HTTP status, origin-change reload | 10 |
