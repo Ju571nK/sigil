@@ -1,0 +1,679 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sigil Proxy status report (heartbeat and gap report) candidate v0.1",
+  "description": "Candidate contract (D-03/D-05, W2). Body of the proxy-to-server status report (POST /v1/proxy-status; identity from the registered proxy mTLS certificate, like POST /v1/proxy-events). A state snapshot plus idempotent gap reports. It carries identifiers, fixed codes and counts only: no actor, header, token, address, session, request ID, argument or result. Patterns end with (?![\\s\\S]). Integer fields must be JSON integer tokens.",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}(?![\\s\\S])"
+    },
+    "metadata_ref": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
+    },
+    "key_id": {
+      "type": "string",
+      "pattern": "^kid-[0-9a-f]{24}(?![\\s\\S])"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z(?![\\s\\S])"
+    },
+    "nonnegative_int64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "positive_int64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "event_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/uuid"
+      }
+    },
+    "counter_entry_auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "upstream_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "enum": [
+            "credential_missing",
+            "credential_invalid",
+            "credential_expired_or_revoked",
+            "origin_rejected",
+            "session_principal_mismatch"
+          ]
+        },
+        "count": {
+          "$ref": "#/$defs/nonnegative_int64"
+        }
+      },
+      "required": [
+        "upstream_id",
+        "reason",
+        "count"
+      ]
+    },
+    "counter_entry_cancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "upstream_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "enum": [
+            "no_matching_request",
+            "window_expired",
+            "session_mismatch"
+          ]
+        },
+        "count": {
+          "$ref": "#/$defs/nonnegative_int64"
+        }
+      },
+      "required": [
+        "upstream_id",
+        "reason",
+        "count"
+      ]
+    },
+    "gap_report": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "gap_id": {
+              "$ref": "#/$defs/uuid"
+            },
+            "kind": {
+              "const": "registry_conflict"
+            },
+            "detected_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "metadata_ref": {
+              "$ref": "#/$defs/metadata_ref"
+            },
+            "key_id": {
+              "$ref": "#/$defs/key_id"
+            },
+            "event_ids": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/uuid"
+              }
+            },
+            "detected_by": {
+              "enum": [
+                "central_409",
+                "local_hash_check"
+              ]
+            },
+            "affected_event_count": {
+              "$ref": "#/$defs/positive_int64",
+              "description": "Total events depending on the conflicting entry; the same value in every chunk when more than 100 event_ids are split over several gaps."
+            }
+          },
+          "required": [
+            "gap_id",
+            "kind",
+            "detected_at",
+            "metadata_ref",
+            "key_id",
+            "event_ids",
+            "detected_by",
+            "affected_event_count"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "gap_id": {
+              "$ref": "#/$defs/uuid"
+            },
+            "kind": {
+              "const": "event_quarantined"
+            },
+            "detected_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "event_ids": {
+              "$ref": "#/$defs/event_ids"
+            },
+            "code": {
+              "enum": [
+                "conflict",
+                "sequence_conflict",
+                "semantic_invalid"
+              ]
+            }
+          },
+          "required": [
+            "gap_id",
+            "kind",
+            "detected_at",
+            "event_ids",
+            "code"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "gap_id": {
+              "$ref": "#/$defs/uuid"
+            },
+            "kind": {
+              "const": "local_record_failed"
+            },
+            "detected_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "count": {
+              "$ref": "#/$defs/positive_int64"
+            },
+            "invocation_ids": {
+              "type": "array",
+              "maxItems": 100,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/uuid"
+              }
+            }
+          },
+          "required": [
+            "gap_id",
+            "kind",
+            "detected_at",
+            "count",
+            "invocation_ids"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "gap_id": {
+              "$ref": "#/$defs/uuid"
+            },
+            "kind": {
+              "const": "spool_expired"
+            },
+            "detected_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "epoch_id": {
+              "$ref": "#/$defs/uuid"
+            },
+            "from_sequence": {
+              "$ref": "#/$defs/positive_int64"
+            },
+            "to_sequence": {
+              "$ref": "#/$defs/positive_int64"
+            },
+            "count": {
+              "$ref": "#/$defs/positive_int64"
+            }
+          },
+          "required": [
+            "gap_id",
+            "kind",
+            "detected_at",
+            "epoch_id",
+            "from_sequence",
+            "to_sequence",
+            "count"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "gap_id": {
+              "$ref": "#/$defs/uuid"
+            },
+            "kind": {
+              "const": "unrecorded_calls"
+            },
+            "detected_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "count": {
+              "$ref": "#/$defs/positive_int64"
+            },
+            "from_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "to_at": {
+              "$ref": "#/$defs/timestamp"
+            }
+          },
+          "required": [
+            "gap_id",
+            "kind",
+            "detected_at",
+            "count",
+            "from_at",
+            "to_at"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "gap_id": {
+              "$ref": "#/$defs/uuid"
+            },
+            "kind": {
+              "const": "central_outage"
+            },
+            "detected_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "started_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "ended_at": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/timestamp"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "gap_id",
+            "kind",
+            "detected_at",
+            "started_at",
+            "ended_at"
+          ]
+        }
+      ]
+    },
+    "status_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "200 body of POST /v1/proxy-status. A gap id listed here is durable and the producer stops resending it.",
+      "properties": {
+        "state_applied": {
+          "type": "boolean"
+        },
+        "acknowledged_gap_ids": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        },
+        "duplicate_gap_ids": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        }
+      },
+      "required": [
+        "state_applied",
+        "acknowledged_gap_ids",
+        "duplicate_gap_ids"
+      ]
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "report_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "proxy_id": {
+      "$ref": "#/$defs/id"
+    },
+    "epoch_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "status_sequence": {
+      "$ref": "#/$defs/positive_int64",
+      "description": "Monotonic per epoch. The server keeps the report with the highest value and ignores a lower one."
+    },
+    "sent_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": [
+            "none",
+            "valid",
+            "expired",
+            "disabled"
+          ],
+          "description": "disabled: the proxy stopped forwarding on an explicit server `disabled` answer."
+        },
+        "applied_revision": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/positive_int64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_desired_revision": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/positive_int64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_update_error": {
+          "enum": [
+            "stale_revision",
+            "validation_failed",
+            "fetch_failed",
+            "apply_failed",
+            "config_hash_mismatch"
+          ],
+          "description": "A revision regression maps to stale_revision."
+        },
+        "max_offline_retry_age_seconds": {
+          "type": "integer",
+          "minimum": 3600,
+          "maximum": 7776000,
+          "description": "R echoed from the applied server-issued config (ledger-and-query.md L1)."
+        },
+        "event_retention_seconds": {
+          "type": "integer",
+          "minimum": 3600,
+          "maximum": 31536000,
+          "description": "E echoed from the applied server-issued config."
+        },
+        "config_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+          "description": "sha256 hex of the applied config. No secret content. Required when state is valid or disabled (what config_hash_mismatch compares against)."
+        }
+      },
+      "required": [
+        "state",
+        "applied_revision",
+        "observed_desired_revision",
+        "expires_at"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "valid"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "max_offline_retry_age_seconds",
+              "event_retention_seconds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "valid",
+                  "disabled"
+                ]
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "config_hash"
+            ]
+          }
+        }
+      ]
+    },
+    "spool": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": [
+            "ok",
+            "degraded",
+            "full"
+          ]
+        },
+        "depth_events": {
+          "$ref": "#/$defs/nonnegative_int64"
+        },
+        "unsent_events": {
+          "$ref": "#/$defs/nonnegative_int64"
+        },
+        "bytes": {
+          "$ref": "#/$defs/nonnegative_int64"
+        },
+        "capacity_bytes": {
+          "$ref": "#/$defs/positive_int64"
+        },
+        "oldest_unsent_age_seconds": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonnegative_int64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quarantined_events": {
+          "$ref": "#/$defs/nonnegative_int64"
+        }
+      },
+      "required": [
+        "state",
+        "depth_events",
+        "unsent_events",
+        "bytes",
+        "capacity_bytes",
+        "oldest_unsent_age_seconds",
+        "quarantined_events"
+      ]
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pending_entries": {
+          "$ref": "#/$defs/nonnegative_int64"
+        },
+        "sync_stalled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pending_entries",
+        "sync_stalled"
+      ]
+    },
+    "central": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "last_ingest_ack_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consecutive_failures": {
+          "$ref": "#/$defs/nonnegative_int64"
+        }
+      },
+      "required": [
+        "last_ingest_ack_at",
+        "consecutive_failures"
+      ]
+    },
+    "routes": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "upstream_id": {
+            "$ref": "#/$defs/id"
+          },
+          "state": {
+            "enum": [
+              "supported",
+              "degraded",
+              "unsupported",
+              "disabled"
+            ]
+          },
+          "reason": {
+            "enum": [
+              "upstream_capability_unsupported",
+              "upstream_version_unsupported",
+              "upstream_initialize_unreadable",
+              "task_augmentation_unsupported",
+              "health_check_failed"
+            ]
+          }
+        },
+        "required": [
+          "upstream_id",
+          "state"
+        ]
+      }
+    },
+    "counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cumulative since epoch start; only increases within an epoch (ledger-and-query.md L6). No actor, header, token, address or request ID.",
+      "properties": {
+        "auth_failures": {
+          "type": "array",
+          "maxItems": 1536,
+          "items": {
+            "$ref": "#/$defs/counter_entry_auth"
+          }
+        },
+        "unmatched_cancels": {
+          "type": "array",
+          "maxItems": 1536,
+          "items": {
+            "$ref": "#/$defs/counter_entry_cancel"
+          }
+        }
+      },
+      "required": [
+        "auth_failures",
+        "unmatched_cancels"
+      ]
+    },
+    "gaps": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/gap_report"
+      }
+    },
+    "last_assigned_sequence": {
+      "$ref": "#/$defs/nonnegative_int64",
+      "description": "Highest sequence assigned in epoch_id (0 if none). Lets the server detect tail loss: events assigned but never received."
+    }
+  },
+  "required": [
+    "schema_version",
+    "report_id",
+    "proxy_id",
+    "epoch_id",
+    "status_sequence",
+    "last_assigned_sequence",
+    "sent_at",
+    "config",
+    "spool",
+    "registry",
+    "central",
+    "routes",
+    "counters",
+    "gaps"
+  ]
+}

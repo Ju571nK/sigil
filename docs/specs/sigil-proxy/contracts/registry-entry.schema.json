@@ -1,0 +1,607 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sigil Proxy metadata registry entry candidate v0.1",
+  "description": "Candidate contract (D-05, W2). The document root is the registry entry as uploaded to POST /v1/proxy-metadata. $defs carry the upload request/response, the read view and the inventory report. Patterns end with (?![\\s\\S]) so a trailing newline is rejected by ECMA-262 and Python engines. Integer fields must be JSON integer tokens (README strict integer rule). Not a verification of any producer, registry or server behaviour.",
+  "type": "object",
+  "additionalProperties": false,
+  "x-immutable-fields": [
+    "proxy_id",
+    "metadata_ref",
+    "upstream_id",
+    "credential_scope_id",
+    "protocol_version",
+    "observation_source",
+    "canon",
+    "key_id",
+    "fingerprint"
+  ],
+  "x-volatile-fields": [
+    "observed_at",
+    "definition"
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}(?![\\s\\S])"
+    },
+    "metadata_ref": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
+    },
+    "key_id": {
+      "type": "string",
+      "pattern": "^kid-[0-9a-f]{24}(?![\\s\\S])",
+      "description": "Derived from K; never reused. K is never transmitted."
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+      "description": "Keyed HMAC-SHA-256 hex. The server cannot verify it (no K); it only compares for equality."
+    },
+    "canon": {
+      "enum": [
+        "sigil-tooldef-fp-v1"
+      ],
+      "description": "Closed. A new canon version is added by contract update and produces a re-baseline marker, not drift."
+    },
+    "protocol_version": {
+      "enum": [
+        "2025-11-25"
+      ],
+      "description": "Closed scope-key value. Adding a revision is a contract update with its own review (decisions.md M2)."
+    },
+    "observation_source": {
+      "enum": [
+        "proxy_live"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z(?![\\s\\S])"
+    },
+    "nonnegative_int64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "positive_int64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Scope key without proxy_id (the proxy is the authenticated sender). route_revision is excluded (README N9).",
+      "properties": {
+        "upstream_id": {
+          "$ref": "#/$defs/id"
+        },
+        "credential_scope_id": {
+          "$ref": "#/$defs/id"
+        },
+        "protocol_version": {
+          "$ref": "#/$defs/protocol_version"
+        },
+        "observation_source": {
+          "$ref": "#/$defs/observation_source"
+        }
+      },
+      "required": [
+        "upstream_id",
+        "credential_scope_id",
+        "protocol_version",
+        "observation_source"
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Upload form. Immutable fields define identity and equality. Volatile fields are excluded from equality.",
+      "properties": {
+        "proxy_id": {
+          "$ref": "#/$defs/id"
+        },
+        "metadata_ref": {
+          "$ref": "#/$defs/metadata_ref"
+        },
+        "upstream_id": {
+          "$ref": "#/$defs/id"
+        },
+        "credential_scope_id": {
+          "$ref": "#/$defs/id"
+        },
+        "protocol_version": {
+          "$ref": "#/$defs/protocol_version"
+        },
+        "observation_source": {
+          "$ref": "#/$defs/observation_source"
+        },
+        "canon": {
+          "$ref": "#/$defs/canon"
+        },
+        "key_id": {
+          "$ref": "#/$defs/key_id"
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "definition": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "The complete tool object as observed. Untrusted content for the access-controlled metadata store only. Never returned by ordinary audit APIs. Size limit is enforced by the transport (256 KiB per entry, initial test value)."
+        }
+      },
+      "required": [
+        "proxy_id",
+        "metadata_ref",
+        "upstream_id",
+        "credential_scope_id",
+        "protocol_version",
+        "observation_source",
+        "canon",
+        "key_id",
+        "fingerprint",
+        "observed_at",
+        "definition"
+      ]
+    },
+    "entry_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ordinary read view. No definition, no name, and no keyed fingerprint (README N9: it lives only in the access-controlled store). Display of content needs the scoped lookup (registry.md R6).",
+      "properties": {
+        "proxy_id": {
+          "$ref": "#/$defs/id"
+        },
+        "metadata_ref": {
+          "$ref": "#/$defs/metadata_ref"
+        },
+        "upstream_id": {
+          "$ref": "#/$defs/id"
+        },
+        "credential_scope_id": {
+          "$ref": "#/$defs/id"
+        },
+        "protocol_version": {
+          "$ref": "#/$defs/protocol_version"
+        },
+        "observation_source": {
+          "$ref": "#/$defs/observation_source"
+        },
+        "canon": {
+          "$ref": "#/$defs/canon"
+        },
+        "key_id": {
+          "$ref": "#/$defs/key_id"
+        },
+        "first_observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "last_observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "registered_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "content_state": {
+          "enum": [
+            "present",
+            "deleted"
+          ]
+        }
+      },
+      "required": [
+        "proxy_id",
+        "metadata_ref",
+        "upstream_id",
+        "credential_scope_id",
+        "protocol_version",
+        "observation_source",
+        "canon",
+        "key_id",
+        "registered_at",
+        "content_state"
+      ]
+    },
+    "upload_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "proxy_id": {
+          "$ref": "#/$defs/id"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/entry"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "proxy_id",
+        "entries"
+      ]
+    },
+    "upload_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "registered_metadata_refs": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/metadata_ref"
+          }
+        },
+        "duplicate_metadata_refs": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/metadata_ref"
+          }
+        }
+      },
+      "required": [
+        "registered_metadata_refs",
+        "duplicate_metadata_refs"
+      ]
+    },
+    "change": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "change": {
+              "const": "added"
+            },
+            "metadata_ref": {
+              "$ref": "#/$defs/metadata_ref"
+            }
+          },
+          "required": [
+            "change",
+            "metadata_ref"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "change": {
+              "const": "removed"
+            },
+            "metadata_ref": {
+              "$ref": "#/$defs/metadata_ref"
+            }
+          },
+          "required": [
+            "change",
+            "metadata_ref"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "change": {
+              "const": "changed"
+            },
+            "metadata_ref": {
+              "$ref": "#/$defs/metadata_ref"
+            },
+            "previous_metadata_ref": {
+              "$ref": "#/$defs/metadata_ref"
+            }
+          },
+          "required": [
+            "change",
+            "metadata_ref",
+            "previous_metadata_ref"
+          ]
+        }
+      ]
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Producer-asserted, unverifiable pairing of the same tool across a key or canon change. Carries refs and a closed comparison code only. It reveals neither K nor any name.",
+      "properties": {
+        "from_metadata_ref": {
+          "$ref": "#/$defs/metadata_ref"
+        },
+        "to_metadata_ref": {
+          "$ref": "#/$defs/metadata_ref"
+        },
+        "definition_comparison": {
+          "enum": [
+            "identical",
+            "different",
+            "not_comparable"
+          ]
+        }
+      },
+      "required": [
+        "from_metadata_ref",
+        "to_metadata_ref",
+        "definition_comparison"
+      ]
+    },
+    "inventory_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One observation of a tools/list chain by the proxy (client-driven listing only). A complete report becomes a snapshot. An incomplete report is recorded as an observation and never changes the latest complete snapshot or removes anything (PX-005, AC-02).",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "report_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "proxy_id": {
+          "$ref": "#/$defs/id"
+        },
+        "epoch_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "canon": {
+          "$ref": "#/$defs/canon"
+        },
+        "key_id": {
+          "$ref": "#/$defs/key_id"
+        },
+        "completeness": {
+          "enum": [
+            "complete",
+            "incomplete"
+          ]
+        },
+        "pages_observed": {
+          "$ref": "#/$defs/nonnegative_int64"
+        },
+        "incomplete_reason": {
+          "enum": [
+            "page_limit_exceeded",
+            "tool_limit_exceeded",
+            "size_limit_exceeded",
+            "page_error",
+            "cursor_invalid",
+            "access_denied",
+            "session_ended",
+            "canonicalization_failed",
+            "ambiguous_name"
+          ]
+        },
+        "inventory_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "members": {
+          "type": "array",
+          "maxItems": 10000,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/metadata_ref"
+          }
+        },
+        "comparison": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "initial_baseline"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "compared"
+                },
+                "previous_inventory_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "changes": {
+                  "type": "array",
+                  "maxItems": 20000,
+                  "items": {
+                    "$ref": "#/$defs/change"
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "previous_inventory_id",
+                "changes"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "rebaseline"
+                },
+                "previous_inventory_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "reason": {
+                  "enum": [
+                    "key_rotation",
+                    "canon_version_change"
+                  ]
+                },
+                "links": {
+                  "type": "array",
+                  "maxItems": 10000,
+                  "items": {
+                    "$ref": "#/$defs/link"
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "previous_inventory_id",
+                "reason",
+                "links"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "report_id",
+        "proxy_id",
+        "epoch_id",
+        "observed_at",
+        "scope",
+        "canon",
+        "key_id",
+        "completeness",
+        "pages_observed"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "completeness": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "completeness"
+            ]
+          },
+          "then": {
+            "required": [
+              "inventory_id",
+              "members",
+              "comparison"
+            ],
+            "not": {
+              "required": [
+                "incomplete_reason"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "completeness": {
+                "const": "incomplete"
+              }
+            },
+            "required": [
+              "completeness"
+            ]
+          },
+          "then": {
+            "required": [
+              "incomplete_reason"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "inventory_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "members"
+                  ]
+                },
+                {
+                  "required": [
+                    "comparison"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "properties": {
+    "proxy_id": {
+      "$ref": "#/$defs/id"
+    },
+    "metadata_ref": {
+      "$ref": "#/$defs/metadata_ref"
+    },
+    "upstream_id": {
+      "$ref": "#/$defs/id"
+    },
+    "credential_scope_id": {
+      "$ref": "#/$defs/id"
+    },
+    "protocol_version": {
+      "$ref": "#/$defs/protocol_version"
+    },
+    "observation_source": {
+      "$ref": "#/$defs/observation_source"
+    },
+    "canon": {
+      "$ref": "#/$defs/canon"
+    },
+    "key_id": {
+      "$ref": "#/$defs/key_id"
+    },
+    "fingerprint": {
+      "$ref": "#/$defs/fingerprint"
+    },
+    "observed_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "definition": {
+      "$ref": "#/$defs/entry/properties/definition"
+    }
+  },
+  "required": [
+    "proxy_id",
+    "metadata_ref",
+    "upstream_id",
+    "credential_scope_id",
+    "protocol_version",
+    "observation_source",
+    "canon",
+    "key_id",
+    "fingerprint",
+    "observed_at",
+    "definition"
+  ]
+}

@@ -53,13 +53,16 @@ SSE comment/CRLF/multiline 및 잘린/과대 stream을 확인했다.
 
 | 요구사항 / AC | 이번 fixture 증거 | Proxy 인수 상태 / 남은 검증 |
 |---|---|---|
+| PX-001 / AC-14 | 관련 production 경로 없음(fixture는 별도 Python 스크립트이며 설치 경로가 아님) | not_run: 개인 설치 기본 옵션에서 proxy 미활성·미listen, 명시적 `--config` 없이는 미기동 |
 | PX-002–004 / AC-01 | initialize, tools capability, JSON/SSE 왕복 PASS | not_run: 실제 client → proxy → MCP → server → manager 호출 ID 연결 |
 | PX-005 / AC-02 | 두 페이지 전체 목록과 잘못된 cursor PASS | not_run: baseline/drift, 접근 scope 차이, 중간 page 실패 시 삭제 방지 |
 | PX-006,015 / AC-03 | 수락 후 socket drop, unknown 분류, client 1회/fixture 1회 PASS | not_run: proxy 전달/감사 상태와 자동 재실행 금지 |
 | PX-003,013 / AC-07 | 세션/버전, finite SSE, fixture 크기 제한 PASS | not_run: 취소, resume, 서버 요청, 큰 응답, 동시성 및 production 한도 |
-| PX-014 / AC-08 | loopback bind, Host/Origin 거절 PASS | not_run: proxy SSRF, IPv6, DNS rebinding, redirect 목적지 정책 |
-| PX-007–011,016 / AC-04–06,12 | 관련 production 경로 없음 | not_run: principal 격리, canary, spool/중앙 단절·복구·재시작 |
-| PX-012 / AC-13 | 관리 API 없음 | not_run: server/manager 권한과 관리 변경 감사 |
+| PX-002,014 / AC-08 | loopback bind, Host/Origin 거절 PASS | not_run: 요청의 upstream 지정 무시, proxy SSRF, IPv6, DNS rebinding, redirect 목적지 정책 |
+| PX-003–004 / AC-15 | fixture가 지원하지 않는 기능을 거절하는 시험만 PASS(proxy 아님) | not_run: support-matrix.md §5 각 행의 응답·upstream 호출 수·감사 기록; undecided 행 해소 |
+| PX-007–011,016 / AC-04–06,12 (PX-008 원격 설정 TTL 만료 포함) | 관련 production 경로 없음 | not_run: principal 격리, canary, spool/중앙 단절·복구·재시작 |
+| PX-013 / AC-12 | fixture 크기 제한 PASS(AC-07과 공유, production 한도 아님) | not_run: spool 용량·디스크 가득 참·재시작·backpressure·정상 종료 |
+| PX-012 / AC-01,13 | 관리 API 없음 | not_run: server/manager 권한과 관리 변경 감사 |
 
 counter는 drop 도구를 수락한 직후 lock 안에서 증가하며 응답 전 연결을 끊는다.
 동일 request ID를 다시 전송해도 계수하므로 deduplication으로 retry를 숨기지 않는다.

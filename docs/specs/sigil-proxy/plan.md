@@ -26,13 +26,13 @@ manager 코드는 기존 manager 저장소에서 별도 PR로 작성하되 같�
 
 | 작업 | 구현 범위 | 요구사항 | 검증 |
 |---|---|---|---|
-| T-10 | crate/CLI/config/서비스 lifecycle, health와 limits | 001,013,016 | AC-07/12 |
+| T-10 | crate/CLI/config/서비스 lifecycle, health와 limits | 001,013,016 | AC-07/12/14 |
 | T-11 | core DTO와 server 등록·설정·권한·이벤트 저장/조회 | 007–012,016 | AC-04/05/06/13 |
-| T-12 | HTTP relay, protocol adapter, principal 격리, 목적지 보호 | 002–004,008/009,014/015 | AC-01/03/04/07/08 |
-| T-13 | inventory, 완전한 snapshot과 drift, 호출 lifecycle, privacy | 005–007,010 | AC-02/03/05 |
+| T-12 | HTTP relay, protocol adapter, principal 격리, 목적지 보호 | 002–004,008/009,014/015 | AC-01/03/04/07/08/15 |
+| T-13 | inventory, 완전한 snapshot과 drift, 호출 lifecycle, privacy | 005–007,010 | AC-02/03/04/05 |
 | T-14 | durable spool·재전송·중복 제거·복구 | 011,013,016 | AC-06/12 |
-| T-15 | manager proxy/upstream 목록·상세·호출 검색·설정 화면 | 012,016 | AC-01/05/06/13 |
-| T-16 | 설치·운영·복구 문서, E2E와 측정 결과, 출시 | 001–016 | P1 전체 |
+| T-15 | manager proxy/upstream 목록·상세·호출 검색·설정 화면 | 012,016 | AC-01/05/06/12/13 |
+| T-16 | 설치·운영·복구 문서, E2E와 측정 결과, 출시 | 001–016 | P1 전체 (AC-14/15 포함) |
 
 순서: T-10/11 계약 기반 → T-12 → T-13/14 → T-15 통합 → T-16.
 화면은 T-11 fixture 계약으로 개발할 수 있지만 실제 데이터 E2E 없이 완료 처리하지 않는다.

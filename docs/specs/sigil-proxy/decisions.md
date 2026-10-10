@@ -24,14 +24,34 @@ T-01 리뷰(B1, M2–M4, m5) 후속 결정. 독립 리뷰(review-lead, 2026-10-1
 | M3 header 정책 | 요청 방향: downstream `Authorization`, `Cookie`, proxy 인증 헤더 제거, upstream 자격증명은 route에서 주입, `Origin`은 PX-014로 검사하고 미전달. 응답 방향: upstream `WWW-Authenticate`, `Set-Cookie` 제거, upstream 401/403은 고정 proxy 오류로 변환. `Forwarded`/`X-Forwarded-*`/`User-Agent` 정책 명시. proxy가 downstream session id를 발급해 (principal, route, upstream session)에 **1:1**로 묶고, `Last-Event-ID` 재개는 묶인 session 안에서만 허용. 항목별 거부 테스트 | 확정(D-02 계약에 포함). PX-008/009/014, AC-04/08 |
 | M4 cancel 순서 | dispatch 전 관찰한 `notifications/cancelled`는 해당 요청을 **dispatch하지 않음**을 뜻한다. unknown/not_sent/`cancelled_before_dispatch`로 기록하고 client에 응답하지 않는다. 아직 도착하지 않은 id의 cancel 보류는 짧은 한도 후 폐기(PX-013). dispatch 후 cancel은 전달 + cancel_requested, 무응답이면 cancel_no_response | 확정. PX-006/013/015, 2025-11-25 cancellation |
 | tasks capability | upstream initialize 결과에 `capabilities.tasks`가 있으면 route를 unsupported로 표시한다. 런타임에 나타나면 M2와 같이 종료하고 `upstream_capability_unsupported`로 기록한다. capability 제거(bytes 재작성)와 광고 그대로 중계는 하지 않는다. `params.task`가 붙은 tools/call은 2025-11-25 tasks 규칙(capability 미선언 수신자는 task metadata를 무시하고 정상 처리)에 따라 그대로 전달한다. `tasks/*`는 -32601. 지원 route에서 task handle이 오면 그대로 중계·기록하고 route를 degraded/unsupported로 표시 | 확정. PX-004(미지원 기능 광고 금지), D-01 relay-first. P1 capability 표에 표시. 실제 upstream의 tasks 채택 현황은 P1 전 조사 |
+| 2025-06-18 downstream 입력 | (a) client `initialize`가 2025-06-18을 제시하면 그대로 upstream에 전달하고 upstream 응답 revision으로 판단한다(2025-11-25면 정상, 2025-06-18이면 M2 거절). (b) initialize 이후 `MCP-Protocol-Version` 헤더가 협상된 revision(2025-11-25)과 다르면 400으로 거절한다. 2025-06-18 같은 legacy 값은 modern 요청으로 분류하지 않으며, 감사 reason 분리는 다음 계약 수정에서 반영한다 | 확정(2026-10-10, M2·relay-first 적용). W4 리뷰 F1 |
 | 런타임 route 거절 응답 | upstream_capability_unsupported·upstream_version_unsupported·upstream_initialize_unreadable 모두 initialize id에 고정 JSON-RPC 오류 하나로 답한다(HTTP 200 application/json, -32603, 고정 메시지, data 없음, echo 없음). 구체 reason은 감사·route health에만 둔다. `supported` data가 붙은 -32602는 쓰지 않는다 | 확정(T-02-fix-4 재확인 권고). 계약 반영은 다음 계약 작업 |
 | 취소 전 dispatch의 HTTP 종료 | 열린 POST에 200 text/event-stream을 이벤트 없이 닫는다(contract v0.3). P1에서 Claude·Codex가 이를 재시도하는지 측정하고, 재시도하면 HTTP 응답 없이 연결을 닫는 방식으로 바꾼다(PX-015) | 확정(P1 검증 항목) |
 | m5 버전 헤더 누락 | initialize 이후 `MCP-Protocol-Version` 헤더가 없는 요청은 400으로 거절한다. 스펙 요구가 아니라 의도적 엄격성 선택이다(2025-11-25는 client에 헤더 전송을 요구하지만 서버는 initialize 협상 값으로 version을 알 수 있다). 결과: rmcp 0.16 client는 P1 미지원 | 확정. 측정한 Claude 2.1.296·codex 0.162.0은 initialize 이후 모든 요청에 헤더를 보냈다 |
+| 이벤트 의미 검증 위치 (flag, not reject) | 한 이벤트와 registry·소유권 상태만으로 판정되는 검사(owner, ref 존재, ref scope; ledger-and-query L5 SV-1..SV-5)는 ingest에서 거절한다. 같은 invocation의 두 이벤트를 비교하는 검사(C-1..C-3, 중복)는 거절하지 않고 projection에서 flag한다(`completion_without_start`, `integrity_conflict`). flag된 invocation은 `outcome=null`이고 보고값은 `reported_*`로만 남으며 `outcome` 필터에 걸리지 않는다 | 확정(2026-10-10, W2 리뷰 F1·F11). 거절하면 결과가 도착 순서에 따라 달라진다. README R2/R3의 "제한"을 위치별로 나눈 것이다 |
 | metadata_ref 키 | per-proxy 키 K는 state_dir 비밀 취급 규칙을 따르고 백업·지원 번들에서 제외한다. 새 K는 재사용하지 않는 새 key_id를 받는다. state_dir 손실 = 새 epoch + 새 K/key_id + 서버 감사 공백 | 확정. R1 유지(K 없이 이름·정의에서 ref 계산 불가) |
 
 D-04의 수치는 [검증 계획](validation.md)을 단일 참조로 사용한다. 프로토콜별
 세션/요청 차이에 따라 D-01 결정 시 적용 항목을 조정하고 변경 근거를 기록한다.
 이 문서의 부분 결정만으로 production 경로 구현 gate를 통과했다고 해석하지 않는다.
+
+## P1 기능 범위 (2026-10-10, W5 조사 + 사용자 결정)
+
+근거: MCP 2025-11-25 transports·resources·prompts·client features·changelog(2026-10-10 조회), T-01 측정, W5 조사.
+원칙: capability 필드는 제거하지 않는다(relay-first). proxy가 능동적으로 거절하는 capability를 upstream이 광고하면 route를 unsupported로 표시하고, 그 밖의 기능 저하는 문서로 밝힌다.
+
+| 기능 | P1 처리 | 감사 | 상태 |
+|---|---|---|---|
+| GET SSE 스트림 | 인증 후 고정 405, upstream 미접속. POST 응답 스트림 재개 없음(결과 불명은 PX-015대로). GET으로만 오는 unsolicited 알림은 전달되지 않음 | invocation 아님(집계만) | 확정(사용자 결정) |
+| `*.listChanged` capability | 광고를 그대로 두고 문서화된 기능 저하로 취급(요청 단위 POST 스트림으로 오는 알림만 전달) | — | 확정(추론 근거, P1 실측 필요) |
+| resources/subscribe·unsubscribe | 전달하지 않고 고정 -32601. upstream이 `resources.subscribe=true`를 광고하면 route unsupported(`upstream_capability_unsupported`) | method `unknown`, protocol_error/not_sent | 확정(사용자 결정) |
+| resources list·read·templates/list, prompts list·get | 그대로 중계 | method `unknown` start/completion, tool 없음, 원문 method 미기록 | 확정. 세분화 method 값은 P2(schema 변경·리뷰 필요) |
+| 서버→client 요청(sampling, elicitation, roots) | POST 응답 스트림 안에서 bytes 그대로 중계. client→server JSON-RPC 응답(method 없음)을 malformed로 분류하지 않는다. M4 cancel 표는 client가 시작한 id만 다룬다 | 이벤트 없음. 관찰 사각지대로 문서화(P2 고려) | 확정 |
+| 그 밖의 알림(progress, list_changed 등) | 그대로 중계. `notifications/cancelled`는 M4. progress가 최대 시간 제한(PX-013)을 연장하지 않는다 | 이벤트 없음 | 확정 |
+| JSON-RPC batch 배열 | 2025-11-25에서 제거된 형식. parse 사본에서 최상위 배열을 감지해 전달하지 않고 malformed 경로로 거절 | method `unknown`, protocol_error/not_sent | 확정 |
+| 세션 DELETE | 인증 후 같은 principal·route의 session만 처리(아니면 동일한 404). 묶인 upstream session에 DELETE를 1회 전달(재시도 없음). upstream 2xx/404면 proxy session 무효화 후 이후 요청 404, 405·오류면 상태를 그대로 전달하고 session 유지 | 이벤트 없음(집계만) | 확정 |
+
+계약 반영(Traffic·오류 표의 405, -32601 subscribe, batch 거절, DELETE 규칙, method 없는 응답 처리)은 다음 계약 수정에서 한다.
 
 ## 다음 실행 단위
 

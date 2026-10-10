@@ -1,7 +1,18 @@
-# P1 계약 후보 v0.3
+# P1 계약 후보 v0.4
 
-2026-09-27 작성, 2026-10-10 T-02-fix-2·T-02-fix-3 반영. P0 리뷰와 실기 검증 전에는 구현 고정 계약이 아니다.
+2026-09-27 작성, 2026-10-10 T-02-fix-4·round-3 계약 통합 반영 (v0.4, 2026-10-10). P0 리뷰와 실기 검증 전에는 구현 고정 계약이 아니다.
 D 항목은 이 문서로 닫히지 않는다.
+
+## 관련 계약
+
+이 문서가 계약 진입점이다. 아래 후보 문서가 이 문서나 [decisions.md](../decisions.md)와 충돌하면 decisions.md의 결정을 기준으로 정정한다.
+
+- [control-plane.md](control-plane.md): proxy identity, 관리 credential, manager 권한, downstream 인증, config DTO (D-02)
+- [ledger-and-query.md](ledger-and-query.md): 보존·tombstone, invocation projection, 조회 DTO, semantic 검증, 집계, `POST /v1/proxy-status` (D-03)
+- [registry.md](registry.md): metadata registry, key rotation, inventory/drift (D-05)
+- [registry-entry.schema.json](registry-entry.schema.json): registry entry·업로드·read view·inventory report schema
+- [proxy-status.schema.json](proxy-status.schema.json): heartbeat/상태 snapshot과 gap 보고 schema
+- [support-matrix.md](../support-matrix.md): P1 capability/지원 표 (PX-004)
 
 ## 구현 기술과 서비스 경계
 
@@ -21,11 +32,20 @@ SDK 편의를 위해 자동으로 MSRV를 올리지 않는다. sigil-server와 �
 macOS 개발은 임시 디렉터리의 절대 경로를 사용한다. 비밀값 CLI 인자는 제공하지 않는다.
 
 로컬 bootstrap: proxy_id, listen, control_plane_url, state_dir,
-client_cert_file, client_key_file, ca_file, limits. 상대 파일 경로는 설정 파일 디렉터리 기준이다.
+client_cert_file, client_key_file, ca_file, limits, credentials.
+상대 파일 경로는 설정 파일 디렉터리 기준이다.
+`credentials`는 credential_ref → `{secret source, upstream_origins}` 매핑이다.
+secret source는 소유자 읽기 전용 파일이다. 환경 변수 이름 참조는 [candidate, control-plane.md §5.5 U1]이며,
+값은 로그에 남기지 않고 proxy 호스트를 떠나지 않는다. 환경 변수 참조가 채택되면 bootstrap override가 아니라 credentials 항목의 secret source 지정이다.
+`upstream_origins`는 그 ref를 보낼 수 있는 upstream origin의 로컬 바인딩이다
+([control-plane.md §5.5](control-plane.md), [recommended, §9 항목 8; D-02 미결]).
+원격 config는 이 바인딩을 넓힐 수 없다. 바인딩과 맞지 않는 route나 알 수 없는 ref는
+config 적용 전체를 `apply_failed`로 실패시키고 이전 설정을 유지한다. `upstream_origins`가 없는 ref는 시작 실패다.
 민감 파일은 소유자 읽기만 허용하며 symlink/소유권 검사는 플랫폼별로 검증한다.
 기본 listen은 loopback이다. 모든 listener(loopback 포함)는 client 인증 설정이 없으면 시작 실패한다.
 인증되지 않은 요청은 upstream에 전달하지 않는다(PX-008, observe 모드 포함). 외부 bind는 TLS도 필요하다.
-미인증·인증 실패 요청은 invocation 이벤트가 아니며 actor를 만들지 않는다. 그 집계 기록은 후속 계약이다.
+미인증·인증 실패 요청은 invocation 이벤트가 아니며 actor를 만들지 않는다. 그 집계 기록은
+status 보고의 고정 reason 카운터 후보다([ledger-and-query.md L6](ledger-and-query.md)).
 
 원격 route/auth 설정은 중앙 버전 단위로 검증 후 원자 적용한다. 로컬 bootstrap과 병합하지 않는다.
 현재 버전과 낮은 버전은 새 적용으로 인정하지 않는다. 만료 시 새 호출을 전달하지 않는다.
@@ -35,7 +55,7 @@ client_cert_file, client_key_file, ca_file, limits. 상대 파일 경로는 설�
 
 [JSON Schema](proxy-event.schema.json)와 [예제](invocation-started.example.json)는
 P1 invocation started/completed와 nonterminal cancel_requested 관찰만 정의한다. inventory/heartbeat/config 감사는
-후속 계약 항목이며 이 schema로 임의 payload를 전달하지 않는다.
+별도 후보 계약 항목이며(상태 보고: [ledger-and-query.md L6b](ledger-and-query.md), [proxy-status.schema.json](proxy-status.schema.json)) 이 schema로 임의 payload를 전달하지 않는다.
 
 - sequence는 `(proxy_id, epoch_id)`별 단조 증가, event_id는 UUID이며 재전송 시 동일하다.
   epoch_id는 첫 시작과 로컬 상태 복구 불가 시마다 새로 만드는 random UUID다(M1 절 참고).
@@ -62,23 +82,63 @@ P1 invocation started/completed와 nonterminal cancel_requested 관찰만 정의
 | GET /v1/proxies/{id} | 상태·desired/applied revision·last_seen | proxy.read 범위 검사 |
 | GET /v1/proxy-invocations | cursor와 proxy/upstream/actor/outcome/time 필터 | proxy.read 범위 검사 |
 | GET /v1/proxy-invocations/{id} | started/decision/completed projection | proxy.read 범위 검사 |
-| PUT /v1/proxies/{id}/config | expected_revision, 새 설정; 충돌 409 | proxy.manage |
+| PUT /v1/proxies/{id}/config | expected_revision, 새 설정; 충돌 409 | management credential(scope `config`) + management-caller cert; `proxy.manage`는 manager 측 권한(M1) |
 | GET /v1/proxies/{id}/config | 해당 proxy에 대한 설정과 expires_at | proxy identity와 path ID 일치 |
 | POST /v1/proxy-events | events 배열, 최대 100개/1 MiB; 전부 검증 후 원자 수락 | 등록 proxy mTLS identity |
+| POST /v1/proxy-status | 상태 snapshot과 gap upsert [candidate] ([ledger-and-query.md L6b](ledger-and-query.md)) | 등록 proxy mTLS identity |
+| POST /v1/proxy-metadata | registry entry 업로드 [candidate] ([registry.md R2](registry.md)) | 등록 proxy mTLS identity |
+| POST /v1/proxy-inventory | inventory 보고 [candidate, registry.md O-4] | 등록 proxy mTLS identity |
+| register / disable / enable / retire (경로명 미확정) | proxy 등록과 상태 전환 [candidate] ([control-plane.md §1.3, §2.2](control-plane.md)) | management credential: disable은 scope `config`, 나머지는 `identity`; management-caller cert |
+| GET /v1/proxy-management-audit | 관리 작업 감사 기록 [candidate] ([control-plane.md §2.2](control-plane.md)) | proxy.read |
 
 수집 성공은 durable 저장 뒤 `accepted_event_ids`와 `duplicate_event_ids`를 반환한다.
-부분 성공을 만들지 않는다. 요청 전체 유효성 실패는 422, identity mismatch는 403,
+부분 성공을 만들지 않는다. 요청 전체 유효성 실패는 422,
 크기 초과 413, backpressure 429, 일시 저장 실패 503이다. envelope 전체 raw body를 오류에 넣지 않는다.
+identity mismatch는 현재 동결된 ingest 계약에서 403이다. 미등록 proxy와 구별하지 않는 동일한 답으로
+404 `proxy_unknown` [candidate: control-plane.md §1.2 권고, D-02 미결]이 제안되어 있다.
+채택 전까지 동결된 ingest 계약의 403(identity mismatch)이 기준이며, 채택 시 decisions.md D-03 행·본 절·
+ledger L5/L6b·registry R2·check_schema.py를 함께 개정한다.
+검사 순서(경로 종류별, [candidate]):
+- 관리 route: management-caller cert class 404 → bearer 401 → scope 403.
+- proxy route: identity 누락/불일치 → 위 기준(403; 404 채택 시 body 검증보다 먼저), 이후 422 > 403 > 409 > 424.
+- 조회 route: 401, 이어서 ledger-and-query.md L3 규칙(범위 밖은 빈 목록/404).
+
 관리 충돌은 409; 인증 누락/오류 401, 권한 부족 403, 미존재 404.
 오류 구조는 `{error:{code,message,items?,pending_metadata_refs?}}`; message는 안전한 고정 텍스트다.
 수집 오류의 `items`는 `{index, event_id?, code}` 목록이다. 422는 검증 전 값을 신뢰할 수 없으므로
 `index`만 쓰고, 409/424는 검증된 `event_id`와 고정 code(`conflict`, `sequence_conflict`,
 `metadata_ref_pending`)를 쓴다. 424는 검증된 metadata_ref UUID 목록 `pending_metadata_refs`를 추가한다.
-그 외 필드 값은 오류에 넣지 않는다. 여러 조건이 겹치면 422 > 403 > 409 > 424 순으로 하나만 반환한다.
+그 외 필드 값은 오류에 넣지 않는다. 여러 조건이 겹치면 422 > 403 > 409 > 424 순으로 하나만 반환한다(identity 404 선검사는 [candidate]).
 cursor는 필터·정렬과 결합하고 안정적인 tie-breaker를 포함한다.
 
+오류 코드 후보(고정 message, 값 미echo). [candidate] 코드는 해당 계약 파일(control-plane §1.2,
+ledger-and-query L3/L5, registry R2)에서 [OPEN]이다. "동결"은 D-03 ingest 계약과 본 문서가 정한 코드다.
+
+| code | HTTP | 위치 | 상태 |
+|---|---|---|---|
+| `proxy_unknown` | 404 | 응답 오류. identity 불일치와 미등록 proxy 공통. 채택 전 기준은 403 | [candidate] |
+| `conflict`, `sequence_conflict` | 409 | `items[]` (수집 N2/M1) | 동결(D-03 ingest, 본 문서) |
+| `registry_conflict` | 409 | `items[]`: registry 업로드의 불변 필드 차이 ([registry.md R2](registry.md)) | candidate([DC]) |
+| `invocation_owner_conflict` | 409 | `items[]`: 이미 다른 proxy가 소유한 `invocation_id` (SV-1) | [candidate] |
+| `revision_conflict` | 409 | config PUT의 expected_revision 불일치 ([control-plane.md §6](control-plane.md)) | [candidate] |
+| `conflict` (gap) | 409 | status endpoint: `items[]`에 `{index, gap_id, code}`, 보고 전체 미적용 (L6b) | [candidate] |
+| `disabled`, `retired` | 상태 응답 | disabled/retired proxy에 대한 고정 code. HTTP status는 [OPEN] (control-plane §1.3) | [OPEN] |
+| `metadata_ref_pending` | 424 | `items[]` + `pending_metadata_refs` | 동결(D-03 ingest, 본 문서) |
+| `semantic_invalid` | 422 | `items[]`: index만 (SV-3..SV-5, registry I-3/I-6..I-8) | [candidate] |
+| `schema_invalid` | 422 | `items[]`: index만. status 보고의 gap schema 위반 | checker-only, 계약 파일에서는 [OPEN] |
+| `invalid_status` | 422 | status 보고 전체 오류 code | checker-only, 계약 파일에서는 [OPEN] |
+| `invalid_cursor` | 422 | 조회: 다른 endpoint/정렬/필터의 cursor | [candidate] |
+| `invalid_filter` | 422 | 조회: 알 수 없는 필터 이름·값, 값 미echo | [candidate] |
+
+status 보고 오류 코드(상태 필드 값, 응답 오류와 별개): `last_update_error` ∈ {`stale_revision`,
+`validation_failed`, `fetch_failed`, `apply_failed`, `config_hash_mismatch`},
+`config.state` ∈ {`none`, `valid`, `expired`, `disabled`}. 정의는
+[proxy-status.schema.json](proxy-status.schema.json)을 따른다.
+
 위 API는 기존 read bearer를 관리/수집 credential로 인정하지 않는다.
-관리 인증 mapping과 manager의 viewer/operator 연결은 T-00 조사 뒤 고정한다.
+관리 인증 mapping과 manager 권한은 [control-plane.md §3](control-plane.md)에 후보로 있다.
+manager 범위는 **M0(read-only)** 권고이며 사용자 결정 대기다. M1을 택하는 경우에만
+viewer/operator 매핑과 CSRF R1–R13이 적용된다([control-plane.md §8, §9](control-plane.md)).
 사용자에게 새 SSO/멀티테넌트 기능을 요구하지 않는 단일 설치 범위다.
 
 ## Traffic와 내구성
@@ -101,7 +161,8 @@ completion 저장 실패는 이미 수행된 동작을 되돌리지 못한다. d
   없음) 스트림을 종료한다. 근거는 2025-11-25 Streamable HTTP 규칙이다. 요청 POST에는 SSE나 JSON 객체 하나로만
   답할 수 있고, `application/json`은 응답 객체를 요구하므로 취소 규칙("응답하지 않는다")과 충돌한다. SSE의
   "결국 응답을 포함한다"는 SHOULD이므로 취소된 요청에서는 생략할 수 있다. event id가 없으므로 client가
-  `Last-Event-ID`로 재개할 대상도 없다. 실제 client 동작은 미검증이다.
+  `Last-Event-ID`로 재개할 대상도 없다. 실제 client 동작은 미검증이다. P1 검증 항목: Claude·Codex가
+  이를 재시도하면 HTTP 응답 없이 연결을 닫는 방식으로 바꾼다(PX-015, decisions.md).
 - requestId 대응은 정확한 JSON 값 일치다. 타입과 값이 모두 같아야 하므로 문자열 `"4"`와 숫자 `4`는 다르고,
   정수 `4`와 `4.0`도 일치하지 않는다.
 - 아직 도착하지 않은 requestId에 대한 취소의 보류·조회는 bounded다(PX-013): 짧은 창(수치는 D-04) 안에
@@ -110,16 +171,55 @@ completion 저장 실패는 이미 수행된 동작을 되돌리지 못한다. d
   `cancel_no_response`로 끝낸다(N4 절).
 - 요청이 dispatch 없이 끝나면(거절·malformed 등) 취소를 전달하지 않고 그 completion을 유지한다.
 - 대응 요청이 있으면 모든 경우 `invocation.cancel_requested`를 기록한다. 대응 요청이 없거나 창이 지난
-  취소는 전달하지 않고 집계 카운터만 남긴다(후속 집계 계약, m6 참고).
+  취소는 전달하지 않고 집계 카운터만 남긴다([ledger-and-query.md L6](ledger-and-query.md), m6 참고).
 
 spool directory는 process lock을 가져 한 writer만 사용한다. 디스크 한도 초과 시 새 호출 차단.
 client 재전송을 자동 dedup한다고 주장하지 않는다. MCP request ID만으로 도구 부작용 idempotency를
 보장할 수 없으므로 각 전달은 별도 invocation이며 proxy 자체 재실행은 금지한다.
 
+### P1 method 범위와 route 거절 응답
+
+근거는 [decisions.md](../decisions.md) "P1 기능 범위"와 "D-01 후속 결정"이다.
+원칙: capability 필드는 제거하지 않는다(relay-first). proxy가 능동적으로 거절하는 capability를
+upstream이 광고하면 route를 unsupported로 표시하고, 그 밖의 기능 저하는 문서로 밝힌다.
+취소 전 dispatch(M3), modern 요청 B1, `tasks` 처리는 위 절과 N4 절이 정의하며 여기서 반복하지 않는다.
+항목별 지원 상태는 [support-matrix.md](../support-matrix.md)가 단일 표다.
+
+| 대상 | P1 처리 | 감사 |
+|---|---|---|
+| GET SSE 스트림 | 인증 후 고정 405, upstream 미접속. POST 응답 스트림 재개 없음. GET으로만 오는 unsolicited 알림은 전달되지 않는다 | invocation 아님(집계만) |
+| `resources/subscribe`·`unsubscribe` | 전달하지 않고 고정 `-32601`. upstream이 `resources.subscribe=true`를 광고하면 route를 unsupported로 표시한다(`upstream_capability_unsupported`) | method `unknown`, `protocol_error`/`not_sent` |
+| resources list·read·templates/list, prompts list·get | 그대로 중계 | method `unknown` start/completion, tool 없음, 원문 method 미기록 |
+| 서버→client 요청(sampling, elicitation, roots)과 client의 JSON-RPC 응답(method 없음) | POST 응답 스트림 안에서 bytes 그대로 중계한다. method 없는 응답을 malformed로 분류하지 않는다. M3 cancel 대응은 client가 시작한 id만 다룬다 | 이벤트 없음. **관찰 사각지대**(P2 고려) |
+| 그 밖의 알림(progress, list_changed 등) | 그대로 중계. `notifications/cancelled`는 M3. progress는 최대 시간 제한(PX-013)을 연장하지 않는다 | 이벤트 없음 |
+| JSON-RPC batch 배열 | 2025-11-25에서 제거된 형식이다. parse 사본에서 최상위 배열을 감지하면 전달하지 않고 malformed 경로로 거절한다 | method `unknown`, `protocol_error`/`not_sent` |
+| 세션 DELETE | 인증 후 같은 principal·route의 묶인 session에서만 처리한다(아니면 동일한 404). 묶인 upstream session에 DELETE를 1회 전달한다(재시도 없음). upstream 2xx/404면 proxy session을 무효화하고 이후 요청은 404, 405·오류면 상태를 그대로 전달하고 session을 유지한다 | 이벤트 없음(집계만) |
+| `*.listChanged` | 광고를 그대로 두고 문서화된 기능 저하로 취급한다. 요청 단위 POST 스트림으로 오는 알림만 전달된다(P1 실측 필요) | — |
+
+resources·prompts 호출을 세분화된 method 값으로 감사하는 것은 P2다(schema 변경과 리뷰 필요).
+
+**런타임 route 거절의 client 응답.** `upstream_capability_unsupported`,
+`upstream_version_unsupported`, `upstream_initialize_unreadable`은 모두 initialize 요청 id에
+고정 JSON-RPC 오류 하나로 답한다: HTTP 200 `application/json`, code `-32603`, 고정 message,
+`data` 없음, 요청 값 echo 없음. 구체 reason은 감사와 route health에만 둔다.
+`supported` 같은 data를 붙인 `-32602`는 쓰지 않는다. 고정 message 문구는 미확정이다
+([control-plane.md §10 질문 3](control-plane.md)).
+batch 거절의 client 응답 형태(HTTP/JSON-RPC)는 **[OPEN]**이다.
+
+**initialize 이후 `MCP-Protocol-Version`.** 인증을 먼저 검사한다(401이 먼저).
+인증된 요청에서 헤더가 없거나 협상된 revision(2025-11-25)과 다르면 HTTP 400과 빈 body로 거절한다.
+누락 거절은 스펙 요구가 아니라 의도적 엄격성 선택이다. 알려진 legacy 값(2025-06-18 등)은 modern 요청으로
+분류하지 않으므로 이 거절에는 `modern_request_unsupported`를 쓰지 않는다. 단 협상값도 알려진 legacy 목록도 아닌 값(예: 2026-07-28)은 B1 modern으로 분류하며 `modern_request_unsupported`를 쓴다. 누락·legacy 값 거절의 감사는
+`protocol_error`/`not_sent`이며 reason은 상수가 생길 때까지 생략한다(modern 분류 값은 B1 감사 규칙을 따른다). reason 구분은 **[OPEN]**:
+schema에 해당 상수가 없으므로 이 문서는 상수를 만들지 않으며, 다음 schema 수정과 독립 리뷰에서 정한다.
+
 ## 미고정 계약 목록
 
-T-00/01/03 결과에 따라 인증과 protocol 지원, 관리 DTO, inventory 저장/조회,
-heartbeat, configuration TTL, 부하 수치, route별 credential 배포 계약을 채운다.
+인증과 protocol 지원, 관리 DTO, inventory 저장/조회, heartbeat, configuration TTL,
+부하 수치, route별 credential 배포 계약은 위 [관련 계약](#관련-계약)에 candidate([DC])로 작성되어 있다.
+후보는 D-02/D-03/D-05의 사용자 결정·독립 리뷰·실기 검증 전에는 확정이 아니다.
+남은 항목은 각 문서의 [OPEN] 표기를 따른다(control-plane.md §9·§10,
+ledger-and-query.md L0, registry.md R0·R8).
 이 목록이 남아 있는 동안 P0 완료나 P1 production 경로 준비 완료라고 표시하지 않는다.
 
 ## T-00 반영: 저장과 baseline 경계
@@ -128,15 +228,19 @@ heartbeat, configuration TTL, 부하 수치, route별 credential 배포 계약�
 P1은 단일 server 인스턴스의 별도 SQLite proxy ledger를 후보로 둔다. insert/dedup/ACK를
 하나의 transaction durability 경계로 묶고 조회는 receipt 날짜에 의존하지 않는다.
 기존 host high-water dedup을 재사용하지 않는다. event 보존과 dedup tombstone 수명은
-최대 offline spool 재전송 기간과 함께 고정해야 하며 아직 미정이다.
+최대 offline spool 재전송 기간과 함께 고정해야 한다. 후보 공식과 기본값은
+[ledger-and-query.md L1](ledger-and-query.md)에 있고 미전송 event 만료 정책(O-1)은 미결이다.
 
 기존 daemon baseline 파일은 HOME에 결합되어 있어 공유하지 않는다. 순수 hash/comparison
 알고리즘만 검토하고 proxy 전용 immutable first baseline과 latest complete snapshot을 분리한다.
 키는 upstream/credential scope/protocol/observation source 및 필요한 proxy visibility를 포함한다.
 
-manager의 기존 fleet 조회는 계속 read-only다. proxy 관리 기능만 새 관리 계약을 사용한다.
-manager 작업 시 기존 지침과 UI 스펙에 이 범위의 예외를 명시하며 viewer/operator mapping과
-CSRF/Origin 검증을 추가한다. 기존 로그인 session 모두를 관리자/승인자로 취급하지 않는다.
+manager의 기존 fleet 조회는 계속 read-only다. manager 범위는 **M0(read-only, `proxy.read`만)**를
+권고하며 사용자 결정 대기다([control-plane.md §3, §9](control-plane.md)).
+viewer/operator mapping과 CSRF/Origin 검증(R1–R13)은 M1(관리 write 경로)을 택하는 경우에만 적용한다
+([control-plane.md §4, §8](control-plane.md)). M0에서도 manager 작업 시 기존 지침과 UI 스펙에
+이 범위의 예외(읽기 측)를 명시한다. 기존 로그인 session 모두를 관리자/승인자로 취급하지 않는다.
+M0은 관리 route를 호출하는 operator CLI의 소유자가 아직 없다는 비용이 있다.
 
 ## 계약 검사 실행
 
@@ -233,7 +337,8 @@ or cross-event consistency; a secret encoded as a UUID is not made safe by forma
 validation. Unknown or out-of-scope references must not be durably accepted;
 failed validation must use fixed errors without echoing submitted values.
 Registry synchronization, offline resolution and retention are specified
-in the D-05 section below. The registry entry DTO and endpoint are still candidates.
+in the D-05 section below. The registry entry DTO and endpoint are candidates in [registry.md](registry.md) and
+[registry-entry.schema.json](registry-entry.schema.json).
 
 ### Lifecycle observations and fixture integrity (R3 and related)
 
@@ -419,7 +524,9 @@ is added as a new constant after its own review and is never matched by a patter
   Authentication is checked first. An unauthenticated request gets 401 and no B1
   handling. An authenticated request counts as modern-era if any of these holds:
   method `server/discover`; request `_meta` contains `io.modelcontextprotocol/protocolVersion`;
-  an `MCP-Protocol-Version` header outside the allowlist.
+  an `MCP-Protocol-Version` header value that is neither the negotiated revision nor in the
+  known legacy list (2024-11-05, 2025-03-26, 2025-06-18) [candidate: the list is new]. A
+  known legacy value is not classed as modern; see "P1 method 범위와 route 거절 응답".
   - Such a request is not forwarded. The client gets HTTP 400 with an empty body.
   - Audit: a start with `method` and `protocol_version` both literal `unknown` and no
     `tool`, then a completion `protocol_error`/`not_sent` with reason
@@ -460,12 +567,15 @@ design.md:22. Recorded for D-05; not closed.
 | Inventory source (m5) | P1 uses only client-driven `tools/list` traffic that the proxy observes. The proxy never issues its own listing, because that would use the upstream credential outside any client request and blur visibility scope. An inventory is complete when one authenticated session, in one scope, follows a chain that starts without a cursor, through successful pages, to a page without `nextCursor`. A proxy-initiated listing needs a separate contract. |
 | Offline resolution | The lookup uses only the last *complete* paginated inventory of the scope, held in local state. An incomplete or failed listing never removes or replaces entries (PX-005). A tool name absent from that inventory is forwarded (P1 observe mode does not block) and recorded as `metadata_unavailable` with reason `not_in_inventory`. If no complete inventory exists, the reason is `no_complete_inventory`. If a name is listed more than once, the reason is `ambiguous_in_inventory`. An unparseable name is `unavailable/malformed` and is rejected before dispatch. |
 | Sync ordering | The proxy durably records each registry entry locally before any start that references it. It uploads the entries (candidate endpoint `POST /v1/proxy-metadata`, mTLS proxy identity, access-controlled store) before, or atomically with, the event batches that reference them. Registry ingest is idempotent per `(proxy_id, metadata_ref)`. Equality covers the immutable fields only: `proxy_id`, `metadata_ref`, the scope key fields, `canon`, `key_id`, `fingerprint`. The stored definition is bound through the fingerprint. Volatile fields such as `observed_at` and upload metadata are excluded. A difference in an immutable field is a 409 (M2b). |
-| Registry 409 (M2b) | The producer quarantines the entry unchanged and records an integrity audit gap. It then rewrites only the `tool` field of each dependent start that was never centrally accepted to `{"status":"metadata_unavailable","reason":"registry_conflict"}`, keeping every other field. This is the only permitted spool rewrite, and the original bytes are kept in quarantine for at least the event retention period (N11). The producer reports the integrity gap centrally (N11): `kind=registry_conflict`, the conflicting `metadata_ref`, the `key_id`, and the affected `event_id`s, with no field values. This report travels on the gap/heartbeat channel, whose DTO is still open. Before sending any event, the producer recomputes the hash of the local registry entry's immutable fields and compares it with the hash recorded when the upload was ACKed. A mismatch is treated as a registry conflict and goes down this same path (N11 iii). A 424 accepts nothing, so only never-accepted events are rewritten. If a rewritten event still conflicts, it is quarantined as an event conflict. Dependent events therefore stop waiting on 424. |
-| Not-yet-synced refs | An event batch that references a ref not yet registered for that proxy is rejected as a whole with retryable **424 `metadata_ref_pending`** (not 422). The error names the waiting items (index, `event_id`) and lists the validated pending refs, and echoes no other value (M2a). The producer uploads the pending entries from local state and retries with backoff, and health reports a stalled sync. A ref registered to another scope or proxy is a permanent 422/403. A ref with no local entry is a producer integrity fault: the event is quarantined with audit-gap status and never resubmitted with an invented ref. |
+| Registry 409 (M2b) | The producer quarantines the entry unchanged and records an integrity audit gap. It then rewrites only the `tool` field of each dependent start that was never centrally accepted to `{"status":"metadata_unavailable","reason":"registry_conflict"}`, keeping every other field. This is the only permitted spool rewrite, and the original bytes are kept in quarantine for at least the event retention period (N11). The producer reports the integrity gap centrally (N11): `kind=registry_conflict`, the conflicting `metadata_ref`, the `key_id`, and the affected `event_id`s, with no field values. This report travels on `POST /v1/proxy-status` gaps (proxy-status.schema.json, ledger-and-query L4/L6b). Before sending any event, the producer recomputes the hash of the local registry entry's immutable fields and compares it with the hash recorded when the upload was ACKed. A mismatch is treated as a registry conflict and goes down this same path (N11 iii). A 424 accepts nothing, so only never-accepted events are rewritten. If a rewritten event still conflicts, it is quarantined as an event conflict. Dependent events therefore stop waiting on 424. |
+| Not-yet-synced refs | An event batch that references a ref not yet registered for that proxy is rejected as a whole with retryable **424 `metadata_ref_pending`** (not 422). The error names the waiting items (index, `event_id`) and lists the validated pending refs, and echoes no other value (M2a). The producer uploads the pending entries from local state and retries with backoff, and health reports a stalled sync. A ref registered to another scope or proxy is a permanent 422 `semantic_invalid`. A ref with no local entry is a producer integrity fault: the event is quarantined with audit-gap status and never resubmitted with an invented ref. |
 | Retention | A registry entry is kept, centrally and locally, at least as long as every event that references it and the dedup tombstones of those events. Locally, it is kept until those events and the entry itself have been centrally ACKed. If content is deleted (for example on a privacy request), the scope-bound stub stays so that ingestion still recognises the ref. Deleted content displays the fixed unavailable label. |
 
-Still open for D-05: the full registry entry DTO and JSON Schema, key rotation operations,
-the projection of re-baseline markers, and the inventory/drift event contract.
+The full registry entry DTO and JSON Schema, key rotation operations, the projection of
+re-baseline markers and the inventory/drift contract are drafted as candidate([DC]) in
+[registry.md](registry.md). Still open for D-05 are the items that file marks [OPEN]:
+upload permission wiring, the scoped content lookup (R6), key-rotation and history-link
+questions (O-2, O-3) and the inventory report endpoint (O-4).
 
 ## Changes in T-02-fix-2
 
@@ -508,7 +618,9 @@ items M1–M3 and m1–m6. Nothing here closes a D item or claims an implementat
 
 Authentication failures, and cancellations that match no request, are not invocation
 events. Their aggregate contract (bounded counters by route and fixed reason code,
-with no raw headers, tokens or IDs) is a tracked follow-up and is not defined here.
+with no raw headers, tokens or IDs) is drafted as candidate([DC]) in
+[ledger-and-query.md L6](ledger-and-query.md) and travels on `POST /v1/proxy-status`.
+It is not defined here.
 
 ## Changes in T-02-fix-3
 
@@ -546,3 +658,17 @@ with no raw headers, tokens or IDs) is a tracked follow-up and is not defined he
 | N12 | Buffering ends at the first complete response whose id equals the `initialize` id, or at the bound/timeout. Held bytes are relayed and then the rest streams. New reason `upstream_initialize_unreadable` (`protocol_error/sent` only) for an exceeded bound or timeout. |
 | N13 | `cancelled_before_dispatch` at the HTTP level: `200 text/event-stream`, terminated with no event, no event id and no `retry`, justified against the 2025-11-25 Streamable HTTP rules. requestId matching uses exact JSON value equality. Model cases: `"4"`≠`4`, `4`≠`4.0`, `true`≠`1`, and `4`=`4`/`"4"`=`"4"`. |
 | M1 gap | Startup model: if K is absent while the spool is present, a new epoch is created. The same holds for a missing epoch or spool; a fully present state keeps the epoch. |
+
+## Changes in the contract integration pass — 2026-10-10
+
+Text-only fold of decided items and cross-references. No schema, fixture or checker change, and no D item is closed (D-02 stays open pending the user).
+
+| Item | Change |
+|---|---|
+| Related contracts | Link list to control-plane, ledger-and-query, registry, the two new schemas and the support matrix. Added `POST /v1/proxy-status` to the API table (candidate). |
+| Identity status | 404 `proxy_unknown` is a [candidate] (control-plane §1.2, D-02 open). The frozen ingest 403 stays the baseline and the 422 > 403 > 409 > 424 precedence is unchanged until adopted. |
+| Error codes | Added a code table: `invocation_owner_conflict`, `semantic_invalid`, `invalid_cursor`, `invalid_filter` [candidate]. |
+| Manager scope | M0 recommended, pending the user; viewer/operator mapping and CSRF R1–R13 only under M1. |
+| P1 feature scope | Added "P1 method 범위와 route 거절 응답": GET SSE 405, resources subscribe `-32601`, relayed resources/prompts as `unknown`, client responses, other notifications, batch refusal, DELETE, `*.listChanged`, runtime route refusal `-32603`, post-init header 400 with the audit reason split [OPEN]. |
+| Bootstrap | Local fields `credentials` and `upstream_origins`; remote config cannot widen the binding. |
+| Pending wording | Resolved "후속 계약"/"T-00 조사 뒤"/"아직 미정" wording that the new contracts cover; remaining open items point to each file's [OPEN] marks. |
