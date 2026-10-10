@@ -1,6 +1,6 @@
 # T-03 검증 준비와 D-04 제안
 
-2026-09-27 · verifier/coder · 기준 HEAD `24eddb2` + 미커밋 fixture.
+2026-09-27 · verifier/coder · 기준 HEAD `24eddb2` 위에서 작성, `97db268`로 커밋. fixture revision 2025-11-25는 D-01 잠정 지원 revision과 일치(2026-10-10).
 상태: **독립 fixture 준비 검증 완료; protocol 후보는 T-01 대기**.
 Production proxy, 실제 vendor client, server/manager E2E 및 성능 측정은 미실행이다.
 이 문서는 D-04 권고안이며 확정/출시 승인이나 P1 인수 통과 선언이 아니다.
@@ -69,7 +69,8 @@ counter는 drop 도구를 수락한 직후 lock 안에서 증가하며 응답 �
 
 ## D-04 권고: 첫 배포와 수치 한도 후보
 
-첫 production 검증 대상은 **Ubuntu 24.04 LTS x86_64 단일 proxy 프로세스**로 권고한다.
+첫 production 검증 대상은 **Rocky Linux 9 단일 proxy 프로세스**로 확정했다(2026-10-10 사용자 결정, [decisions.md](decisions.md) D-04).
+RHEL 계열 기준으로 SELinux enforcing과 rpm 배포를 포함해 검증한다. 초기 권고안(Ubuntu 24.04 LTS x86_64)은 대체되었다.
 macOS arm64는 현재 fixture 개발 환경일 뿐 production 검증 대상 확정 근거가 아니다.
 아래 값은 보수적 P1 초기값 제안이며 구현/측정 전이다. 설정 이름은 T-02 계약에 맞춘다.
 단위 MiB/GiB는 2진 단위이며 압축 사용 시 decoded 크기도 제한한다.
@@ -97,7 +98,7 @@ fixture 자체의 64 KiB/3초 제한과 위 production 후보를 혼동하지 �
 
 ## P1 성능 시험 환경과 합격 목표 제안 (미측정)
 
-고정 환경: Ubuntu 24.04 LTS x86_64, 4 vCPU/8 GiB RAM/40 GiB SSD VM,
+고정 환경: Rocky Linux 9(SELinux enforcing), 4 vCPU/8 GiB RAM/40 GiB SSD VM, 아키텍처를 결과에 명시(aarch64·x86_64는 서로 다른 baseline),
 proxy에 2 vCPU/512 MiB cgroup, release build, 동일 host의 합성 upstream과 load driver.
 upstream과 driver는 남은 CPU에 배치하고 CPU 모델/주파수 정책, hypervisor,
 kernel, Rust/compiler/dependency lock, commit, filesystem, TLS 설정과 모든 limits를

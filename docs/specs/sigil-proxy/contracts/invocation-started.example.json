@@ -2,6 +2,7 @@
   "schema_version": 1,
   "event_id": "01998932-4100-7000-8000-000000000001",
   "proxy_id": "proxy-demo",
+  "epoch_id": "3f1c9a52-6b0e-4d2a-9c1e-7a5b2d8e4f10",
   "sequence": 1,
   "occurred_at": "2026-09-27T08:00:00Z",
   "event_type": "invocation.started",
@@ -14,11 +15,12 @@
     "actor": {
       "actor_id": "client-demo",
       "actor_kind": "non_human",
-      "authentication_method": "bearer"
+      "authentication_method": "bearer",
+      "evidence_source": "proxy_credential_mapping"
     },
     "tool": {
       "status": "identified",
-      "metadata_ref": "0c635e55-7e09-4e3d-978f-4b88870428f1"
+      "metadata_ref": "3f4720a0-484d-8103-a955-96953753827d"
     }
   }
 }

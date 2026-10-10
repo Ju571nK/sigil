@@ -1,0 +1,275 @@
+{
+  "steps": [
+    {
+      "step": "initialize",
+      "direct_status": 200,
+      "relay_status": 200,
+      "direct_content_type": "application/json",
+      "relay_content_type": "application/json",
+      "direct_has_session_id": true,
+      "relay_has_session_id": true,
+      "direct_sha256": "52f87b468a6a9d37044d1384575deb6b0f8eecad85178dbcba1430fb3fd5869d",
+      "relay_sha256": "52f87b468a6a9d37044d1384575deb6b0f8eecad85178dbcba1430fb3fd5869d",
+      "body_len": 167,
+      "direct_framing": "content-length",
+      "relay_framing": "content-length",
+      "header_names_only_direct": [],
+      "header_names_only_relay": [],
+      "match": true
+    },
+    {
+      "step": "notifications/initialized",
+      "direct_status": 202,
+      "relay_status": 202,
+      "direct_content_type": "application/json",
+      "relay_content_type": "application/json",
+      "direct_has_session_id": false,
+      "relay_has_session_id": false,
+      "direct_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "relay_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_len": 0,
+      "direct_framing": "content-length",
+      "relay_framing": "content-length",
+      "header_names_only_direct": [],
+      "header_names_only_relay": [],
+      "match": true
+    },
+    {
+      "step": "tools/list",
+      "direct_status": 200,
+      "relay_status": 200,
+      "direct_content_type": "application/json",
+      "relay_content_type": "application/json",
+      "direct_has_session_id": false,
+      "relay_has_session_id": false,
+      "direct_sha256": "6688acee0be210bec7b12e50462d1a3a6dd04f0d3f1490ef79af1dbcffa17fb4",
+      "relay_sha256": "6688acee0be210bec7b12e50462d1a3a6dd04f0d3f1490ef79af1dbcffa17fb4",
+      "body_len": 367,
+      "direct_framing": "content-length",
+      "relay_framing": "content-length",
+      "header_names_only_direct": [],
+      "header_names_only_relay": [],
+      "match": true
+    },
+    {
+      "step": "tools/list page-2",
+      "direct_status": 200,
+      "relay_status": 200,
+      "direct_content_type": "application/json",
+      "relay_content_type": "application/json",
+      "direct_has_session_id": false,
+      "relay_has_session_id": false,
+      "direct_sha256": "266d7268f7adc47b25e7e293307dbeea27c095ebcdf8d82a15d245986350e7f3",
+      "relay_sha256": "266d7268f7adc47b25e7e293307dbeea27c095ebcdf8d82a15d245986350e7f3",
+      "body_len": 357,
+      "direct_framing": "content-length",
+      "relay_framing": "content-length",
+      "header_names_only_direct": [],
+      "header_names_only_relay": [],
+      "match": true
+    },
+    {
+      "step": "tools/call json_ok",
+      "direct_status": 200,
+      "relay_status": 200,
+      "direct_content_type": "application/json",
+      "relay_content_type": "application/json",
+      "direct_has_session_id": false,
+      "relay_has_session_id": false,
+      "direct_sha256": "64d3f9681ec63192368439926451947ddf8e7fd2899bfcf68b23eff952b9e787",
+      "relay_sha256": "64d3f9681ec63192368439926451947ddf8e7fd2899bfcf68b23eff952b9e787",
+      "body_len": 117,
+      "direct_framing": "content-length",
+      "relay_framing": "content-length",
+      "header_names_only_direct": [],
+      "header_names_only_relay": [],
+      "match": true
+    },
+    {
+      "step": "tools/call sse_ok",
+      "direct_status": 200,
+      "relay_status": 200,
+      "direct_content_type": "text/event-stream",
+      "relay_content_type": "text/event-stream",
+      "direct_has_session_id": false,
+      "relay_has_session_id": false,
+      "direct_sha256": "bd984801ed58ad26ed404bb0cc8bef1b4dd452e14754765972537d207bdff239",
+      "relay_sha256": "bd984801ed58ad26ed404bb0cc8bef1b4dd452e14754765972537d207bdff239",
+      "body_len": 169,
+      "direct_framing": "close-delimited",
+      "relay_framing": "chunked",
+      "header_names_only_direct": [],
+      "header_names_only_relay": [
+        "transfer-encoding"
+      ],
+      "match": true
+    },
+    {
+      "step": "tools/call tool_error",
+      "direct_status": 200,
+      "relay_status": 200,
+      "direct_content_type": "application/json",
+      "relay_content_type": "application/json",
+      "direct_has_session_id": false,
+      "relay_has_session_id": false,
+      "direct_sha256": "9c96ab4f496ba75d9b4165ab2dce0c717a0a7c20d29f4816bacfe6dfa1417491",
+      "relay_sha256": "9c96ab4f496ba75d9b4165ab2dce0c717a0a7c20d29f4816bacfe6dfa1417491",
+      "body_len": 119,
+      "direct_framing": "content-length",
+      "relay_framing": "content-length",
+      "header_names_only_direct": [],
+      "header_names_only_relay": [],
+      "match": true
+    },
+    {
+      "step": "tools/call drop_after_accept",
+      "direct_status": null,
+      "relay_status": null,
+      "direct_content_type": null,
+      "relay_content_type": null,
+      "direct_has_session_id": false,
+      "relay_has_session_id": false,
+      "direct_sha256": null,
+      "relay_sha256": null,
+      "body_len": 0,
+      "direct_observed": {
+        "observed_response": false,
+        "exception": "RemoteDisconnected"
+      },
+      "relay_observed": {
+        "observed_response": false,
+        "exception": "RemoteDisconnected"
+      },
+      "downstream_closed_without_response_both": true,
+      "match": true
+    },
+    {
+      "step": "ping",
+      "direct_status": 200,
+      "relay_status": 200,
+      "direct_content_type": "application/json",
+      "relay_content_type": "application/json",
+      "direct_has_session_id": false,
+      "relay_has_session_id": false,
+      "direct_sha256": "677fe4de015e4a7a9de53da9236ed5fc22555723222004ccc9430ac13a6b121d",
+      "relay_sha256": "677fe4de015e4a7a9de53da9236ed5fc22555723222004ccc9430ac13a6b121d",
+      "body_len": 41,
+      "direct_framing": "content-length",
+      "relay_framing": "content-length",
+      "header_names_only_direct": [],
+      "header_names_only_relay": [],
+      "match": true
+    },
+    {
+      "step": "DELETE session",
+      "direct_status": 204,
+      "relay_status": 204,
+      "direct_content_type": "application/json",
+      "relay_content_type": "application/json",
+      "direct_has_session_id": false,
+      "relay_has_session_id": false,
+      "direct_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "relay_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_len": 0,
+      "direct_framing": "content-length",
+      "relay_framing": "close-delimited",
+      "header_names_only_direct": [
+        "content-length"
+      ],
+      "header_names_only_relay": [],
+      "match": true
+    }
+  ],
+  "sse_checks": {
+    "comment_line": true,
+    "event_line": true,
+    "two_data_lines_crlf": true,
+    "no_bare_lf": true,
+    "ends_with_blank_line": true
+  },
+  "capture_checks": [
+    {
+      "n": 1,
+      "step": "initialize",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    },
+    {
+      "n": 2,
+      "step": "notifications/initialized",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    },
+    {
+      "n": 3,
+      "step": "tools/list",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    },
+    {
+      "n": 4,
+      "step": "tools/list page-2",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    },
+    {
+      "n": 5,
+      "step": "tools/call json_ok",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    },
+    {
+      "n": 6,
+      "step": "tools/call sse_ok",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    },
+    {
+      "n": 7,
+      "step": "tools/call tool_error",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    },
+    {
+      "n": 8,
+      "step": "tools/call drop_after_accept",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    },
+    {
+      "n": 9,
+      "step": "ping",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    },
+    {
+      "n": 10,
+      "step": "DELETE session",
+      "req_bin_equals_sent": true,
+      "resp_bin_equals_client_body": true
+    }
+  ],
+  "fixture_counters": {
+    "total": 8,
+    "by_tool": {
+      "json_ok": 2,
+      "sse_ok": 2,
+      "tool_error": 2,
+      "drop_after_accept": 2
+    },
+    "by_id": {
+      "4": 2,
+      "5": 2,
+      "6": 2,
+      "7": 2
+    }
+  },
+  "relay_stderr_events": {
+    "host_header_rewritten_to_upstream_authority": 1,
+    "host_rewritten": 10,
+    "upstream_closed_before_headers": 1
+  },
+  "session_id_values_printed": false,
+  "failures": [],
+  "ok": true
+}

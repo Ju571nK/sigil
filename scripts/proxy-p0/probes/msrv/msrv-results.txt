@@ -1,0 +1,103 @@
+MSRV / toolchain probe results (crates A=rmcp-sdk, B=raw-relay)
+Repo: <repo>
+Rules: no source/Cargo.toml/Cargo.lock edits, all cargo builds --locked, default toolchain untouched.
+
+== Step 1: environment ==
+$ rustup --version
+rustup 1.29.0 (28d1352db 2026-03-05)
+$ rustup toolchain list        (before)
+stable-aarch64-apple-darwin (active, default)
+$ rustc +stable --version
+rustc 1.95.0 (59807616e 2026-04-14)
+$ rustup default               (before)
+stable-aarch64-apple-darwin (default)
+
+== Step 2: install 1.78 ==
+$ rustup toolchain install 1.78 --profile minimal
+  1.78-aarch64-apple-darwin installed - rustc 1.78.0 (9b00956e5 2024-04-29)
+  Result: success (rustup then self-updated 1.29.0 -> 1.29.1; see notes)
+
+== Step 3: cargo +1.78 build --release --locked (msrv-1.78) ==
+[A] rmcp-sdk: EXIT=101
+  error: failed to parse manifest at .../icu_locale_core-2.3.0/Cargo.toml
+  Caused by: feature `edition2024` is required
+  (Cargo 1.78.0 (54d8815d0 2024-03-26) cannot parse edition-2024 manifests.
+   Failing package seen first: icu_locale_core 2.3.0; the same class of error applies to other edition-2024 crates.)
+[B] raw-relay: EXIT=101
+  error: failed to parse manifest at .../hyper-util-0.1.21/Cargo.toml
+  Caused by: feature `edition2024` is required
+
+== Step 4: declared minimum from lockfile (cargo +stable metadata --locked) ==
+[A] rmcp-sdk: 132 packages
+  max rust_version: 1.89.0 (uuid 1.28.0)
+  top 5 by rust_version:
+    uuid 1.28.0 = 1.89.0
+    icu_collections 2.3.0 = 1.88
+    icu_locale_core 2.3.0 = 1.88
+    icu_normalizer 2.3.0 = 1.88
+    icu_normalizer_data 2.3.0 = 1.88
+  edition-2024 packages: chacha20 0.10.2, cpufeatures 0.3.1, getrandom 0.4.3,
+    hyper-util 0.1.21, icu_collections 2.3.0, icu_locale_core 2.3.0,
+    icu_normalizer 2.3.0, icu_normalizer_data 2.3.0, icu_properties 2.3.0,
+    icu_properties_data 2.3.0, icu_provider 2.3.1, idna_adapter 1.2.2,
+    rand 0.10.3, rand_core 0.10.1, rmcp 0.16.0
+[B] raw-relay: 30 packages
+  max rust_version: 1.85 (hyper-util 0.1.21)
+  top 5 by rust_version:
+    hyper-util 0.1.21 = 1.85
+    mio 1.2.4 = 1.71
+    proc-macro2 1.0.107 = 1.71
+    quote 1.0.47 = 1.71
+    syn 3.0.7 = 1.71
+  edition-2024 packages: hyper-util 0.1.21
+
+== Step 5: declared M = max(max rust_version, 1.85 if edition 2024) ==
+[A] M = 1.89.0
+[B] M = 1.85
+Install: rustup toolchain install 1.89.0 --profile minimal -> installed (rustc 1.89.0 29483883e 2025-08-04)
+Install: rustup toolchain install 1.85 --profile minimal    -> installed (rustc 1.85.1 4eb161250 2025-03-15)
+
+[A] cargo +1.89.0 build --release --locked --target-dir rmcp-sdk/target/msrv-1.89.0
+    EXIT=0  Finished `release` profile [optimized] target(s) in 26.22s
+[A] extra bound check: cargo +1.85 build --release --locked --target-dir rmcp-sdk/target/msrv-1.85
+    EXIT=101
+    error: rustc 1.85.1 is not supported by the following packages:
+      icu_collections@2.3.0 requires rustc 1.88
+      icu_locale_core@2.3.0 requires rustc 1.88
+      icu_normalizer@2.3.0 requires rustc 1.88
+      icu_normalizer_data@2.3.0 requires rustc 1.88
+      icu_properties@2.3.0 requires rustc 1.88
+      icu_properties_data@2.3.0 requires rustc 1.88
+      icu_provider@2.3.1 requires rustc 1.88
+    (rust-version gate; uuid 1.28.0 at 1.89 is also above 1.85)
+[B] cargo +1.85 build --release --locked --target-dir raw-relay/target/msrv-1.85
+    EXIT=0  Finished `release` profile [optimized] target(s) in 6.49s
+
+Bounds:
+  A rmcp-sdk: lowest built = 1.89.0 ; highest failed = 1.85 (1.78 also failed, edition2024 parse)
+              1.86-1.88 not tested.
+  B raw-relay: lowest built = 1.85 ; highest failed = 1.78 (edition2024 parse)
+              1.79-1.84 not tested.
+  No extra toolchains beyond 1.85 and 1.89.0 were needed; no higher requirement surfaced.
+
+== Step 6: stable builds (normal target dir) ==
+[A] cargo +stable build --release --locked -> EXIT=0  (Finished, cached)
+[B] cargo +stable build --release --locked -> EXIT=0  (Finished, cached)
+rustc +stable --version: rustc 1.95.0 (59807616e 2026-04-14)
+
+== Step 7: final toolchain state ==
+$ rustup toolchain list        (after)
+stable-aarch64-apple-darwin (active, default)
+1.78-aarch64-apple-darwin
+1.85-aarch64-apple-darwin
+1.89.0-aarch64-apple-darwin
+$ rustup default              (after)
+stable-aarch64-apple-darwin (default)   -- UNCHANGED from step 1
+
+== Notes ==
+- Installing toolchains triggered a rustup self-update 1.29.0 -> 1.29.1 (rustup's own auto-update, not a default change).
+- Builds at msrv-* dirs were written only under each crate's target/ dir.
+- --locked was used on every cargo build; Cargo.lock not expected to change, but
+  git cannot confirm this (scripts/proxy-p0/probes/ is untracked).
+- Deviation: during step 3 I wrote scratch logs and metadata JSON to /tmp
+  (/tmp/_unused, /tmp/_meta_*.json, /tmp/_metaerr_*.txt). They were deleted after use.

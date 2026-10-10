@@ -1,0 +1,158 @@
+{
+  "batch_initialize": {
+    "content_type": null,
+    "http_status": 415,
+    "messages": [
+      {
+        "_text": "fail to deserialize request body data did not match any variant of untagged enum JsonRpcMessage"
+      }
+    ]
+  },
+  "header_checks": [
+    {
+      "MCP-Protocol-Version": null,
+      "content_type": "text/event-stream",
+      "handler_received": {
+        "arguments": {
+          "k": 1
+        },
+        "name": "echo_params"
+      },
+      "http_status": 200,
+      "messages": "ok"
+    },
+    {
+      "MCP-Protocol-Version": "2025-06-18",
+      "content_type": "text/event-stream",
+      "handler_received": {
+        "arguments": {
+          "k": 1
+        },
+        "name": "echo_params"
+      },
+      "http_status": 200,
+      "messages": "ok"
+    },
+    {
+      "MCP-Protocol-Version": "2099-01-01",
+      "content_type": "text/event-stream",
+      "handler_received": {
+        "arguments": {
+          "k": 1
+        },
+        "name": "echo_params"
+      },
+      "http_status": 200,
+      "messages": "ok"
+    },
+    {
+      "MCP-Protocol-Version": "garbage",
+      "content_type": "text/event-stream",
+      "handler_received": {
+        "arguments": {
+          "k": 1
+        },
+        "name": "echo_params"
+      },
+      "http_status": 200,
+      "messages": "ok"
+    }
+  ],
+  "initialize": [
+    {
+      "client_offered": "2024-11-05",
+      "content_type": "text/event-stream",
+      "error": null,
+      "http_status": 200,
+      "server_answered": "2024-11-05",
+      "session_header": true
+    },
+    {
+      "client_offered": "2025-03-26",
+      "content_type": "text/event-stream",
+      "error": null,
+      "http_status": 200,
+      "server_answered": "2025-03-26",
+      "session_header": true
+    },
+    {
+      "client_offered": "2025-06-18",
+      "content_type": "text/event-stream",
+      "error": null,
+      "http_status": 200,
+      "server_answered": "2025-03-26",
+      "session_header": true
+    },
+    {
+      "client_offered": "2025-11-25",
+      "content_type": "text/event-stream",
+      "error": null,
+      "http_status": 200,
+      "server_answered": "2025-03-26",
+      "session_header": true
+    },
+    {
+      "client_offered": "2026-07-28",
+      "content_type": "text/event-stream",
+      "error": null,
+      "http_status": 200,
+      "server_answered": "2025-03-26",
+      "session_header": true
+    },
+    {
+      "client_offered": "1999-01-01",
+      "content_type": "text/event-stream",
+      "error": null,
+      "http_status": 200,
+      "server_answered": "1999-01-01",
+      "session_header": true
+    },
+    {
+      "client_offered": "not-a-version",
+      "content_type": "text/event-stream",
+      "error": null,
+      "http_status": 200,
+      "server_answered": "2025-03-26",
+      "session_header": true
+    },
+    {
+      "client_offered": "9999-12-31",
+      "content_type": "text/event-stream",
+      "error": null,
+      "http_status": 200,
+      "server_answered": "2025-03-26",
+      "session_header": true
+    }
+  ],
+  "rmcp": "0.16.0",
+  "unknown_fields": {
+    "handler_received": {
+      "arguments": {
+        "k": 1
+      },
+      "name": "echo_params"
+    },
+    "sent_params": {
+      "_meta": {
+        "progressToken": "p1",
+        "x-meta-unknown": true
+      },
+      "arguments": {
+        "k": 1
+      },
+      "name": "echo_params",
+      "x-param-unknown": {
+        "a": 1
+      }
+    }
+  },
+  "unknown_session": {
+    "content_type": null,
+    "http_status": 401,
+    "messages": [
+      {
+        "_text": "Unauthorized: Session not found"
+      }
+    ]
+  }
+}

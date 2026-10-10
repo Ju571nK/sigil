@@ -1,0 +1,9 @@
+    Checking sigil-core v0.9.1 (<worktree>/crates/sigil-core)
+    Checking sigil-spool v0.9.1 (<worktree>/crates/sigil-spool)
+    Checking rmcp v0.16.0
+    Checking sigil-signer v0.9.1 (<worktree>/crates/sigil-signer)
+    Checking sigil-hook v0.9.1 (<worktree>/crates/sigil-hook)
+    Checking sigil-server v0.9.1 (<worktree>/crates/sigil-server)
+    Checking sigil-sender v0.9.1 (<worktree>/crates/sigil-sender)
+    Checking sigil-mcp v0.9.1 (<worktree>/crates/sigil-mcp)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.78s

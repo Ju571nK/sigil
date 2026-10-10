@@ -1,0 +1,20 @@
+error: rustc 1.85.1 is not supported by the following packages:
+  darling@0.23.0 requires rustc 1.88.0
+  darling_core@0.23.0 requires rustc 1.88.0
+  darling_macro@0.23.0 requires rustc 1.88.0
+  icu_collections@2.2.0 requires rustc 1.86
+  icu_locale_core@2.2.0 requires rustc 1.86
+  icu_normalizer@2.2.0 requires rustc 1.86
+  icu_normalizer_data@2.2.0 requires rustc 1.86
+  icu_normalizer_data@2.2.0 requires rustc 1.86
+  icu_normalizer_data@2.2.0 requires rustc 1.86
+  icu_properties@2.2.0 requires rustc 1.86
+  icu_properties_data@2.2.0 requires rustc 1.86
+  icu_properties_data@2.2.0 requires rustc 1.86
+  icu_properties_data@2.2.0 requires rustc 1.86
+  icu_provider@2.2.0 requires rustc 1.86
+  idna_adapter@1.2.2 requires rustc 1.86
+  time@0.3.47 requires rustc 1.88.0
+  time-core@0.1.8 requires rustc 1.88.0
+  time-core@0.1.8 requires rustc 1.88.0
+  time-macros@0.2.27 requires rustc 1.88.0

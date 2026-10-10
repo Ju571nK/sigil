@@ -1,0 +1,64 @@
+{
+  "call drop_after_accept": {
+    "error": "Transport send error: Transport [rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<reqwest::async_impl::client::Client>>] error: Client error: error sending request for url (http://127.0.0.1:61711/mcp)",
+    "outcome": "error"
+  },
+  "call json_ok": {
+    "outcome": "result",
+    "result": {
+      "content": [
+        {
+          "text": "synthetic json_ok",
+          "type": "text"
+        }
+      ],
+      "isError": false
+    }
+  },
+  "call slow_ok with 2s rmcp timeout": {
+    "error": "request timeout after PT2S",
+    "outcome": "error"
+  },
+  "call sse_ok": {
+    "outcome": "result",
+    "result": {
+      "content": [
+        {
+          "text": "synthetic sse_ok",
+          "type": "text"
+        }
+      ],
+      "isError": false
+    }
+  },
+  "call tool_error": {
+    "outcome": "result",
+    "result": {
+      "content": [
+        {
+          "text": "synthetic tool_error",
+          "type": "text"
+        }
+      ],
+      "isError": true
+    }
+  },
+  "client_offered_protocol_version": "2025-03-26",
+  "list_all_tools": [
+    "json_ok",
+    "sse_ok",
+    "tool_error",
+    "drop_after_accept",
+    "slow_ok"
+  ],
+  "server_initialize_result": {
+    "capabilities": {
+      "tools": {}
+    },
+    "protocolVersion": "2025-11-25",
+    "serverInfo": {
+      "name": "sigil-p0-fixture",
+      "version": "0.1.0"
+    }
+  }
+}
