@@ -1,9 +1,9 @@
-# T-03 검증 준비와 D-04 제안
+# T-03 검증 준비와 D-04 한도
 
 2026-09-27 · verifier/coder · 기준 HEAD `24eddb2` 위에서 작성, `97db268`로 커밋. fixture revision 2025-11-25는 D-01 잠정 지원 revision과 일치(2026-10-10).
 상태: **독립 fixture 준비 검증 완료; protocol 후보는 T-01 대기**.
 Production proxy, 실제 vendor client, server/manager E2E 및 성능 측정은 미실행이다.
-이 문서는 D-04 권고안이며 확정/출시 승인이나 P1 인수 통과 선언이 아니다.
+D-04 한도는 P1 초기 기본값으로 채택했다(2026-10-10, decisions.md "D-02 결정"). 성능 보장이 아니며 측정 후 조정한다. 출시 승인이나 P1 인수 통과 선언이 아니다.
 복구 dispatch에서는 기존 Python 파일을 보존하고 README와 본 문서만 작성했다.
 
 ## 후보와 근거
@@ -53,13 +53,16 @@ SSE comment/CRLF/multiline 및 잘린/과대 stream을 확인했다.
 
 | 요구사항 / AC | 이번 fixture 증거 | Proxy 인수 상태 / 남은 검증 |
 |---|---|---|
+| PX-001 / AC-14 | 관련 production 경로 없음(fixture는 별도 Python 스크립트이며 설치 경로가 아님) | not_run: 개인 설치 기본 옵션에서 proxy 미활성·미listen, 명시적 `--config` 없이는 미기동 |
 | PX-002–004 / AC-01 | initialize, tools capability, JSON/SSE 왕복 PASS | not_run: 실제 client → proxy → MCP → server → manager 호출 ID 연결 |
 | PX-005 / AC-02 | 두 페이지 전체 목록과 잘못된 cursor PASS | not_run: baseline/drift, 접근 scope 차이, 중간 page 실패 시 삭제 방지 |
 | PX-006,015 / AC-03 | 수락 후 socket drop, unknown 분류, client 1회/fixture 1회 PASS | not_run: proxy 전달/감사 상태와 자동 재실행 금지 |
 | PX-003,013 / AC-07 | 세션/버전, finite SSE, fixture 크기 제한 PASS | not_run: 취소, resume, 서버 요청, 큰 응답, 동시성 및 production 한도 |
-| PX-014 / AC-08 | loopback bind, Host/Origin 거절 PASS | not_run: proxy SSRF, IPv6, DNS rebinding, redirect 목적지 정책 |
-| PX-007–011,016 / AC-04–06,12 | 관련 production 경로 없음 | not_run: principal 격리, canary, spool/중앙 단절·복구·재시작 |
-| PX-012 / AC-13 | 관리 API 없음 | not_run: server/manager 권한과 관리 변경 감사 |
+| PX-002,014 / AC-08 | loopback bind, Host/Origin 거절 PASS | not_run: 요청의 upstream 지정 무시, proxy SSRF, IPv6, DNS rebinding, redirect 목적지 정책 |
+| PX-003–004 / AC-15 | fixture가 지원하지 않는 기능을 거절하는 시험만 PASS(proxy 아님) | not_run: support-matrix.md §5 각 행의 응답·upstream 호출 수·감사 기록; undecided 행 해소 |
+| PX-007–011,016 / AC-04–06,12 (PX-008 원격 설정 TTL 만료 포함) | 관련 production 경로 없음 | not_run: principal 격리, canary, spool/중앙 단절·복구·재시작 |
+| PX-013 / AC-12 | fixture 크기 제한 PASS(AC-07과 공유, production 한도 아님) | not_run: spool 용량·디스크 가득 참·재시작·backpressure·정상 종료 |
+| PX-012 / AC-01,13 | 관리 API 없음 | not_run: server/manager 권한과 관리 변경 감사 |
 
 counter는 drop 도구를 수락한 직후 lock 안에서 증가하며 응답 전 연결을 끊는다.
 동일 request ID를 다시 전송해도 계수하므로 deduplication으로 retry를 숨기지 않는다.
@@ -67,15 +70,15 @@ counter는 drop 도구를 수락한 직후 lock 안에서 증가하며 응답 �
 지연된 vendor retry, proxy의 at-most-once 또는 exactly-once를 입증하지 않는다.
 직접 fixture 접근과 별도 counter는 테스트 oracle이며 제품 감사 API가 아니다.
 
-## D-04 권고: 첫 배포와 수치 한도 후보
+## D-04: 첫 배포와 수치 한도 (P1 초기 기본값)
 
 첫 production 검증 대상은 **Rocky Linux 9 단일 proxy 프로세스**로 확정했다(2026-10-10 사용자 결정, [decisions.md](decisions.md) D-04).
 RHEL 계열 기준으로 SELinux enforcing과 rpm 배포를 포함해 검증한다. 초기 권고안(Ubuntu 24.04 LTS x86_64)은 대체되었다.
 macOS arm64는 현재 fixture 개발 환경일 뿐 production 검증 대상 확정 근거가 아니다.
-아래 값은 보수적 P1 초기값 제안이며 구현/측정 전이다. 설정 이름은 T-02 계약에 맞춘다.
+아래 값은 P1 초기 기본값으로 채택했다(2026-10-10). 구현/측정 전이며 성능 보장이 아니다. 설정 이름은 T-02 계약에 맞춘다.
 단위 MiB/GiB는 2진 단위이며 압축 사용 시 decoded 크기도 제한한다.
 
-| 대상 | 제안 기본 한도 | 초과/장애 시 제안 동작 |
+| 대상 | 기본 한도 | 초과/장애 시 동작 |
 |---|---|---|
 | HTTP request body / header | 1 MiB / 32 KiB | upstream 전달 전 413 / 431; 원문 로그 금지 |
 | 단일 JSON 응답 / SSE event | 8 MiB / 1 MiB | bounded parser로 종료; 이미 전달한 호출은 outcome unknown 가능 |
@@ -88,7 +91,7 @@ macOS arm64는 현재 fixture 개발 환경일 뿐 production 검증 대상 확�
 | 종료 grace | 30초 | 새 수락 중단, 진행 호출 drain; 잔여 호출 불명/감사 복구 |
 | tool inventory | 100 page, 10,000 tool, 총 16 MiB | 불완전 snapshot 표시; baseline 삭제 판단 금지 |
 | 감사 event / spool | event 16 KiB, spool 1 GiB + 별도 gap reserve 16 MiB | 80% degraded, 100% 기본 새 호출 중단; 기존 in-flight 완료 기록용 여유 설계 |
-| spool 보관 | 미전송 event 자동 만료 없음; ack 이후 24시간 보관 상한 | 공간 부족 시 ack된 자료부터 정리, 미전송 자료 삭제로 정상처럼 보이지 않음 |
+| spool 보관 | 미전송 event는 최대 재시도 기간 R 경과 후 quarantine으로 이동하고 `spool_expired` gap 보고(O-1 A, 2026-10-10 결정, 삭제 없음); ack 이후 24시간 보관 상한 | 공간 부족 시 ack된 자료부터 정리, 미전송 자료 삭제로 정상처럼 보이지 않음 |
 | 프로세스 resource budget | steady RSS 256 MiB 목표, cgroup memory.max 512 MiB, CPU 2 core | hard kill 복구 시험 필수; 상한 도달 전에 admission/backpressure |
 
 fixture 자체의 64 KiB/3초 제한과 위 production 후보를 혼동하지 않는다.
@@ -127,6 +130,5 @@ p95 ≤ 20 ms, 종료 후 연결/메모리 증가가 누적되지 않을 것. �
 측정 결과로 보고하며 이 목표를 현재 throughput으로 주장하지 않는다.
 한도/장애 run의 예상 거절은 정상 부하 오류율과 분리해 보고한다.
 
-D-04는 orchestrator가 OS·limits·위 목표를 수락하고 T-01 지원 범위를 결합해
-고정할 것을 권고한다. P1 출시에는 위 측정 결과, 실제 vendor client 1종 이상,
+D-04는 OS(Rocky Linux 9)와 limits를 P1 초기 기본값으로 채택했다(2026-10-10). 위 성능 목표는 미측정이다. P1 출시에는 위 측정 결과, 실제 vendor client 1종 이상,
 proxy/server/manager E2E, 독립 리뷰, AC 전체 결과가 추가로 필요하다.
