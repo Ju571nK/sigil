@@ -114,5 +114,10 @@ created `audit-signing.key` and a 1-line `license-audit.jsonl` under
 
 ## Cleanup
 
-Test instances stopped and the test directory removed; pre-existing installs
-were not modified.
+- 0.9.0 runs: test instances stopped and the test directory removed;
+  pre-existing installs were not modified.
+- 0.9.1 upgrade: service stopped; test config, drop-in, and the state/log
+  directories created by the test removed. The packages were returned to 0.2.0
+  with `rpm -Uvh --oldpackage`. The original 0.2.0 aarch64 RPMs were no longer
+  available (the v0.2.0 release ships x86_64 RPMs only), so they were rebuilt
+  from the `v0.2.0` tag with that tag's `packaging/build.sh` on the same host.
