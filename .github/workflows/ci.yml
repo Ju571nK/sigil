@@ -39,6 +39,20 @@ jobs:
       - name: hardened build (sigil-agent, --no-default-features)
         run: cargo build -p sigil-agent --no-default-features
 
+  # Keeps `rust-version` in Cargo.toml honest (#240). rust-toolchain.toml pins
+  # `stable`, so the MSRV toolchain is selected explicitly with `cargo +<ver>`.
+  msrv:
+    name: msrv / 1.88
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - name: check (MSRV)
+        run: cargo +1.88 check --workspace --all-targets --locked
+
   # RHEL-family validation. GitHub has no hosted Rocky runner, so run inside
   # the rockylinux:9 container — this exercises the RHEL build path (glibc
   # 2.34, dnf-installed toolchain) that the ubuntu-22.04 leg above does not.

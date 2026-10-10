@@ -34,7 +34,7 @@ source as below.
 One-time toolchain setup:
 
 1. **Rust** — install via [rustup](https://rustup.rs). The default host triple is
-   `x86_64-pc-windows-msvc` (or `aarch64-pc-windows-msvc` on ARM). MSRV 1.78+.
+   `x86_64-pc-windows-msvc` (or `aarch64-pc-windows-msvc` on ARM). MSRV 1.88+.
 2. **MSVC toolchain** — Visual Studio Build Tools 2022 with the C++ workload
    (the MSVC compiler/linker + Windows SDK). On ARM64 also add the ARM64 build
    tools. From an **elevated** PowerShell:

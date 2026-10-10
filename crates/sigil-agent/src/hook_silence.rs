@@ -136,7 +136,7 @@ pub(crate) fn newest_mtime_capped(root: &Path, cap: &ProbeCapRt) -> ScanOut {
             }
             if let Ok(mt) = md.modified() {
                 let ot: OffsetDateTime = mt.into();
-                if newest.as_ref().map_or(true, |(n, _)| ot > *n) {
+                if newest.as_ref().is_none_or(|(n, _)| ot > *n) {
                     newest = Some((ot, ent.path()));
                 }
             }
@@ -189,7 +189,7 @@ pub fn probe_dirs(kind: &str, dirs: &[PathBuf], cap: &ProbeCapRt) -> ProbeResult
         let s = newest_mtime_capped(d, cap);
         truncated |= s.truncated;
         if let Some((ot, p)) = s.newest {
-            if newest.as_ref().map_or(true, |(n, _)| ot > *n) {
+            if newest.as_ref().is_none_or(|(n, _)| ot > *n) {
                 newest = Some((ot, p));
             }
         }

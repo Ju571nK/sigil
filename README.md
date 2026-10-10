@@ -6,7 +6,7 @@
 ![macOS](https://img.shields.io/badge/macOS-supported-success)
 ![Linux](https://img.shields.io/badge/Linux-supported-success)
 ![Windows](https://img.shields.io/badge/Windows-supported-success)
-![Rust](https://img.shields.io/badge/Rust-1.78-orange)
+![Rust](https://img.shields.io/badge/Rust-1.88-orange)
 ![Status](https://img.shields.io/badge/status-alpha-yellow)
 
 A coding agent doesn't ask before it runs a hook, launches an MCP server, or

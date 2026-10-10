@@ -104,9 +104,7 @@ fn build_report_with_parsers(home: &Path, parsers: &[Arc<dyn AiGuardParser>]) ->
                 assessment.normalize();
                 let reasons = assessment.reasons;
                 let controls = assessment.controls;
-                if reasons.is_empty()
-                    && controls.as_ref().map_or(true, Vec::is_empty)
-                    && !configured
+                if reasons.is_empty() && controls.as_ref().is_none_or(Vec::is_empty) && !configured
                 {
                     // Tool not installed / not used — summarize in the footer.
                     not_configured.push(p.tool());
