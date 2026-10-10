@@ -44,7 +44,7 @@ upstream 도구 목록은 페이지 완료 후에만 baseline을 갱신한다. �
 | ProxyRegistration | proxy_id, display_name, identity_ref, desired_config_version, applied_config_version, last_seen |
 | UpstreamRegistration | upstream_id, endpoint, supported_protocols, credential_ref, destination_policy, enabled |
 | ActorContext | actor_id, actor_kind(human/non_human/unknown), authentication_method, evidence_source, credential_owner_id?, delegation_id? |
-| Invocation | invocation_id, proxy_id, upstream_id, protocol_version, method, tool_name?, actor, policy_version?, metadata_baseline_id?, started_at |
+| Invocation | invocation_id, proxy_id, upstream_id, protocol_version, method, tool?(tools/call 전용: metadata_ref 또는 고정 unavailable 상태, 원문 tool_name 금지), actor, policy_version?, metadata_baseline_id?, started_at |
 | Decision | invocation_id, mode, evaluated_action, applied_action, reason_codes, approval_id? |
 | Completion | invocation_id, transport_status, tool_status?, delivery_state, duration_ms, response_bytes, finished_at |
 | AuditEnvelope | schema_version, event_id, proxy_id, sequence, occurred_at, received_at, event_type, payload |

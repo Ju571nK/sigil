@@ -1,6 +1,6 @@
 # T-03 검증 준비와 D-04 제안
 
-2026-09-27 · verifier/coder · 기준 HEAD `24eddb2` + 미커밋 fixture.
+2026-09-27 · verifier/coder · 기준 HEAD `24eddb2` 위에서 작성, `97db268`로 커밋. fixture revision 2025-11-25는 D-01 잠정 지원 revision과 일치(2026-10-10).
 상태: **독립 fixture 준비 검증 완료; protocol 후보는 T-01 대기**.
 Production proxy, 실제 vendor client, server/manager E2E 및 성능 측정은 미실행이다.
 이 문서는 D-04 권고안이며 확정/출시 승인이나 P1 인수 통과 선언이 아니다.

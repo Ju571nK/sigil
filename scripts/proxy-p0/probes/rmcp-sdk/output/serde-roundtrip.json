@@ -1,0 +1,283 @@
+{
+  "cases": [
+    {
+      "added_paths": [],
+      "case": "initialize protocolVersion=2024-11-05",
+      "identical": true,
+      "lost_paths": [],
+      "output": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "capabilities": {},
+          "clientInfo": {
+            "name": "p",
+            "version": "0"
+          },
+          "protocolVersion": "2024-11-05"
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "initialize protocolVersion=2025-03-26",
+      "identical": true,
+      "lost_paths": [],
+      "output": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "capabilities": {},
+          "clientInfo": {
+            "name": "p",
+            "version": "0"
+          },
+          "protocolVersion": "2025-03-26"
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "initialize protocolVersion=2025-06-18",
+      "identical": true,
+      "lost_paths": [],
+      "output": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "capabilities": {},
+          "clientInfo": {
+            "name": "p",
+            "version": "0"
+          },
+          "protocolVersion": "2025-06-18"
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "initialize protocolVersion=2025-11-25",
+      "identical": true,
+      "lost_paths": [],
+      "output": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "capabilities": {},
+          "clientInfo": {
+            "name": "p",
+            "version": "0"
+          },
+          "protocolVersion": "2025-11-25"
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "initialize protocolVersion=2026-07-28",
+      "identical": true,
+      "lost_paths": [],
+      "output": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "capabilities": {},
+          "clientInfo": {
+            "name": "p",
+            "version": "0"
+          },
+          "protocolVersion": "2026-07-28"
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "initialize protocolVersion=1999-01-01",
+      "identical": true,
+      "lost_paths": [],
+      "output": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "capabilities": {},
+          "clientInfo": {
+            "name": "p",
+            "version": "0"
+          },
+          "protocolVersion": "1999-01-01"
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "initialize protocolVersion=not-a-version",
+      "identical": true,
+      "lost_paths": [],
+      "output": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "capabilities": {},
+          "clientInfo": {
+            "name": "p",
+            "version": "0"
+          },
+          "protocolVersion": "not-a-version"
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "tools/call request with unknown fields (params, envelope, _meta)",
+      "identical": false,
+      "lost_paths": [
+        "/params/x-param-unknown",
+        "/x-envelope-unknown"
+      ],
+      "output": {
+        "id": 7,
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "_meta": {
+            "progressToken": "p1",
+            "x-meta-unknown": true
+          },
+          "arguments": {},
+          "name": "json_ok"
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "tools/call result with unknown fields (result, content item, _meta, envelope)",
+      "identical": false,
+      "lost_paths": [
+        "/result/content/0/x-content-unknown",
+        "/result/x-result-unknown",
+        "/x-envelope-unknown"
+      ],
+      "output": {
+        "id": 7,
+        "jsonrpc": "2.0",
+        "result": {
+          "_meta": {
+            "x-meta-unknown": true
+          },
+          "content": [
+            {
+              "text": "hi",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "k": "v"
+          }
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "initialize result with 2025-11-25 and unknown capability",
+      "identical": false,
+      "lost_paths": [
+        "/result/capabilities/x-cap-unknown",
+        "/result/serverInfo/x-info-unknown"
+      ],
+      "output": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "capabilities": {
+            "tools": {
+              "listChanged": false
+            }
+          },
+          "protocolVersion": "2025-11-25",
+          "serverInfo": {
+            "name": "s",
+            "version": "1"
+          }
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "tools/list result with unknown tool fields",
+      "identical": false,
+      "lost_paths": [
+        "/result/tools/0/x-tool-unknown"
+      ],
+      "output": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "nextCursor": "page-2",
+          "tools": [
+            {
+              "inputSchema": {
+                "type": "object"
+              },
+              "name": "t"
+            }
+          ]
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "notifications/cancelled",
+      "identical": true,
+      "lost_paths": [],
+      "output": {
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {
+          "reason": "user",
+          "requestId": 7
+        }
+      },
+      "parsed": true
+    },
+    {
+      "added_paths": [],
+      "case": "unknown client request method",
+      "identical": true,
+      "lost_paths": [],
+      "output": {
+        "id": 9,
+        "jsonrpc": "2.0",
+        "method": "x-vendor/thing",
+        "params": {
+          "a": 1
+        }
+      },
+      "parsed": true
+    },
+    {
+      "case": "batch array (removed in 2025-06-18)",
+      "error": "data did not match any variant of untagged enum JsonRpcMessage",
+      "parsed": false
+    }
+  ],
+  "rmcp": "0.16.0"
+}

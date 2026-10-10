@@ -1,0 +1,10 @@
+# Exact pins for check_schema.py (contract checker only; not a runtime dependency).
+# rfc3339-validator enables jsonschema's "date-time" format checker; without it
+# date-time is silently skipped, so check_schema.py refuses to run.
+attrs==26.1.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+referencing==0.37.0
+rfc3339-validator==0.1.4
+rpds-py==2026.9.1
+six==1.17.0

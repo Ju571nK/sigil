@@ -1,0 +1,8 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 4,
+  "result": "- `json_ok`: `synthetic json_ok`\n- `slow_ok`: `MCP server \"probe\" tool \"slow_ok\" timed out after 5s`\n\nI issued both calls in the same batch rather than waiting for `json_ok` to finish first. Each was called exactly once and neither was retried.",
+  "duration_ms": 8764
+}
