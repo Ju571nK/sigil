@@ -7,6 +7,14 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/sigil/releases).
 
 ## [Unreleased]
 
+### Fixed
+
+- The declared minimum supported Rust version is now 1.88 (was 1.78). The
+  committed lockfile already required 1.88: edition-2024 dependencies (for
+  example `rmcp` and `idna_adapter`) fail on 1.78, and `darling` 0.23 needs
+  1.88. A new CI job checks the workspace with the declared toolchain so the
+  value stays accurate (#240).
+
 ## [0.9.1] - 2026-10-10
 
 ### Fixed

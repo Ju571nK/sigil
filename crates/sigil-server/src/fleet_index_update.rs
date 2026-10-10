@@ -27,7 +27,7 @@ fn is_alert_evidence(ev: &Evidence) -> bool {
 pub fn apply_event(host: &mut HostSummary, event: &Event) {
     // Identity bookkeeping — every variant updates these.
     host.agent_version = event.agent_version.clone();
-    if host.last_seen_ts.map_or(true, |t| event.ts > t) {
+    if host.last_seen_ts.is_none_or(|t| event.ts > t) {
         host.last_seen_ts = Some(event.ts);
     }
     let cur_hour = event.ts.unix_timestamp() / 3600;
