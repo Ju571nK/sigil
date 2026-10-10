@@ -38,7 +38,7 @@
 [결정 기록](decisions.md)에 언어·배포·저장 경계와 미해결 항목을 기록했다.
 D-04의 시험 환경·초기 한도는 시험 기준으로 채택했으며 성능 보장이 아니다.
 
-1. 사용자 결정: 첫 production 대상 OS(D-04), #240 MSRV 방향. (M2는 2026-10-10 A로 확정: 2025-11-25만 지원, codex 제한 명시)
+1. 2026-10-10 사용자 결정 완료: M2=A(2025-11-25만 지원, codex 제한 명시), D-04 대상 OS=Rocky Linux 9, MSRV=1.88(#240, PR #241), AGENTS.md 버전 관리.
 2. D-02 계약: 인증 mapping, manager 권한(proxy.read/manage), CSRF/Origin, M3 header 정책, 런타임 route 거절 응답 반영.
    manager 변경은 sigil-manager에 이슈로 요청한다.
 3. D-03 잔여(retention, projection/query DTO, semantic validation, aggregate 계약)와 D-05 잔여(registry DTO, key rotation, drift 이벤트).
