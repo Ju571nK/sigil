@@ -379,6 +379,10 @@ pub fn handle(ctx: &ProxyContext, peer_id: &str, body: &[u8]) -> Response {
     if st.proxy_id.as_str() != peer_id {
         return super::guard::proxy_unknown();
     }
+    let (report_epoch, last_assigned) = (
+        st.epoch_id.as_str().to_string(),
+        st.last_assigned_sequence.get(),
+    );
     let txn = ctx.store.begin();
     let cur = txn.entry(peer_id);
     let retention = cur.config.as_ref().map_or(FALLBACK_RETENTION_SECONDS, |c| {
@@ -393,23 +397,50 @@ pub fn handle(ctx: &ProxyContext, peer_id: &str, body: &[u8]) -> Response {
             entry,
             response,
             refused,
-        }) => match txn.commit(peer_id, entry) {
+        }) => {
             // A failed write means nothing was acknowledged: the proxy keeps
             // its gaps and retries, so this is a retryable 503, not a 500.
-            Err(e) => {
+            // (`commit` consumes the txn, so the store lock is free below.)
+            if let Err(e) = txn.commit(peer_id, entry) {
                 tracing::error!(error = %e, "proxy state persist failed (status report)");
-                fixed(
+                return fixed(
                     ErrorCode::StorageUnavailable,
                     StatusCode::SERVICE_UNAVAILABLE,
+                );
+            }
+            // Only after the status commit, so a ledger failure cannot lose or
+            // corrupt the status update, and only for a report that was applied
+            // as current (a stale one never opens a tail gap).
+            if response.state_applied {
+                note_tail(ctx, peer_id, &report_epoch, last_assigned);
+            }
+            if refused.is_empty() {
+                Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
+                    .into_response()
+            } else {
+                json_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    ApiError::from_code(ErrorCode::StorageLimit).with_items(refused),
                 )
             }
-            Ok(()) if !refused.is_empty() => json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                ApiError::from_code(ErrorCode::StorageLimit).with_items(refused),
-            ),
-            Ok(()) => Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
-                .into_response(),
-        },
+        }
+    }
+}
+
+/// F13/AC-06: tell the ledger the highest sequence the proxy assigned in the
+/// report's epoch, so a tail it never sent shows as a `tail=true` gap. The
+/// ledger itself ignores an epoch that is known but not the proxy's latest.
+/// The report is already stored, so a ledger error (including `StorageLimit`,
+/// the open-gap cap) never fails it: logged without values, the next report
+/// retries (the next higher-sequence report; a same-sequence retransmission is
+/// not applied and so does not retry).
+fn note_tail(ctx: &ProxyContext, peer_id: &str, epoch: &str, last_assigned: i64) {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    if let Err(e) = ctx
+        .ledger
+        .note_last_assigned(peer_id, epoch, last_assigned, now)
+    {
+        tracing::warn!(error = %e, "proxy tail gap not recorded (status report)");
     }
 }
 

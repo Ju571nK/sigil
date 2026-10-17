@@ -325,14 +325,17 @@ pub fn handle(ctx: &ProxyContext, peer_id: &str, body: &[u8]) -> Response {
     }
 
     match ctx.ledger.insert_batch(peer_id, &events, now) {
-        Ok(out) => Json(
-            serde_json::to_value(IngestResponse {
-                accepted_event_ids: out.accepted,
-                duplicate_event_ids: out.duplicate,
-            })
-            .unwrap_or(serde_json::Value::Null),
-        )
-        .into_response(),
+        Ok(out) => {
+            touch_last_seen(ctx, peer_id);
+            Json(
+                serde_json::to_value(IngestResponse {
+                    accepted_event_ids: out.accepted,
+                    duplicate_event_ids: out.duplicate,
+                })
+                .unwrap_or(serde_json::Value::Null),
+            )
+            .into_response()
+        }
         Err(super::ledger::LedgerError::Conflicts(items)) => {
             ctx.ingest_log.note("events", "conflict");
             conflict_response(&items)
@@ -341,6 +344,16 @@ pub fn handle(ctx: &ProxyContext, peer_id: &str, body: &[u8]) -> Response {
             ctx.ingest_log.note("events", "storage");
             storage_error(&e)
         }
+    }
+}
+
+/// `last_seen` after an accepted batch (rate-bounded by the store). The batch
+/// is already committed in the ledger, so a failed state write must not turn
+/// the answer into an error: it is logged without values and the next accepted
+/// batch or status report refreshes it.
+fn touch_last_seen(ctx: &ProxyContext, peer_id: &str) {
+    if let Err(e) = ctx.store.touch_last_seen(peer_id) {
+        tracing::warn!(error = %e, "proxy last_seen update failed (ingest)");
     }
 }
 

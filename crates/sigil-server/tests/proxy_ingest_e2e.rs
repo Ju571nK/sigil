@@ -1355,3 +1355,232 @@ async fn get_on_the_new_routes_does_not_reach_the_handlers() {
     }
     assert_eq!(fx.ctx.ingest_slots.available_permits(), 16);
 }
+
+// ---- T-11 S5 slice B: status-driven tail gaps and ingest last_seen (#289) -----------
+
+fn status_last(proxy: &str, epoch: &str, seq: u32, last_assigned: i64) -> String {
+    let mut v: Value = serde_json::from_str(&status_body(proxy, epoch, seq, vec![])).unwrap();
+    v["last_assigned_sequence"] = last_assigned.into();
+    v.to_string()
+}
+
+/// `(from, to, open, tail)` of every sequence_gap record of `proxy`.
+fn seq_gaps(env: &Env, proxy: &str) -> Vec<(i64, i64, bool, bool)> {
+    env.fx
+        .ctx
+        .ledger
+        .gaps(proxy)
+        .unwrap()
+        .into_iter()
+        .filter(|g| g.kind == sigil_server::proxy::ledger::GapKind::SequenceGap)
+        .map(|g| {
+            (
+                g.from_sequence.unwrap(),
+                g.to_sequence.unwrap(),
+                g.open,
+                g.tail,
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_status_report_opens_extends_and_arrival_closes_a_tail_gap() {
+    let env = Env::new().await;
+    let (fx, a) = (&env.fx, &env.a);
+    let r = events(fx, a, &batch(&[ping("pxa", 1), ping("pxa", 2)])).await;
+    assert_eq!(r.status, 200);
+    assert!(seq_gaps(&env, "pxa").is_empty());
+
+    // Nothing above the highest stored sequence: no gap.
+    let r = post_status(fx, a, &status_last("pxa", EPOCH, 1, 2)).await;
+    assert_eq!(r.status, 200);
+    assert!(seq_gaps(&env, "pxa").is_empty());
+
+    // Opened by one report.
+    let r = post_status(fx, a, &status_last("pxa", EPOCH, 2, 5)).await;
+    assert_eq!(r.status, 200);
+    assert_eq!(seq_gaps(&env, "pxa"), [(3, 5, true, true)]);
+
+    // Extended by a later one (same record).
+    let r = post_status(fx, a, &status_last("pxa", EPOCH, 3, 8)).await;
+    assert_eq!(r.status, 200);
+    assert_eq!(seq_gaps(&env, "pxa"), [(3, 8, true, true)]);
+
+    // Closed by arrival; the record is kept.
+    let evs: Vec<Value> = (3..=8).map(|n| ping("pxa", n)).collect();
+    let r = events(fx, a, &batch(&evs)).await;
+    assert_eq!(r.status, 200);
+    let gaps = seq_gaps(&env, "pxa");
+    assert_eq!(gaps.len(), 1);
+    assert!(!gaps[0].2 && gaps[0].3, "{gaps:?}");
+}
+
+#[tokio::test]
+async fn stale_and_wrong_epoch_reports_create_no_tail_gap() {
+    let env = Env::new().await;
+    let (fx, a) = (&env.fx, &env.a);
+    events(fx, a, &batch(&[ping("pxa", 1)])).await;
+    let r = post_status(fx, a, &status_last("pxa", EPOCH, 5, 3)).await;
+    assert_eq!(r.status, 200);
+    assert_eq!(seq_gaps(&env, "pxa"), [(2, 3, true, true)]);
+
+    // Older and equal status_sequence: not applied, so no tail change.
+    for seq in [4, 5] {
+        let r = post_status(fx, a, &status_last("pxa", EPOCH, seq, 40)).await;
+        assert_eq!(r.status, 200);
+        assert_eq!(r.json()["state_applied"], false);
+    }
+    assert_eq!(seq_gaps(&env, "pxa"), [(2, 3, true, true)]);
+
+    // A known epoch that is no longer the latest: the report is not a
+    // current-epoch report, so it opens nothing in that epoch.
+    let epoch_b = "00000000-0000-4000-8000-0000000000e2";
+    let mut e = ping("pxa", 100);
+    e["epoch_id"] = epoch_b.into();
+    e["sequence"] = 1.into();
+    assert_eq!(events(fx, a, &batch(&[e])).await.status, 200);
+    let before = seq_gaps(&env, "pxa");
+    let r = post_status(fx, a, &status_last("pxa", EPOCH, 9, 60)).await;
+    assert_eq!(r.status, 200);
+    assert_eq!(seq_gaps(&env, "pxa"), before);
+}
+
+#[tokio::test]
+async fn the_open_gap_cap_does_not_reject_the_report_and_the_next_one_retries() {
+    let env = Env::new().await;
+    let (fx, a) = (&env.fx, &env.a);
+    events(fx, a, &batch(&[ping("pxa", 1)])).await;
+    let conn = rusqlite::Connection::open(fx.p("proxy-ledger.sqlite")).unwrap();
+    conn.execute_batch(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+         INSERT INTO gaps (gap_id, proxy_id, kind, detected_at, epoch_id, from_sequence,
+                           to_sequence, open, tail)
+         SELECT 'filler-' || i, 'pxa', 'sequence_gap', 1,
+                '00000000-0000-4000-8000-0000000000f9', i, i, 1, 0 FROM n;",
+    )
+    .unwrap();
+
+    let r = post_status(fx, a, &status_last("pxa", EPOCH, 1, 4)).await;
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(r.json()["state_applied"], true);
+    let st = fx.ctx.store.entry("pxa").unwrap().status.unwrap();
+    assert_eq!(st.status_sequence.get(), 1);
+    assert!(seq_gaps(&env, "pxa").iter().all(|g| !g.3));
+
+    // Room again: the next report retries and records it.
+    conn.execute_batch("DELETE FROM gaps WHERE gap_id = 'filler-1';")
+        .unwrap();
+    let r = post_status(fx, a, &status_last("pxa", EPOCH, 2, 4)).await;
+    assert_eq!(r.status, 200);
+    assert!(seq_gaps(&env, "pxa").contains(&(2, 4, true, true)));
+}
+
+#[tokio::test]
+async fn a_ledger_failure_in_the_tail_step_still_applies_the_report() {
+    let env = Env::new().await;
+    let (fx, a) = (&env.fx, &env.a);
+    let conn = rusqlite::Connection::open(fx.p("proxy-ledger.sqlite")).unwrap();
+    conn.execute_batch("DROP TABLE gaps;").unwrap();
+    let r = post_status(fx, a, &status_last("pxa", EPOCH, 1, 9)).await;
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(r.json()["state_applied"], true);
+    let e = fx.ctx.store.entry("pxa").unwrap();
+    assert_eq!(e.status.unwrap().status_sequence.get(), 1);
+    assert!(e.last_seen.is_some());
+}
+
+fn set_last_seen(env: &Env, proxy: &str, v: &str) {
+    let txn = env.fx.ctx.store.begin();
+    let mut e = txn.entry(proxy);
+    e.last_seen = Some(v.to_string());
+    txn.commit(proxy, e).unwrap();
+}
+
+fn ts(secs_ago: i64) -> String {
+    (time::OffsetDateTime::now_utc() - time::Duration::seconds(secs_ago))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_accepted_batch_updates_last_seen_at_a_bounded_rate() {
+    let env = Env::new().await;
+    let (fx, a) = (&env.fx, &env.a);
+    assert_eq!(fx.ctx.store.last_seen("pxa"), None);
+    assert_eq!(events(fx, a, &batch(&[ping("pxa", 1)])).await.status, 200);
+    let first = fx.ctx.store.last_seen("pxa").expect("set by ingest");
+
+    // A fresh value is not rewritten.
+    let recent = ts(5);
+    set_last_seen(&env, "pxa", &recent);
+    assert_eq!(events(fx, a, &batch(&[ping("pxa", 2)])).await.status, 200);
+    assert_eq!(fx.ctx.store.last_seen("pxa"), Some(recent));
+
+    // A value older than the interval is refreshed (also by a duplicate-only batch).
+    let old = ts(sigil_server::proxy::store::LAST_SEEN_MIN_INTERVAL_SECS + 30);
+    set_last_seen(&env, "pxa", &old);
+    let r = events(fx, a, &batch(&[ping("pxa", 2)])).await;
+    assert_eq!(r.status, 200);
+    assert!(r.json()["accepted_event_ids"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(ids(&r.json()["duplicate_event_ids"]), [uid(2)]);
+    let now = fx.ctx.store.last_seen("pxa").unwrap();
+    assert!(now > old && now >= first, "{now} {old}");
+    // other proxies are untouched
+    assert_eq!(fx.ctx.store.last_seen("pxb"), None);
+}
+
+#[tokio::test]
+async fn a_rejected_batch_does_not_touch_last_seen() {
+    let env = Env::new().await;
+    let (fx, a) = (&env.fx, &env.a);
+    assert_eq!(events(fx, a, &batch(&[ping("pxa", 1)])).await.status, 200);
+    let old = ts(600);
+    set_last_seen(&env, "pxa", &old);
+
+    let r = events(fx, a, "{").await; // 422 parse
+    assert_eq!(r.status, 422);
+    let r = events(fx, a, &batch(&[ping("pxb", 7)])).await; // 404 foreign id
+    assert_eq!(r.status, 404);
+    let r = events(fx, a, &batch(&[changed_copy()])).await; // 409
+    assert_eq!(r.status, 409);
+    let r = events(fx, a, &batch(&[call("pxa", 9, &mref(9))])).await; // 424 pending
+    assert_eq!(r.status, 424);
+    assert_eq!(fx.ctx.store.last_seen("pxa"), Some(old));
+}
+
+#[tokio::test]
+async fn unknown_epochs_keep_at_most_one_open_tail_gap() {
+    let env = Env::new().await;
+    let (fx, a) = (&env.fx, &env.a);
+    // N distinct epochs the ledger has never seen (nor any event of).
+    for n in 1..=30u32 {
+        let epoch = format!("00000000-0000-4000-8000-{:012x}", 0xa000 + n);
+        let r = post_status(fx, a, &status_last("pxa", &epoch, 1, 7)).await;
+        assert_eq!(r.status, 200);
+    }
+    let open_tails = |env: &Env| {
+        seq_gaps(env, "pxa")
+            .into_iter()
+            .filter(|g| g.2 && g.3)
+            .count()
+    };
+    assert_eq!(open_tails(&env), 1);
+    // Superseded ones are closed, not deleted.
+    assert_eq!(seq_gaps(&env, "pxa").len(), 30);
+
+    // A real epoch announcement for the surviving unknown epoch makes it a
+    // normal tail, and genuine gaps are still accepted afterwards.
+    let epoch = format!("00000000-0000-4000-8000-{:012x}", 0xa000 + 30);
+    let mut e = ping("pxa", 500);
+    e["epoch_id"] = epoch.clone().into();
+    e["sequence"] = 1.into();
+    assert_eq!(events(fx, a, &batch(&[e])).await.status, 200);
+    let r = post_status(fx, a, &status_last("pxa", &epoch, 2, 9)).await;
+    assert_eq!(r.status, 200);
+    assert!(seq_gaps(&env, "pxa").contains(&(2, 9, true, true)));
+    assert_eq!(open_tails(&env), 1);
+}

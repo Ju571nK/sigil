@@ -1187,6 +1187,10 @@ impl Ledger {
     /// epoch). An epoch with no row yet is accepted: it is the new epoch whose
     /// first events have not arrived.
     ///
+    /// A proxy keeps at most one open tail gap for epochs that have no
+    /// `epochs` row (never announced by an event, or pruned by retention); a
+    /// report for another such epoch closes the previous one, record kept.
+    ///
     /// Caller contract: `Err(StorageLimit)` means the open-gap cap is reached
     /// and the tail gap was not recorded. The status handler should still apply
     /// the rest of the report (state snapshot, gap upserts) and not fail the
@@ -1244,6 +1248,22 @@ impl Ledger {
                 TailGapChange::Extended
             }
             None => {
+                if !known {
+                    // At most one open tail gap per proxy for epochs with no
+                    // `epochs` row: such a tail can only close by an arrival
+                    // in that epoch, which a bogus or retention-pruned epoch
+                    // never gets. A new unknown epoch supersedes the previous
+                    // one (closed, record kept); an epoch that has since been
+                    // announced no longer matches and stays a normal tail.
+                    tx.execute(
+                        "UPDATE gaps SET open = 0, closed_at = ?3
+                         WHERE proxy_id = ?1 AND open = 1 AND tail = 1 AND epoch_id <> ?2
+                           AND NOT EXISTS (SELECT 1 FROM epochs e
+                                           WHERE e.proxy_id = gaps.proxy_id
+                                             AND e.epoch_id = gaps.epoch_id)",
+                        params![proxy_id, epoch_id, now],
+                    )?;
+                }
                 let open: i64 = tx.query_row(
                     "SELECT COUNT(*) FROM gaps WHERE proxy_id = ?1 AND open = 1
                        AND kind = 'sequence_gap'",
