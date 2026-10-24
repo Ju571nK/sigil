@@ -212,8 +212,8 @@ resources·prompts 호출을 세분화된 method 값으로 감사하는 것은 P
 `upstream_version_unsupported`, `upstream_initialize_unreadable`은 모두 initialize 요청 id에
 고정 JSON-RPC 오류 하나로 답한다: HTTP 200 `application/json`, code `-32603`, 고정 message,
 `data` 없음, 요청 값 echo 없음. 구체 reason은 감사와 route health에만 둔다.
-`supported` 같은 data를 붙인 `-32602`는 쓰지 않는다. 고정 message 문구는 미확정이다
-([control-plane.md §10 질문 3](control-plane.md)).
+`supported` 같은 data를 붙인 `-32602`는 쓰지 않는다. 고정 message는 `Internal error`다
+([T-13d/T-12b2 구현 계약](../t13d-t12b2.md), 2026-10-24).
 batch 거절의 client 응답 형태(HTTP/JSON-RPC)는 **[OPEN]**이다.
 
 **initialize 이후 `MCP-Protocol-Version`.** 인증을 먼저 검사한다(401이 먼저).
@@ -222,6 +222,12 @@ batch 거절의 client 응답 형태(HTTP/JSON-RPC)는 **[OPEN]**이다.
 분류하지 않으므로 이 거절에는 `modern_request_unsupported`를 쓰지 않는다. 단 협상값도 알려진 legacy 목록도 아닌 값(예: 2026-07-28)은 B1 modern으로 분류하며 `modern_request_unsupported`를 쓴다. 누락·legacy 값 거절의 감사는
 `protocol_error`/`not_sent`이며 reason은 상수가 생길 때까지 생략한다(modern 분류 값은 B1 감사 규칙을 따른다). reason 구분은 **[OPEN]**:
 schema에 해당 상수가 없으므로 이 문서는 상수를 만들지 않으며, 다음 schema 수정과 독립 리뷰에서 정한다.
+
+## T-13d / T-12b2 구현 상세 (2026-10-24)
+
+세션 누락·stateless upstream·POST 404·초기화 거절 문구의 구현 선택과
+요구사항별 인수 기준은 [T-13d/T-12b2 계약](../t13d-t12b2.md)에 기록한다.
+지원 revision, 원문 보존, GET 405, 감사 vocabulary와 제품별 compatibility gate는 유지한다.
 
 ## 미고정 계약 목록
 

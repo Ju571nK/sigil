@@ -724,6 +724,9 @@ pub struct StatusBuilder {
     /// The registry sync (T-13b). Without one the `registry` section is the
     /// vacuous placeholder without the optional counters.
     registry: Option<RegistryProbe>,
+    /// Runtime route health (T-12b2). Without it every configured route of a
+    /// valid config is `supported`.
+    health: Option<crate::route_health::RouteHealth>,
 }
 
 pub(crate) fn rfc3339(t: time::OffsetDateTime) -> String {
@@ -744,7 +747,13 @@ impl StatusBuilder {
             central: CentralHealth::new(),
             spool: None,
             registry: None,
+            health: None,
         }
+    }
+
+    /// Report runtime route marks (`unsupported`/`degraded` with a reason).
+    pub fn set_route_health(&mut self, health: crate::route_health::RouteHealth) {
+        self.health = Some(health);
     }
 
     /// Report the `registry` section from the registry sync.
@@ -854,11 +863,12 @@ impl StatusBuilder {
         // REAL sources: `central` (CentralHealth: ingest acks, answers and
         // failures) and `routes` (the upstreams of the applied config).
         //
-        // `routes[].state` is derived from the config alone: `supported` while
-        // the config is valid (the route is configured and serving), `disabled`
-        // otherwise. There is no upstream probe yet (T-12b), so `degraded`,
-        // `unsupported` and a `reason` are never reported; `supported` means
-        // "configured and not known to be broken", not "verified".
+        // `routes[].state` is derived from the config: `supported` while the
+        // config is valid (the route is configured and serving), `disabled`
+        // otherwise, unless the relay marked the route at runtime (T-12b2:
+        // `unsupported`/`degraded` with a reason, see `route_health`). There is
+        // no proactive upstream probe, so `supported` means "configured and not
+        // known to be broken", not "verified".
         //
         // REAL (T-14b): `spool` and `last_assigned_sequence` come from the spool
         // snapshot when one is attached (always, in the production lifecycle).
@@ -908,11 +918,20 @@ impl StatusBuilder {
         } else {
             "disabled"
         };
+        // A runtime mark (T-12b2) of a route still serving overrides
+        // `supported`; a disabled config stays `disabled`.
+        let marks = match (&self.health, view.state == ConfigState::Valid) {
+            (Some(h), true) => h.current(),
+            _ => Default::default(),
+        };
         let routes: Vec<Value> = view
             .route_upstreams
             .iter()
             .take(256)
-            .map(|u| json!({"upstream_id": u, "state": route_state}))
+            .map(|u| match marks.get(u) {
+                Some(m) => json!({"upstream_id": u, "state": m.state, "reason": m.reason}),
+                None => json!({"upstream_id": u, "state": route_state}),
+            })
             .collect();
         let body = json!({
             "schema_version": 1,
@@ -1039,6 +1058,12 @@ impl Reporter {
     /// Report the spool (see [`StatusBuilder::set_spool`]).
     pub fn with_spool(mut self, spool: Spool) -> Reporter {
         self.builder.set_spool(spool);
+        self
+    }
+
+    /// Report the relay's runtime route marks.
+    pub fn with_route_health(mut self, health: crate::route_health::RouteHealth) -> Reporter {
+        self.builder.set_route_health(health);
         self
     }
 

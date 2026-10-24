@@ -161,6 +161,8 @@ fn route_specs(cfg: &ProxyConfig) -> Result<Vec<RouteSpec>, BuildError> {
             principals.push(PrincipalSpec {
                 principal_id: p.principal_id.clone(),
                 verifiers,
+                actor_kind: p.actor_kind,
+                credential_owner_id: p.credential_owner_id.clone(),
             });
         }
         out.push(RouteSpec {
@@ -426,6 +428,7 @@ impl ConfigSync {
         let prev = self.table.last();
         let table = match route_specs(&cfg).and_then(|s| {
             RouteTable::build_carrying(&s, &self.credentials, &self.limits, prev.as_deref())
+                .map(|t| t.with_revision(cfg.revision))
                 .map_err(|_| BuildError)
         }) {
             Ok(t) => t,

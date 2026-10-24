@@ -19,21 +19,27 @@ use sigil_proxy::dest::SystemResolver;
 use sigil_proxy::inventory::{CursorHasher, InventoryEngine, InventoryLimits};
 use sigil_proxy::inventory_sink::InventorySink;
 use sigil_proxy::mcp::observation::{
-    Observation, ObservationSink, RequestStarted, SinkFuture, StartVerdict,
+    Method, Observation, ObservationSink, RequestStarted, SinkFuture, StartVerdict,
 };
 use sigil_proxy::registry_key::ScopeKey;
 use sigil_proxy::registry_store::RegistryStore;
 use sigil_proxy::route::TableHandle;
 use sigil_proxy::server::Proxy;
 use sigil_proxy_api::status::ConfigState;
+use std::time::Duration;
 use tokio::sync::{oneshot, Notify};
+use tokio::time::timeout;
 
 const EPOCH: &str = "0f0f0f0f-1111-4222-8333-444444444444";
 const CS_A: &str = "cs-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const CS_B: &str = "cs-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-/// Delegates to the inventory sink, but holds the dispatch (after the route was
-/// selected) until the test has applied the next config.
+/// Bound on every wait of this test: a stuck relay fails, it never hangs.
+const WAIT: Duration = Duration::from_secs(20);
+
+/// Delegates to the inventory sink, but holds the dispatch of a `tools/list`
+/// (after the route was selected) until the test has applied the next config.
+/// The session's `initialize` passes straight through.
 struct Gate {
     inner: Arc<InventorySink>,
     entered: Notify,
@@ -44,8 +50,10 @@ impl ObservationSink for Gate {
     fn request_started<'a>(&'a self, s: &'a RequestStarted) -> SinkFuture<'a, StartVerdict> {
         Box::pin(async move {
             let v = self.inner.request_started(s).await;
-            self.entered.notify_one();
-            self.release.notified().await;
+            if s.method == Method::ToolsList {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
             v
         })
     }
@@ -148,30 +156,56 @@ async fn list_across_an_apply(
             .await;
     });
 
-    let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
-    let mut req = format!(
-        "POST /mcp/a HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
-         Authorization: Bearer tok-a\r\nContent-Type: application/json\r\n\
-         Accept: application/json, text/event-stream\r\n\
-         MCP-Protocol-Version: 2025-11-25\r\nContent-Length: {}\r\n\r\n",
-        body.len()
+    let post = |body: &[u8], session: Option<&str>| {
+        let mut req = format!(
+            "POST /mcp/a HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
+             Authorization: Bearer tok-a\r\nContent-Type: application/json\r\n\
+             Accept: application/json, text/event-stream\r\n{}\
+             MCP-Protocol-Version: 2025-11-25\r\nContent-Length: {}\r\n\r\n",
+            session
+                .map(|s| format!("Mcp-Session-Id: {s}\r\n"))
+                .unwrap_or_default(),
+            body.len()
+        )
+        .into_bytes();
+        req.extend_from_slice(body);
+        req
+    };
+    // The session the call runs in (the fixture answers the initialize).
+    let init = timeout(
+        WAIT,
+        send_raw(addr, &post(initialize_body("0").as_bytes(), None)),
     )
-    .into_bytes();
-    req.extend_from_slice(body);
+    .await
+    .expect("initialize answered");
+    assert_eq!(init.status, 200, "{}", init.text());
+    let sid = init
+        .header("mcp-session-id")
+        .expect("session issued")
+        .to_string();
+
+    let req = post(
+        br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        Some(&sid),
+    );
     let call = tokio::spawn(async move { send_raw(addr, &req).await });
 
-    gate.entered.notified().await;
+    timeout(WAIT, gate.entered.notified())
+        .await
+        .expect("the tools/list reached the gate");
     if let Some(a) = after {
         apply(&mut sync, config(2, up, a), 2);
     }
     gate.release.notify_one();
-    let r = call.await.unwrap();
+    let r = timeout(WAIT, call).await.expect("call answered").unwrap();
     assert_eq!(r.status, 200, "{}", r.text());
     assert_eq!(up.count(), 1);
 
     let _ = stop.send(());
-    let _ = serve.await;
-    handle.shutdown().await;
+    timeout(WAIT, serve).await.expect("relay drained").unwrap();
+    timeout(WAIT, handle.shutdown())
+        .await
+        .expect("inventory drained");
     (store, d)
 }
 

@@ -50,8 +50,14 @@ async fn table_without_verifiers_is_401() {
 async fn bad_credentials_are_401() {
     let up = ok_upstream().await;
     let px = simple(&up, limits()).await;
+    // A live session, so the right token reaches upstream.
+    let sid = px.session("/mcp/a", "tok-a").await.unwrap();
+    let base = up.conns();
     let mk = |auth: &[&str]| {
-        let mut extra = Vec::new();
+        let mut extra = vec![
+            ("Mcp-Session-Id", sid.as_str()),
+            ("MCP-Protocol-Version", "2025-11-25"),
+        ];
         for a in auth {
             extra.push(("Authorization", *a));
         }
@@ -70,7 +76,7 @@ async fn bad_credentials_are_401() {
     ] {
         assert_unauthorized(&px.send(&mk(&case)).await);
     }
-    assert_eq!(up.conns(), 0);
+    assert_eq!(up.conns(), base);
     // the right token relays (scheme is case-insensitive)
     for ok in ["Bearer tok-a", "bearer tok-a", "BEARER tok-a"] {
         let r = px.send(&mk(&[ok])).await;
@@ -254,7 +260,7 @@ async fn empty_origin_list_rejects_any_origin() {
     let up = ok_upstream().await;
     let px = simple(&up, limits()).await;
     let r = px
-        .post(
+        .post_bare(
             "/mcp/a",
             Some("tok-a"),
             &[("Origin", "https://app.example.com")],
@@ -300,37 +306,53 @@ async fn foreign_host_is_rejected_on_loopback() {
         let r = px.send(req.as_bytes()).await;
         assert_eq!(r.status, 403, "{host}");
     }
+    let lines = px.session_lines("/mcp/a", "tok-a").await;
     for host in [
         format!("localhost:{port}"),
         format!("127.0.0.1:{port}"),
         format!("[::1]:{port}"),
     ] {
         let req = format!(
-            "POST /mcp/a HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAuthorization: Bearer tok-a\r\nContent-Length: 40\r\n\r\n{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}}"
+            "POST /mcp/a HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAuthorization: Bearer tok-a\r\n{lines}Content-Length: 40\r\n\r\n{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}}"
         );
         assert_eq!(px.send(req.as_bytes()).await.status, 200, "{host}");
     }
     assert_eq!(up.count(), 3);
 }
 
-/// PX-002 / decisions "GET SSE": after auth GET (and every non-POST method) is
-/// a fixed 405 with no upstream contact; unauthenticated is still 401.
+/// PX-002 / decisions "GET SSE": after auth GET (and every method but POST and
+/// DELETE) is a fixed 405 with no upstream contact, `Last-Event-ID` or not;
+/// unauthenticated is still 401. A DELETE without a session is 400.
 #[tokio::test]
 async fn non_post_methods_are_405_after_auth() {
     let up = ok_upstream().await;
     let px = simple(&up, limits()).await;
-    for m in ["GET", "DELETE", "PUT", "PATCH", "HEAD", "OPTIONS"] {
+    let r = px
+        .send(&px.request("DELETE", "/mcp/a", Some("tok-a"), &[], b""))
+        .await;
+    assert_eq!((r.status, r.body().len()), (400, 0));
+    assert_eq!(
+        px.send(&px.request("DELETE", "/mcp/a", None, &[], b""))
+            .await
+            .status,
+        401
+    );
+    for (m, extra) in [
+        ("GET", vec![("Accept", "text/event-stream")]),
+        (
+            "GET",
+            vec![("Accept", "text/event-stream"), ("Last-Event-ID", "1")],
+        ),
+        ("PUT", vec![]),
+        ("PATCH", vec![]),
+        ("HEAD", vec![]),
+        ("OPTIONS", vec![]),
+    ] {
         let r = px
-            .send(&px.request(
-                m,
-                "/mcp/a",
-                Some("tok-a"),
-                &[("Accept", "text/event-stream")],
-                b"",
-            ))
+            .send(&px.request(m, "/mcp/a", Some("tok-a"), &extra, b""))
             .await;
         assert_eq!(r.status, 405, "{m}");
-        assert_eq!(r.header("allow"), Some("POST"), "{m}");
+        assert_eq!(r.header("allow"), Some("POST, DELETE"), "{m}");
         if m != "HEAD" {
             assert_eq!(r.text(), "{\"error\":\"method_not_allowed\"}", "{m}");
         }
@@ -367,8 +389,9 @@ async fn request_cannot_name_the_upstream() {
         Some(format!("127.0.0.1:{}", up.addr.port()).as_str())
     );
     // absolute-form request target naming another authority
+    let lines = px.session_lines("/mcp/a", "tok-a").await;
     let req = format!(
-        "POST http://{}/mcp/a HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAuthorization: Bearer tok-a\r\nContent-Length: 40\r\n\r\n{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}}",
+        "POST http://{}/mcp/a HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAuthorization: Bearer tok-a\r\n{lines}Content-Length: 40\r\n\r\n{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}}",
         other.addr, px.addr
     );
     assert_eq!(px.send(req.as_bytes()).await.status, 200);

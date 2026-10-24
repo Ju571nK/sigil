@@ -14,6 +14,7 @@
 
 pub mod cancel;
 pub mod classify;
+pub mod initialize;
 pub mod observation;
 pub mod response;
 pub mod scan;

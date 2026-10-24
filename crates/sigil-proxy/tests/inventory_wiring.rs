@@ -105,6 +105,8 @@ impl Rig {
                 upstream_id: "up-1".into(),
                 credential_scope_id: "cs-1".into(),
             })),
+            audit: None,
+            session: Some(session_of(principal)),
         };
         let id = RequestId::from_raw("1").unwrap();
         let started = RequestStarted {
@@ -282,7 +284,7 @@ async fn session_end_closes_an_unfinished_chain() {
     let mut r = rig();
     r.call("pr", None, Rig::page(vec![tool("a", "1")], Some("C")))
         .await;
-    r.sink.end_session("pr");
+    r.sink.end_session(session_of("pr"));
     // The worker is ordered: shutdown drains behind the session end.
     let (store, _d) = r.finish().await;
     // Exactly one report: the chain was closed once (by the session end), not
@@ -330,6 +332,8 @@ async fn a_route_without_a_known_scope_is_ignored() {
         route_id: "unknown-route".into(),
         principal_id: "pr".into(),
         scope: None,
+        audit: None,
+        session: Some(session_of("pr")),
     };
     r.sink.observe(Observation::Completed(Completed {
         call,
@@ -436,6 +440,8 @@ impl Rig {
                 upstream_id: "up-1".into(),
                 credential_scope_id: "cs-1".into(),
             })),
+            audit: None,
+            session: Some(session_of(principal)),
         }
     }
 
@@ -839,4 +845,12 @@ async fn a_poisoned_entry_is_a_pause_not_a_conflict_and_a_real_conflict_still_re
         panic!("{gaps:?}")
     };
     assert_eq!(g.event_ids[0].as_str(), uid(1));
+}
+
+/// T-12b2: inventory chains belong to a proxy session; each principal of these
+/// tests stands for one session of its own.
+fn session_of(principal: &str) -> u64 {
+    principal
+        .bytes()
+        .fold(7u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(b)))
 }

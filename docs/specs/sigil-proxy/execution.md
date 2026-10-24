@@ -1,13 +1,108 @@
 # Sigil Proxy 작업 상태
 
-갱신: 2026-10-24 · PR #313 병합 전 회귀 수정 (기준 커밋 `d9e98f3`)
+갱신: 2026-10-24 · T-13d/T-12b2 구현·독립 검토 진행 (기준 커밋 `e5612f8`)
 
 ## 현재 상태
 
 - **P0 종료(2026-10-11, 계약 수준, 사용자 결정).** 잔여 항목과 담당 P1 작업은 [decisions.md "P0 종료"](decisions.md).
   계약 종료는 구현·실기 검증 완료가 아니다.
-- P1 착수. 사용자 창구: 이 대화의 orchestrator. 하위 모델은 orchestrator가 작업별로 지정한다(판단 sonnet, 기계적 검증 haiku).
+- P1 착수. 사용자 창구: 이 대화의 orchestrator. 하위 작업은 구체적인 파일 소유권과 인수 조건을 지정하고, 실행 provider/model 기본값을 유지한다.
 - 이전 회차 작업자 16명은 2026-10-11 모두 종료했다.
+
+## 2026-10-24 T-13d / T-12b2 착수
+
+기준: main `e5612f8` (#313 merged), 작업 브랜치 `feat/proxy-invocations-sessions`.
+사용자 요청: 두 작업의 구현·독립 리뷰·검증을 마무리한다. 외부 배포·실기 완료나 P1 전체 완료를 뜻하지 않는다.
+Orca Run: `run_284f3b0923d3`.
+
+| 작업 | 역할 / Dispatch | 소유 파일 | 상태 |
+|---|---|---|---|
+| T-12b2 호환성 gate | researcher / `ctx_b3121a18faa1` | `docs/research/sigil-proxy-t12b2-compatibility-2026-10-24.md` | 완료, 인용 정리 `ctx_3f6967d4e22e` completed/released |
+| T-13d/T-12b2 분해·계약 점검 | planner / `ctx_1a60a1718a30` | 읽기 전용 | 완료, 사용자 요청으로 보존 terminal 종료 |
+| 계약·실행 기록·통합 | orchestrator | 이 문서 및 필요한 proxy 스펙 문서 | 진행 중 |
+| T-13d/T-12b2 구현·통합 | coder / `ctx_ac452c5b9280` | `crates/sigil-proxy/**`, `crates/sigil-proxy-e2e/**` | provider 세션 한도로 worker_done 없이 종료, abandoned/failed; WIP 보존 후 재배정 |
+| initialize gate | coder / `ctx_a2df824d06cb` | `crates/sigil-proxy/src/mcp/initialize.rs`만 | 격리된 base export에서 단위 18개·clippy·MSRV 통과, released |
+| initialize buffer 상한 보완 | coder / `ctx_d0cc17fbd9a0` | 같은 parser 파일 단일 작성자 | 격리 base 단위 19개·fmt/clippy 통과, released; 통합 coder에게 소유권 반환 |
+| 구현 계약 독립 검토 | reviewer / `ctx_4ecc09b97238` | 읽기 전용 | needs_changes R1/R2 문구 보완, 최종 코드 리뷰에서 재확인; released |
+| producer 조기 독립 검토 | reviewer / `ctx_077cd7d07136` | `invocation_sink.rs` 중심 읽기 전용 | needs_changes (ACK 취소 중 orphan, lookup timeout 잔존 작업 상한 등); released |
+| session/health 조기 독립 검토 | reviewer / `ctx_d86213826a64` | session·health·cancel 모듈 읽기 전용 | needs_changes (late binding mark, initialize session oracle, Debug redaction); released |
+| AWS 시험 준비 | writer / `ctx_de36f4a2f324` | `aws-smoke-test.md`, `scripts/proxy-smoke/**` | provider 한도 abandoned/failed 이력; retry에서 scripts 복구·재검증 완료, terminal 종료 |
+| 구현 재개·통합 | coder / `ctx_40bca12dbac6` | proxy/e2e 코드 (producer 파일 제외) | 구현 및 표적 테스트 완료, released; H1 별도 보완까지 최종 승인 |
+| producer 마무리 | coder / `ctx_9d479bc88b33` | `crates/sigil-proxy/src/invocation_sink.rs`만 | 구현 완료, 표적 회귀 12개 통과; 독립 검토 `ctx_60ce3b1dbc7a` needs_changes; H1/M2 보완 `ctx_4f8cba8e644f` 및 최종 H1 `ctx_dacf0769c76e` 완료, terminal 종료 |
+| AWS 시험 준비 재개 | writer / `ctx_a99d825b0319` | runbook·`scripts/proxy-smoke/**` | 완료, 도구 단위 13개 통과; released. 최종 코드 로컬 예행 별도 |
+| 통합 독립 리뷰 | reviewer / `ctx_bb6ebe5bdca9` → `ctx_6618094b71e4` | 읽기 전용 | 초기 needs_changes 수정 후 최종 approve; 모두 종료 |
+
+최종 상태: H1 보완 `ctx_dacf0769c76e`, 독립 리뷰 `ctx_6618094b71e4`, 로컬 예행 `ctx_d8d4dce093de` 모두 완료/released. AWS 자원은 생성하지 않았다.
+`/scripts/*` ignore의 예외로 시험 도구 소스만 추적한다. 생성한 토큰·인증서·실행 결과는 커밋하지 않는다.
+
+### 최종 독립 리뷰 (2026-10-24)
+
+`ctx_6618094b71e4`가 현재 변경 소스와 회귀 테스트를 읽고 **approve**했다.
+초기 리뷰 결함을 수정한 후 현재·대기 작업 RAII loss accounting, pending start의 ACK/취소 경쟁,
+포화 gap queue의 accepted-or-counted 인계와 lifecycle `Stopping` 오류 경계를 재검토했다.
+독립 표적 실행은 producer 16, 실패 종료 1, HTTP session 14 + health 2, inventory queue 2,
+initialize parser 19개 통과(exit 0). 실기·AWS·vendor client·전체 workspace 검증은 이 리뷰에 포함되지 않는다.
+Inventory Drop/coalescing의 정확한 수명 경계는 정적 검토이며 saturation 회귀가 보조한다.
+최종 producer SHA256 `7f0ac803370bd90053d49903415c980fed43aceafe46198c42809ad18b9632b3`,
+lifecycle `3f2171a06f67d127bce535847805175d39f607d6b37b238968d9914ee129af29`.
+
+### 확정 소스 통합 검증
+
+- `cargo test -p sigil-proxy -p sigil-proxy-e2e --all-features`: **572 passed, 0 failed**, exit 0.
+  실제 binary build 실패를 skip하던 두 E2E를 assertion으로 보완했고 현재 둘 다 실행·통과했다.
+  중첩 compile 실패 0. 사전 workspace 검증 이후 변경된 proxy/e2e 전 범위를 다시 검증했다.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo +1.88 check --workspace --all-targets --locked`, `cargo fmt --all -- --check`,
+  `git diff --check`: 모두 exit 0.
+- 확정 소스 로컬 바이너리 예행 완료: stateful/stateless SSE 각각 27/27, ledger 각각 22 completed,
+  privacy 0건. Offline replay 6 completed, spool 제한 31×200/49×503와 upstream delta31 일치,
+  재시작 fail-closed 및 복구 통과. [시험서 최종 예행](aws-smoke-test.md#17-final-source-local-rehearsal-l-2026-10-24-utc). AWS 미실행.
+- 사용자 요청으로 완료·중단 상태에 남아 있던 terminal 6개를 명시적으로 닫았다.
+  예행 verifier도 완료 후 released. 현재 하위 에이전트는 모두 종료했다.
+
+### 사전 통합 검증 이력
+
+- Orchestrator fixture/helper 테스트 14개 통과 (exit 0). 누락·읽기 실패·빈 scan target은 실패로 처리한다.
+- Workspace all-features 사전 검증 exit 0, 합산 2,477 passed. 다만 실행 중 source 변경으로
+  중첩 binary build 두 번이 실패했고 기존 테스트가 local skip 처리했다. 이 결과는 최종
+  production-binary 검증이 아니다. 해당 테스트를 fail-closed로 보완하고 최종 소스로 다시 실행한다.
+- Producer H1/M2 보완 `ctx_4f8cba8e644f`: 14개 회귀 및 좁은 strict clippy 통과,
+  SHA256 `994e798cb0534445fe5fd5d2dc9f10c2c9bbf800eecf6a242b9d92f2f9ecfb11`.
+- MSRV `cargo +1.88 check --workspace --all-targets --locked` 및
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0 (H1 최종 변경 전).
+- 최종 통합 독립 검토 `ctx_6618094b71e4` 진행. Inventory worker Drop 및 connection JoinSet
+  완료 항목의 지속 회수까지 확인한 뒤 코드 확정·로컬 예행을 진행한다.
+
+### 2026-10-24 복구 체크포인트
+
+Claude 작업자 두 명은 provider 세션 한도 메시지로 턴이 종료됐고 worker_done은 없었다.
+실행 중 프로세스 종료를 추정하지 않고 Dispatch를 fence(abandon)했으며 파일을 보존했다.
+이 WIP는 완료나 승인된 구현이 아니다. 같은 Task를 다른 사용 가능한 provider로 이어간다.
+
+- initialize gate 단위 19개는 별도 base export에서 통과했다. 실제 tree 통합은 별도 확인한다.
+- `inventory_route_scope` 구형 테스트는 초기 세션 미수립 대기로 멈춰 해당 테스트 프로세스만
+  종료했다. 이후 작성자가 handshake+시간 상한을 보완해 4개 통과를 보고한 도구 출력이 있다.
+- producer F1(ACK 중 future drop과 orphan start), F2(timeout 뒤 blocking 작업 상한),
+  F3(inflight 예약 상한), loss retry/건강 표시를 현재 소스·회귀 테스트로 재확인한다.
+  WIP에 Pending 상태와 lookup semaphore가 추가됐으나 최종 검증 전이다.
+- session initialize oracle·Debug·마지막 active call 뒤 종료 hook은 수정 중이었다.
+  route_health의 current-binding 검사와 table snapshot은 health mutex **안에서** 해야 한다
+  (check-before-lock이면 늦은 이전 binding mark 또는 current() prune이 새 unsupported 상태를 지운다).
+- 새 HTTP session/init/DELETE/health 회귀, 실제 server로 invocation 기록·offline replay·privacy E2E,
+  full workspace·MSRV·CI 및 통합 독립 리뷰는 아직 완료가 아니다.
+- AWS 시험서의 임시 로컬 예행은 실제 AWS/실제 vendor client 검증이 아니다.
+  `scripts/proxy-smoke/` 링크가 실제로 갖춰졌는지, scratch 파일과 남은 테스트 프로세스를 확인한다.
+
+인수 범위: PX-003/004/006–011/013–016, AC-03/04/05/06/07/08/12/15.
+T-13d는 실제 중계 요청의 start durable ACK → 단일 upstream dispatch → cancel/completion 기록,
+검증된 설정/협상에서만 actor·revision·protocol provenance를 가져오는 경로와 spool 실패 차단을 포함한다.
+T-12b2는 세션의 principal·route 격리, cancel key의 세션 구분, JSON/SSE initialize 판정,
+미지원 capability/version 거절·upstream cleanup, 초기화 이후 version header 규칙,
+GET 405·DELETE 및 inventory session 종료 연결을 포함한다.
+지원 revision(2025-11-25), relay-first 원문 보존, P1 observe 및 제품별 기존 compatibility gate를 유지한다.
+세션 누락·stateless upstream·upstream POST404 등 세부 선택과 인수 기준은
+[T-13d/T-12b2 계약](t13d-t12b2.md)에 고정했다. 현재 client 버전 확인은 로컬 정적 근거이며
+기존 probe와 다른 버전의 proxy-path 실기 호환성을 주장하지 않는다.
 
 ## 2026-10-23–24 PR #313 병합 전 회귀 수정
 

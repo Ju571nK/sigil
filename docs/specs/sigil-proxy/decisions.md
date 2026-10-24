@@ -153,3 +153,13 @@ checker PASS(2026-10-10 orchestrator 재실행). 계약 종료는 구현·실기
   status `registry` 블록에 선택 필드 `quarantined_entries`·`poisoned_entries`·`discarded_reports`를 둔다. status DTO는 모르는 필드를 거절하므로 server를 proxy보다 먼저 올린다.
   canonical JSON은 2^53을 넘는 정수도 RFC 8785대로 double로 반올림한다.
   orchestrator 결정: inventory body 한도는 4 MiB(P1 초기 시험값)이며 parse 전에 413 `payload_too_large`로 막는다. `pending_previous` 대기는 proxy당 256개이며 넘으면 503 `storage_limit`이다.
+
+## T-13d/T-12b2 구현 세부 확정 (2026-10-24, orchestrator)
+
+기존 결정의 실행 세부 선택은 [구현 계약](t13d-t12b2.md)에 기록한다.
+공식 명세 대조와 독립 계약 리뷰를 거쳐 session 누락 400, initialize의 임의 session header 400
+(조회 전 동일 응답), stateless upstream용 proxy session과 local DELETE 204, upstream POST404 무효화,
+`Internal error` 고정 문구, unsupported binding의 신규 initialize 미전달을 고정했다.
+2025-11-25 지원·B1 선처리·원문 보존·감사 vocabulary·제품 호환성 gate는 유지한다.
+M2/m3 등록·health-check 판정은 여전히 미완료 P1 요구사항이며 이번 runtime 범위 완료로
+전체 P1 종료나 실기 검증을 선언하지 않는다. 구현과 회귀 테스트·독립 코드 리뷰는 execution.md에서 추적한다.

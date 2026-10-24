@@ -3,7 +3,12 @@
 //! - the JSON response / SSE event / per-call byte limits,
 //! - the idle (between frames) and whole-call timeouts,
 //!
-//! and holds the admission permits until the body ends or is dropped.
+//! and holds the admission permits (and the session's active-call count) until
+//! the body ends or is dropped.
+//!
+//! A body may start with a held prefix: the bytes of an `initialize` response
+//! the proxy buffered to judge it (README N12). They are relayed first, in
+//! order and unchanged, and pass the same meters and tracker.
 //!
 //! A violation ends the stream with an error. hyper then aborts the downstream
 //! connection, which the client sees as a truncated response (outcome unknown;
@@ -116,8 +121,12 @@ pub struct Limits {
 
 type PollFrame = Poll<Option<Result<Frame<Bytes>, Box<dyn std::error::Error + Send + Sync>>>>;
 
-/// Admission permits (total, route, principal). Dropped with the body.
-pub struct Permits(#[allow(dead_code)] pub Vec<OwnedSemaphorePermit>);
+/// Admission permits (total, route, principal) and, for a call in a proxy
+/// session, its active-call count. Dropped with the body.
+pub struct Permits(
+    #[allow(dead_code)] pub Vec<OwnedSemaphorePermit>,
+    #[allow(dead_code)] pub Option<crate::session::ActiveCall>,
+);
 
 pub struct MeteredBody {
     inner: Incoming,
@@ -129,6 +138,8 @@ pub struct MeteredBody {
     /// Classifies the response for the observation seam. Reads the frames, never
     /// alters them.
     tracker: Option<ResponseTracker>,
+    /// Held bytes relayed before `inner` (see the module doc).
+    prefix: Option<Bytes>,
     _permits: Permits,
 }
 
@@ -139,14 +150,26 @@ impl MeteredBody {
         permits: Permits,
         tracker: Option<ResponseTracker>,
     ) -> Self {
+        Self::with_prefix(inner, lim, permits, tracker, Bytes::new())
+    }
+
+    /// [`MeteredBody::new`] relaying `prefix` (already read from `inner`) first.
+    pub fn with_prefix(
+        inner: Incoming,
+        lim: Limits,
+        permits: Permits,
+        tracker: Option<ResponseTracker>,
+        prefix: Bytes,
+    ) -> Self {
         let idle = Box::pin(tokio::time::sleep(lim.idle));
         let deadline = Box::pin(tokio::time::sleep_until(lim.call_deadline));
         let mut tracker = tracker;
+        let prefix = (!prefix.is_empty()).then_some(prefix);
         // hyper does not poll a body to its end when the response carries a
         // Content-Length: it stops after that many bytes, or never polls an
         // empty one. The end must be recognised here or the call would end as
         // "client gone".
-        if inner.is_end_stream() {
+        if prefix.is_none() && inner.is_end_stream() {
             if let Some(t) = &mut tracker {
                 t.finish(End::Eof);
             }
@@ -159,8 +182,32 @@ impl MeteredBody {
             idle,
             deadline,
             tracker,
+            prefix,
             _permits: permits,
         }
+    }
+
+    /// Meter and observe one data chunk. `Err` ends the stream.
+    fn meter(&mut self, d: &[u8]) -> Result<(), BodyLimit> {
+        self.total += d.len() as u64;
+        if self.total > self.lim.max_call_bytes {
+            return Err(BodyLimit::CallTooLarge);
+        }
+        match self.lim.mode {
+            BodyMode::Sse => self.sse.feed(d, self.lim.max_sse_event_bytes)?,
+            BodyMode::Json if self.total > self.lim.max_json_bytes => {
+                return Err(BodyLimit::ResponseTooLarge);
+            }
+            BodyMode::Json | BodyMode::Opaque => {}
+        }
+        if let Some(t) = &mut self.tracker {
+            t.feed(d);
+            // The last data frame of a length-delimited body.
+            if self.inner.is_end_stream() {
+                t.finish(End::Eof);
+            }
+        }
+        Ok(())
     }
 
     /// End the stream with a limit error, reporting it to the tracker first.
@@ -190,6 +237,12 @@ impl Body for MeteredBody {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
         let this = &mut *self;
+        if let Some(p) = this.prefix.take() {
+            if let Err(e) = this.meter(&p) {
+                return this.abort(e);
+            }
+            return Poll::Ready(Some(Ok(Frame::data(p))));
+        }
         if this.deadline.as_mut().poll(cx).is_ready() {
             return this.abort(BodyLimit::CallTimeout);
         }
@@ -220,32 +273,17 @@ impl Body for MeteredBody {
             Poll::Ready(Some(Ok(frame))) => {
                 this.idle.as_mut().reset(Instant::now() + this.lim.idle);
                 if let Some(d) = frame.data_ref() {
-                    this.total += d.len() as u64;
-                    if this.total > this.lim.max_call_bytes {
-                        return this.abort(BodyLimit::CallTooLarge);
-                    }
-                    match this.lim.mode {
-                        BodyMode::Sse => {
-                            if let Err(e) = this.sse.feed(d, this.lim.max_sse_event_bytes) {
-                                return this.abort(e);
-                            }
-                        }
-                        BodyMode::Json if this.total > this.lim.max_json_bytes => {
-                            return this.abort(BodyLimit::ResponseTooLarge);
-                        }
-                        BodyMode::Json | BodyMode::Opaque => {}
-                    }
-                    if let Some(t) = &mut this.tracker {
-                        t.feed(d);
-                        // The last data frame of a length-delimited body.
-                        if this.inner.is_end_stream() {
-                            t.finish(End::Eof);
-                        }
+                    if let Err(e) = this.meter(d) {
+                        return this.abort(e);
                     }
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
         }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.prefix.is_none() && self.inner.is_end_stream()
     }
 }
 

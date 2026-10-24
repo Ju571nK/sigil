@@ -9,16 +9,35 @@
 //! 4. unknown route                           -> 404
 //! 5. bearer verification on that route       -> 401
 //! 6. `Origin` check                          -> 403
-//! 7. method (only POST relays)               -> 405
-//! 8. admission (total, route, principal)     -> 429 (queue depth 0)
-//! 9. bounded request body                    -> 413
-//! 10. classify the JSON-RPC message (`mcp`)  -> 400 / 200 fixed refusals,
-//!     202 for a held or pre-dispatch cancel
-//! 11. start observation (may defer)          -> 503 if the sink refuses
-//! 12. resolve + destination check, connect   -> 502 / 504
-//! 13. cancel check, then dispatch
-//! 14. relay; response streamed through the metered body, which classifies
-//!     the outcome for the observation seam
+//! 7. method: POST relays, DELETE ends a session (below), anything else
+//!    (GET included: no stream, no resumption) -> 405
+//! 8. `Mcp-Session-Id` (T-12b2): duplicate     -> 400 empty;
+//!    unknown, foreign principal/route, ended, rebound -> the same 404 empty
+//! 9. admission (total, route, principal)     -> 429 (queue depth 0)
+//! 10. bounded request body                   -> 413
+//! 11. classify the JSON-RPC message (`mcp`). B1 modern markers are refused
+//!     first (400 empty, audited) with or without a session. Then:
+//!     - `initialize` carrying a session id -> 400 empty, no invocation;
+//!     - a full session table -> 429, no invocation;
+//!     - anything else without a session -> 400 empty, no invocation;
+//!     - in a session, `MCP-Protocol-Version` absent or a known legacy value
+//!       -> 400 empty (audited, m5);
+//!     - other refusals -> 400 / 200 fixed, audited;
+//!     - 202 for a held or pre-dispatch cancel
+//! 12. start observation: LOCAL durable start -> 503 if the sink refuses
+//! 13. resolve + destination check, connect   -> 502 / 504
+//! 14. cancel check, then dispatch (the bound upstream session id, never the
+//!     client's, goes upstream)
+//! 15. relay; response streamed through the metered body, which classifies
+//!     the outcome for the observation seam. An `initialize` answer is held
+//!     (bounded) and judged first (README N12): only a supported one creates
+//!     a session and gets the proxy's `Mcp-Session-Id`. An upstream 404 for a
+//!     bound upstream session ends the proxy session (empty 404).
+//!
+//! DELETE: steps 1-8, then the session's upstream DELETE is sent once (no
+//! retry): 2xx/404 end the session, anything else keeps it and the status is
+//! passed on. A session of a stateless upstream ends locally with 204. No
+//! invocation is recorded for session handling.
 //!
 //! The forwarded request body and the response bytes are never re-encoded
 //! (D-01 relay-first). No MCP SDK type is on this path.
@@ -34,6 +53,7 @@ use std::time::{Duration, SystemTime};
 use bytes::Bytes;
 use http::header::{self, HeaderValue};
 use http::{Method, Request, Response, StatusCode};
+use http_body::Body as _;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::Incoming;
@@ -49,19 +69,26 @@ use tokio::time::Instant;
 use crate::body::{BodyMode, MeteredBody, Permits};
 use crate::bootstrap::{is_loopback, is_loopback_host, normalize_origin};
 use crate::dest::{resolve_checked, DestError, Resolver};
-use crate::headers::{downstream_response_headers, upstream_request_headers};
+use crate::headers::{downstream_response_headers, set_upstream_session, upstream_request_headers};
 use crate::inventory::CursorHasher;
 use crate::lifecycle::{drain, DrainOutcome};
 use crate::limits::Limits;
-use crate::mcp::cancel::{CancelKey, CancelOutcome, CancelRegistry};
+use crate::mcp::cancel::{CancelKey, CancelOutcome, CancelRegistry, CancelScope};
 use crate::mcp::classify::{self, HeaderVersion, Message, NotificationInfo, Refusal, RefusalKind};
+use crate::mcp::initialize::{InitGate, InitVerdict};
 use crate::mcp::observation::{
-    CallRef, CancelDisposition, CancelObserved, Cause, Delivery, Method as McpMethod, NoopSink,
-    Observation, ObservationSink, Outcome, RequestRefused, RequestStarted, StartVerdict, ToolField,
+    AuditContext, CallRef, CancelDisposition, CancelObserved, Cause, Delivery, Method as McpMethod,
+    NoopSink, Observation, ObservationSink, Outcome, RequestRefused, RequestStarted, StartVerdict,
+    ToolField,
 };
 use crate::mcp::response::{CallCtx, CaptureLimits, Resolution, ResponseTracker};
-use crate::route::{Route, TableHandle};
+use crate::route::{Route, RouteTable, TableHandle};
+use crate::route_health::{Mark, RouteHealth};
+use crate::session::{
+    ActiveCall, Presented, Reservation, SessionLimits, SessionTable, UpstreamSessionId,
+};
 use crate::tls;
+use sigil_proxy_api::status::{RouteReason, RouteState};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub type RespBody = BoxBody<Bytes, BoxError>;
@@ -123,6 +150,8 @@ struct Shared {
     sink: Arc<dyn ObservationSink>,
     cursor_hasher: CursorHasher,
     cancel: Arc<CancelRegistry>,
+    sessions: Arc<SessionTable>,
+    health: RouteHealth,
     /// Relay-local call numbers (not invocation ids).
     seq: AtomicU64,
     #[cfg(unix)]
@@ -137,14 +166,13 @@ pub struct Proxy {
     sink: Arc<dyn ObservationSink>,
     cursor_hasher: CursorHasher,
     cancel: Arc<CancelRegistry>,
+    sessions: Arc<SessionTable>,
+    health: RouteHealth,
 }
 
 impl Proxy {
     pub fn new(limits: Limits, table: TableHandle, resolver: Arc<dyn Resolver>) -> Proxy {
         Proxy {
-            limits,
-            table,
-            resolver,
             header_read_timeout: HEADER_READ_TIMEOUT,
             // No producer until T-13: nothing is observed and behaviour is
             // exactly the plain relay.
@@ -153,7 +181,28 @@ impl Proxy {
             // own hasher with `with_cursor_hasher`.
             cursor_hasher: CursorHasher::new().unwrap_or_else(|_| CursorHasher::from_key([0; 32])),
             cancel: Arc::new(CancelRegistry::default()),
+            sessions: Arc::new(SessionTable::new(SessionLimits::from_limits(&limits))),
+            health: RouteHealth::new(table.clone()),
+            limits,
+            table,
+            resolver,
         }
+    }
+
+    /// The proxy's session table (its size, for status and tests).
+    pub fn session_table(&self) -> Arc<SessionTable> {
+        self.sessions.clone()
+    }
+
+    /// The runtime route health the relay marks; the status report reads it.
+    pub fn route_health(&self) -> RouteHealth {
+        self.health.clone()
+    }
+
+    /// Use `health` (shared with the status report) instead of a private one.
+    pub fn with_route_health(mut self, health: RouteHealth) -> Proxy {
+        self.health = health;
+        self
     }
 
     /// Install the consumer of observations (T-13) together with the hasher that
@@ -179,8 +228,8 @@ impl Proxy {
         self
     }
 
-    /// Accept until `shutdown` resolves, then stop accepting and drain
-    /// in-flight connections for at most `shutdown_grace_secs`.
+    /// Accept until shutdown, then join every connection task within the grace
+    /// and abort and join any that remain before stopping observation producers.
     pub async fn serve(
         self,
         listener: TcpListener,
@@ -189,6 +238,15 @@ impl Proxy {
     ) -> io::Result<DrainOutcome> {
         let local = listener.local_addr()?;
         let grace = Duration::from_secs(self.limits.shutdown_grace_secs);
+        // A session's end closes its inventory chains and drops its held cancels.
+        {
+            let (sink, cancel) = (self.sink.clone(), self.cancel.clone());
+            self.sessions.set_end_hook(Arc::new(move |n| {
+                sink.session_ended(n);
+                cancel.drop_session(n);
+            }));
+        }
+        let sessions = self.sessions.clone();
         let shared = Arc::new(Shared {
             total: Arc::new(Semaphore::new(self.limits.max_concurrent_calls as usize)),
             host: if is_loopback(local.ip()) {
@@ -200,6 +258,8 @@ impl Proxy {
             sink: self.sink,
             cursor_hasher: self.cursor_hasher,
             cancel: self.cancel,
+            sessions: self.sessions,
+            health: self.health,
             seq: AtomicU64::new(1),
             limits: self.limits,
             table: self.table,
@@ -208,6 +268,7 @@ impl Proxy {
             upstream_tls: tls::upstream_connector(),
         });
         let graceful = GracefulShutdown::new();
+        let mut connections = tokio::task::JoinSet::new();
         let conn_slots = Arc::new(Semaphore::new(
             (shared.limits.max_concurrent_calls as usize).saturating_mul(CONNECTIONS_PER_CALL),
         ));
@@ -216,6 +277,7 @@ impl Proxy {
         loop {
             tokio::select! {
                 _ = &mut shutdown => break,
+                Some(_) = connections.join_next(), if !connections.is_empty() => {},
                 accepted = listener.accept() => {
                     let (sock, _) = match accepted {
                         Ok(a) => a,
@@ -235,19 +297,18 @@ impl Proxy {
                     match &acceptor {
                         None => {
                             let conn = graceful.watcher().watch(connection(sock, shared));
-                            tokio::spawn(async move {
+                            connections.spawn(async move {
                                 let _ = conn.await;
                                 drop(slot);
                             });
                         }
                         Some(a) => {
                             let a = a.clone();
-                            // The handshake runs inside the spawned task, so a slow
-                            // TLS client cannot stall the accept loop. It is not
-                            // tracked by `graceful` until established.
-                            // The connection slot covers the handshake.
+                            // The handshake runs inside the tracked task so a slow
+                            // TLS client cannot stall the accept loop and is joined
+                            // or aborted with established connections.
                             let watch = graceful.watcher();
-                            tokio::spawn(async move {
+                            connections.spawn(async move {
                                 handshake_and_serve(a, sock, shared, watch).await;
                                 drop(slot);
                             });
@@ -257,7 +318,18 @@ impl Proxy {
             }
         }
         drop(listener);
-        Ok(drain(grace, graceful.shutdown()).await)
+        let outcome = drain(grace, async {
+            let _ = graceful.shutdown().await;
+            while connections.join_next().await.is_some() {}
+        })
+        .await;
+        if outcome == DrainOutcome::GraceExpired {
+            connections.abort_all();
+        }
+        while connections.join_next().await.is_some() {}
+        // Sessions do not outlive the relay (their inventory chains end now).
+        sessions.end_all();
+        Ok(outcome)
     }
 }
 
@@ -456,7 +528,7 @@ async fn handle(
     Ok(handle_inner(req, &shared).await)
 }
 
-async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody> {
+async fn handle_inner(req: Request<Incoming>, sh: &Arc<Shared>) -> Response<RespBody> {
     let (parts, body) = req.into_parts();
 
     // hyper's buffer cap bounds reads but a single large read can exceed it, so
@@ -506,24 +578,53 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
     if !origin_ok(route, &parts.headers) {
         return fixed(StatusCode::FORBIDDEN, "forbidden");
     }
-    if parts.method != Method::POST {
-        // GET SSE is a fixed 405 after auth with no upstream contact (decisions.md
-        // "P1 기능 범위"). Every other method is 405 as well.
-        // OPEN: T-12b. DELETE (session termination) will be handled there.
+    let is_delete = parts.method == Method::DELETE;
+    if parts.method != Method::POST && !is_delete {
+        // GET SSE is a fixed 405 after auth with no upstream contact and no
+        // resumption (decisions.md "P1 기능 범위"). Every other method is 405
+        // as well.
         let mut r = fixed(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed");
         r.headers_mut()
-            .insert(header::ALLOW, HeaderValue::from_static("POST"));
+            .insert(header::ALLOW, HeaderValue::from_static("POST, DELETE"));
         return r;
+    }
+
+    // Step 8: the shape of the proxy session header. It is looked up only once
+    // the message is known: an initialize carrying any id is refused without a
+    // lookup (the same 400 for an own, foreign or unknown id).
+    let presented = Presented::from_request(&parts.headers);
+    if presented == Presented::Duplicate {
+        return empty(StatusCode::BAD_REQUEST);
+    }
+    let lookup = |wire: &[u8]| {
+        sh.sessions.lookup(
+            wire,
+            principal.id.as_str(),
+            route.id.as_str(),
+            route.binding(),
+            Instant::now(),
+        )
+    };
+    if is_delete {
+        return match presented {
+            // One answer for every session the caller cannot use.
+            Presented::One(wire) => match lookup(wire) {
+                Ok(active) => delete_session(sh, &table, route, &parts, active).await,
+                Err(_) => empty(StatusCode::NOT_FOUND),
+            },
+            // DELETE needs a session to end.
+            _ => empty(StatusCode::BAD_REQUEST),
+        };
     }
 
     // Admission: queue depth is 0, so saturation is an immediate rejection. The
     // permits live until the response body ends (an open SSE stream counts).
-    let permits = match (
+    let sems = match (
         sh.total.clone().try_acquire_owned(),
         route.sem.clone().try_acquire_owned(),
         principal.sem.clone().try_acquire_owned(),
     ) {
-        (Ok(a), Ok(b), Ok(c)) => Permits(vec![a, b, c]),
+        (Ok(a), Ok(b), Ok(c)) => vec![a, b, c],
         _ => return fixed(StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
     };
 
@@ -532,11 +633,27 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
     let call_deadline = Instant::now() + Duration::from_secs(lim.call_timeout_secs);
     let received_at = SystemTime::now();
     let t0 = std::time::Instant::now();
-    let call = CallRef {
+    // Provenance comes from this very table (README: fixed at call start).
+    let audit = match (table.revision(), route.scope()) {
+        (Some(rev), Some(scope)) => sigil_proxy_api::Id::new(scope.upstream_id.as_str())
+            .ok()
+            .map(|upstream_id| {
+                Arc::new(AuditContext {
+                    route_revision: rev,
+                    upstream_id,
+                    actor: principal.actor.clone(),
+                })
+            }),
+        _ => None,
+    };
+    let mut call = CallRef {
         seq: sh.seq.fetch_add(1, Ordering::Relaxed),
         route_id: route.id.as_str().to_string(),
         principal_id: principal.id.as_str().to_string(),
         scope: route.scope.clone(),
+        audit,
+        // Set once the session is looked up (below).
+        session: None,
     };
 
     // The request body is read in full under the request limit BEFORE any
@@ -563,10 +680,57 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
     };
 
     // Classify a parse COPY of the body (T-12b1). The bytes forwarded below are
-    // `request_body` itself, untouched.
-    let message = classify::classify(&request_body, HeaderVersion::from_headers(&parts.headers));
+    // `request_body` itself, untouched. The version header is judged here only
+    // for B1 (an unknown value is modern); the m5 rule below needs the session.
+    let header_version = HeaderVersion::from_headers(&parts.headers);
+    let mut message = classify::classify(
+        &request_body,
+        if header_version == HeaderVersion::Modern {
+            HeaderVersion::Modern
+        } else {
+            HeaderVersion::Current
+        },
+    );
+    let modern = matches!(&message, Message::Refused(r) if r.kind == RefusalKind::ModernRequest);
+    let is_initialize =
+        matches!(&message, Message::Request(i) if i.method == McpMethod::Initialize);
+    // Session rules (t13d-t12b2.md). B1 keeps its audit with or without one.
+    let mut reservation: Option<Reservation> = None;
+    let mut active: Option<ActiveCall> = None;
+    if !modern {
+        match (is_initialize, presented) {
+            // An initialize never joins an existing session.
+            (true, Presented::One(_)) => return empty(StatusCode::BAD_REQUEST),
+            (true, _) => match sh.sessions.reserve(principal.id.as_str(), Instant::now()) {
+                Ok(r) => reservation = Some(r),
+                Err(_) => return fixed(StatusCode::TOO_MANY_REQUESTS, "too_many_sessions"),
+            },
+            (false, Presented::One(wire)) => {
+                let Ok(a) = lookup(wire) else {
+                    return empty(StatusCode::NOT_FOUND);
+                };
+                call.session = Some(a.session().no());
+                // m5: after initialize the header is required and must be the
+                // negotiated revision (unknown values were B1 above).
+                if matches!(
+                    header_version,
+                    HeaderVersion::Absent | HeaderVersion::Legacy
+                ) {
+                    message = Message::Refused(version_header_refusal(message));
+                }
+                active = Some(a);
+            }
+            (false, _) => return empty(StatusCode::BAD_REQUEST),
+        }
+    }
+    let session_no = call.session;
+    let upstream_session = active
+        .as_ref()
+        .and_then(|a| a.session().upstream().cloned());
+
     // `Some` for a client request that is observed (start, completion, cancel).
     let mut ctx: Option<CallCtx> = None;
+    let mut init_id: Option<classify::RequestId> = None;
     match message {
         Message::Refused(r) => {
             return refuse(sh, call, r, request_body.len() as u64, received_at);
@@ -578,6 +742,7 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
             let key = CancelKey {
                 route: call.route_id.clone(),
                 principal: call.principal_id.clone(),
+                session: CancelScope::Session(session_no.unwrap_or_default()),
                 id: target.clone(),
             };
             match sh.cancel.cancel(&key, Instant::now()) {
@@ -586,9 +751,7 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
                     sh.sink.observe(Observation::Cancel(CancelObserved {
                         target: CallRef {
                             seq,
-                            route_id: call.route_id.clone(),
-                            principal_id: call.principal_id.clone(),
-                            scope: call.scope.clone(),
+                            ..call.clone()
                         },
                         target_id: target,
                         disposition: CancelDisposition::AfterDispatch,
@@ -607,10 +770,15 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
             let key = CancelKey {
                 route: call.route_id.clone(),
                 principal: call.principal_id.clone(),
+                // An initialize has no session yet: a key no cancel can name.
+                session: match session_no {
+                    Some(n) if !is_initialize => CancelScope::Session(n),
+                    _ => CancelScope::Initialize(call.seq),
+                },
                 id: info.id.clone(),
             };
-            // Two in-flight requests of one principal on one route may not share
-            // an id: a cancel could not tell them apart. The second is refused.
+            // Two in-flight requests of one session may not share an id: a
+            // cancel could not tell them apart. The second is refused.
             let Some(registration) = sh.cancel.register(key, call.seq, Instant::now()) else {
                 return refuse(
                     sh,
@@ -625,6 +793,9 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
                     received_at,
                 );
             };
+            if is_initialize {
+                init_id = Some(info.id.clone());
+            }
             let mut c = CallCtx::new(
                 sh.sink.clone(),
                 call.clone(),
@@ -633,6 +804,28 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
                 t0,
                 registration,
             );
+            if info.method == McpMethod::ToolsCall {
+                // N10 ii: a task handle marks the route degraded.
+                let (health, rid, binding) = (
+                    sh.health.clone(),
+                    route.id.as_str().to_string(),
+                    route.binding().clone(),
+                );
+                let upstream_id = route.scope().map(|s| s.upstream_id.clone());
+                c.on_task_handle(Box::new(move || {
+                    if let Some(u) = upstream_id {
+                        health.mark(
+                            &rid,
+                            &binding,
+                            &u,
+                            Mark {
+                                state: RouteState::Degraded,
+                                reason: RouteReason::TaskAugmentationUnsupported,
+                            },
+                        );
+                    }
+                }));
+            }
             // The sink may defer dispatch (local spool commit of the start). The
             // no-op sink has nothing to wait for or record.
             if sh.sink.wants_observations() {
@@ -656,6 +849,16 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
             }
             if c.registration().is_cancelled() {
                 return cancelled_before_dispatch(sh, c);
+            }
+            if is_initialize && sh.health.is_unsupported(route.id.as_str(), route.binding()) {
+                // Already judged unsupported under this binding: refused
+                // before the upstream, same answer as the first refusal.
+                let id = c.request_id().clone();
+                c.complete(Resolution::not_sent(
+                    Outcome::ProtocolError,
+                    Cause::RouteUnsupported,
+                ));
+                return init_refused(&id);
             }
             ctx = Some(c);
         }
@@ -702,7 +905,7 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
         }
     };
 
-    let Ok(headers) = upstream_request_headers(
+    let Ok(mut headers) = upstream_request_headers(
         &parts.headers,
         &route.upstream_authorization,
         &route.upstream.host_header,
@@ -712,6 +915,12 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
             Resolution::not_sent(Outcome::TransportFailure, Cause::UpstreamRequestBuild)
         )
     };
+    set_upstream_session(
+        &mut headers,
+        upstream_session
+            .as_ref()
+            .map(UpstreamSessionId::header_value),
+    );
     let Ok(uri) = route.upstream.path.parse::<http::Uri>() else {
         bail!(
             fixed(StatusCode::BAD_GATEWAY, "upstream_unavailable"),
@@ -808,6 +1017,18 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
             sent(Cause::UpstreamAuthRejected)
         )
     }
+    if status == StatusCode::NOT_FOUND {
+        if let Some(a) = &active {
+            // A 404 for a call in a proxy session (stateful or stateless
+            // upstream) ends that session; the client re-initializes after the
+            // empty 404 (t13d-t12b2.md).
+            sh.sessions.invalidate(a.session());
+            bail!(
+                empty(StatusCode::NOT_FOUND),
+                sent(Cause::UpstreamSessionEnded)
+            )
+        }
+    }
 
     let sse = is_sse(&rparts.headers);
     // A content-encoded stream is opaque to the proxy: the event tracker cannot
@@ -836,11 +1057,119 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
     } else {
         lim.max_call_response_bytes
     };
-    if content_length(&rparts.headers).is_some_and(|n| n > declared_cap) {
+    if init_id.is_none() && content_length(&rparts.headers).is_some_and(|n| n > declared_cap) {
         bail!(
             fixed(StatusCode::BAD_GATEWAY, "upstream_response_too_large"),
             sent(Cause::ResponseTooLarge)
         )
+    }
+
+    // initialize (README N12): hold and judge the answer before anything of it
+    // reaches the client. Only a 2xx answer can carry an InitializeResult.
+    let mut prefix = Bytes::new();
+    let mut new_session: Option<HeaderValue> = None;
+    let mut rbody = rbody;
+    if let (Some(id), Some(reservation)) = (init_id.as_ref(), reservation.take()) {
+        if status.is_success() {
+            // Captured before buffering, so a refusal can still end it upstream.
+            let upstream_sid = UpstreamSessionId::from_response(&rparts.headers);
+            let mut gate = InitGate::new(
+                track_mode,
+                id.clone(),
+                lim.max_json_response_bytes.min(lim.max_call_response_bytes) as usize,
+                lim.max_sse_event_bytes as usize,
+            );
+            let (verdict, read, rest) = hold_initialize(
+                &mut gate,
+                &mut rbody,
+                Duration::from_secs(lim.response_idle_timeout_secs),
+                call_deadline,
+            )
+            .await;
+            let verdict = match (&upstream_sid, verdict) {
+                // An upstream session id the proxy cannot carry back cannot be
+                // bound: the answer is unusable.
+                (Err(_), _) => InitVerdict::Unreadable,
+                (_, v) => v,
+            };
+            let upstream_sid = upstream_sid.ok().flatten();
+            let refusal = match verdict {
+                InitVerdict::Supported => None,
+                InitVerdict::UpstreamError => {
+                    // Relayed unchanged without a session; the upstream's own
+                    // session (if any) is ended.
+                    if let Some(u) = upstream_sid.clone() {
+                        spawn_cleanup(sh, &table, route, u);
+                    }
+                    None
+                }
+                InitVerdict::VersionUnsupported => Some((
+                    Cause::UpstreamVersionUnsupported,
+                    RouteReason::UpstreamVersionUnsupported,
+                )),
+                InitVerdict::CapabilityUnsupported => Some((
+                    Cause::UpstreamCapabilityUnsupported,
+                    RouteReason::UpstreamCapabilityUnsupported,
+                )),
+                InitVerdict::Unreadable => Some((
+                    Cause::UpstreamInitializeUnreadable,
+                    RouteReason::UpstreamInitializeUnreadable,
+                )),
+            };
+            if let Some((cause, reason)) = refusal {
+                // Nothing of the answer is relayed and no session exists.
+                drop(reservation);
+                if let Some(u) = upstream_sid {
+                    spawn_cleanup(sh, &table, route, u);
+                }
+                if let Some(scope) = route.scope() {
+                    sh.health.mark(
+                        route.id.as_str(),
+                        route.binding(),
+                        &scope.upstream_id,
+                        Mark {
+                            state: RouteState::Unsupported,
+                            reason,
+                        },
+                    );
+                }
+                let mut r = Resolution::after_dispatch(
+                    Outcome::ProtocolError,
+                    Delivery::Sent,
+                    cause,
+                    Some(status.as_u16()),
+                );
+                r.response_bytes = read;
+                bail!(init_refused(id), r)
+            }
+            let mut held = gate.take_held().to_vec();
+            held.extend_from_slice(&rest);
+            prefix = Bytes::from(held);
+            if verdict == InitVerdict::Supported {
+                match reservation.establish_with_lease(
+                    route.id.as_str(),
+                    route.binding(),
+                    upstream_sid.clone(),
+                    Instant::now(),
+                    true,
+                ) {
+                    Some((wire, _, lease)) => {
+                        new_session = Some(wire);
+                        active = lease;
+                    }
+                    None => {
+                        // No randomness for an id: no session; end the upstream's.
+                        if let Some(u) = upstream_sid {
+                            spawn_cleanup(sh, &table, route, u);
+                        }
+                        bail!(
+                            fixed(StatusCode::SERVICE_UNAVAILABLE, "session_unavailable"),
+                            sent(Cause::None)
+                        )
+                    }
+                }
+            }
+        }
     }
 
     // From here the tracker owns the call and reports its completion when the
@@ -862,7 +1191,7 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
             },
         )
     });
-    let metered = MeteredBody::new(
+    let metered = MeteredBody::with_prefix(
         rbody,
         crate::body::Limits {
             mode,
@@ -872,13 +1201,200 @@ async fn handle_inner(req: Request<Incoming>, sh: &Shared) -> Response<RespBody>
             idle: Duration::from_secs(lim.response_idle_timeout_secs),
             call_deadline,
         },
-        permits,
+        Permits(sems, active),
         tracker,
+        prefix,
     );
     let mut out = Response::new(metered.boxed());
     *out.status_mut() = status;
     *out.headers_mut() = downstream_response_headers(&rparts.headers);
+    if let Some(wire) = new_session {
+        // Generated by the proxy, never copied from upstream.
+        out.headers_mut()
+            .insert(http::HeaderName::from_static("mcp-session-id"), wire);
+    }
     out
+}
+
+/// Read the upstream `initialize` answer into `gate` until it decides, the
+/// stream ends, an idle/call deadline passes or the stream fails. Returns the
+/// verdict, the body bytes read and the undecided remainder of the deciding
+/// chunk (relayed after the held bytes on a relayable verdict).
+async fn hold_initialize(
+    gate: &mut InitGate,
+    body: &mut Incoming,
+    idle: Duration,
+    call_deadline: Instant,
+) -> (InitVerdict, u64, Bytes) {
+    let mut read = 0u64;
+    loop {
+        let until = (Instant::now() + idle).min(call_deadline);
+        match tokio::time::timeout_at(until, body.frame()).await {
+            Err(_) | Ok(Some(Err(_))) => return (InitVerdict::Unreadable, read, Bytes::new()),
+            Ok(None) => return (gate.finish(), read, Bytes::new()),
+            Ok(Some(Ok(f))) => {
+                let Ok(d) = f.into_data() else { continue };
+                read += d.len() as u64;
+                if let Some(v) = gate.feed(&d) {
+                    let rest = d.slice(gate.last_consumed().min(d.len())..);
+                    return (v, read, rest);
+                }
+                if body.is_end_stream() {
+                    return (gate.finish(), read, Bytes::new());
+                }
+            }
+        }
+    }
+}
+
+/// The fixed answer to a refused upstream `initialize` (README "런타임 route
+/// 거절의 client 응답", t13d-t12b2.md): HTTP 200 JSON, -32603, no data.
+fn init_refused(id: &classify::RequestId) -> Response<RespBody> {
+    jsonrpc_error(Some(id), -32603, "Internal error", StatusCode::OK)
+}
+
+/// Turn a classified message into the m5 refusal (header absent or a known
+/// legacy revision after initialize). Keeps its id, method and tool so the
+/// audit pair is complete; the client sees 400 with an empty body.
+fn version_header_refusal(m: Message) -> Refusal {
+    let (id, method, tool) = match m {
+        Message::Request(i) => (Some(i.id), i.method, i.tool),
+        Message::Refused(r) => (r.id, r.method, r.tool),
+        Message::Notification(_) | Message::ClientResponse => {
+            (None, McpMethod::Unknown, ToolField::NotApplicable)
+        }
+    };
+    Refusal {
+        kind: RefusalKind::VersionHeader,
+        id,
+        method,
+        tool,
+    }
+}
+
+// --------------------------------------------------------- session DELETE
+
+/// DELETE of a live session (`active`, already checked against the caller's
+/// principal, route and binding).
+async fn delete_session(
+    sh: &Arc<Shared>,
+    table: &Arc<RouteTable>,
+    route: &Route,
+    parts: &http::request::Parts,
+    active: ActiveCall,
+) -> Response<RespBody> {
+    let session = active.session().clone();
+    // One DELETE at a time per session; a second one sees the outcome.
+    let _one = session.delete_lock.lock().await;
+    if session.is_ended() {
+        return empty(StatusCode::NOT_FOUND);
+    }
+    let Some(upstream) = session.upstream().cloned() else {
+        // Stateless upstream: nothing to end there.
+        sh.sessions.invalidate(&session);
+        return empty(StatusCode::NO_CONTENT);
+    };
+    let Ok(mut headers) = upstream_request_headers(
+        &parts.headers,
+        &route.upstream_authorization,
+        &route.upstream.host_header,
+    ) else {
+        return fixed(StatusCode::BAD_GATEWAY, "upstream_unavailable");
+    };
+    set_upstream_session(&mut headers, Some(upstream.header_value()));
+    // DELETE carries no body to the upstream.
+    headers.remove(header::CONTENT_TYPE);
+    match upstream_delete(sh, table, route, headers).await {
+        Ok(status) if status.is_success() || status == StatusCode::NOT_FOUND => {
+            sh.sessions.invalidate(&session);
+            empty(status)
+        }
+        Ok(status) if status.is_redirection() => {
+            fixed(StatusCode::BAD_GATEWAY, "upstream_redirect_refused")
+        }
+        Ok(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => {
+            fixed(StatusCode::BAD_GATEWAY, "upstream_rejected")
+        }
+        // 405 (the upstream keeps its sessions) and other errors: passed on,
+        // the session stays.
+        Ok(status) => empty(status),
+        Err(ConnectError::Timeout) => fixed(StatusCode::GATEWAY_TIMEOUT, "upstream_timeout"),
+        Err(ConnectError::Io) => fixed(StatusCode::BAD_GATEWAY, "upstream_unavailable"),
+    }
+}
+
+/// Send one DELETE to the route's upstream: destination checked as for any
+/// call, bounded by the connect and response idle limits, never retried. The
+/// status only; the body is not read.
+async fn upstream_delete(
+    sh: &Shared,
+    _table: &Arc<RouteTable>,
+    route: &Route,
+    headers: http::HeaderMap,
+) -> Result<StatusCode, ConnectError> {
+    let lim = route.limits();
+    let connect_for = Duration::from_secs(lim.connect_timeout_secs);
+    let addrs = match tokio::time::timeout(
+        connect_for,
+        resolve_checked(&*sh.resolver, &route.upstream, route.allow_private),
+    )
+    .await
+    {
+        Err(_) => return Err(ConnectError::Timeout),
+        Ok(Err(_)) => return Err(ConnectError::Io),
+        Ok(Ok(a)) => a,
+    };
+    let uri = route
+        .upstream
+        .path
+        .parse::<http::Uri>()
+        .map_err(|_| ConnectError::Io)?;
+    let io = connect(sh, route, &addrs, connect_for).await?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(io))
+        .await
+        .map_err(|_| ConnectError::Io)?;
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut req = Request::new(Full::new(Bytes::new()));
+    *req.method_mut() = Method::DELETE;
+    *req.uri_mut() = uri;
+    *req.headers_mut() = headers;
+    let wait = Duration::from_secs(lim.response_idle_timeout_secs);
+    match tokio::time::timeout(wait, sender.send_request(req)).await {
+        Err(_) => Err(ConnectError::Timeout),
+        Ok(Err(_)) => Err(ConnectError::Io),
+        Ok(Ok(r)) => Ok(r.status()),
+    }
+}
+
+/// Best-effort, bounded, single DELETE of an upstream session the proxy will
+/// not use (a refused `initialize`). In the background: the client's answer
+/// does not wait for it. Never retried; never a tool call.
+fn spawn_cleanup(
+    sh: &Arc<Shared>,
+    table: &Arc<RouteTable>,
+    route: &Route,
+    upstream: UpstreamSessionId,
+) {
+    let Ok(mut headers) = upstream_request_headers(
+        &http::HeaderMap::new(),
+        &route.upstream_authorization,
+        &route.upstream.host_header,
+    ) else {
+        return;
+    };
+    set_upstream_session(&mut headers, Some(upstream.header_value()));
+    let (sh, table, route_id) = (sh.clone(), table.clone(), route.id.as_str().to_string());
+    tokio::spawn(async move {
+        // The table snapshot that routed the call, so a later repoint cannot
+        // send the id elsewhere.
+        if let Some(route) = table.route(&route_id) {
+            if upstream_delete(&sh, &table, route, headers).await.is_err() {
+                tracing::debug!("upstream session cleanup failed");
+            }
+        }
+    });
 }
 
 // ------------------------------------------------------- MCP-level answers

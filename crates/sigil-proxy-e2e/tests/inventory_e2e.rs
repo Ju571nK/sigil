@@ -352,6 +352,7 @@ struct UpState {
     /// `(name, description)` in listing order.
     tools: Vec<(String, String)>,
     page_size: usize,
+    calls: usize,
 }
 
 struct Upstream {
@@ -375,7 +376,12 @@ fn owned(tools: &[(&str, &str)]) -> Vec<(String, String)> {
 fn answer(state: &Mutex<UpState>, body: &[u8]) -> Vec<u8> {
     let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let id = v["id"].clone();
-    let result = if v["method"] == "tools/list" {
+    let result = if v["method"] == "initialize" {
+        json!({"protocolVersion":"2025-11-25", "capabilities":{"tools":{}}, "serverInfo":{"name":"fixture","version":"1"}})
+    } else if v["method"] == "tools/call" {
+        state.lock().unwrap().calls += 1;
+        json!({"content":[{"type":"text","text":"private-result-canary"}]})
+    } else if v["method"] == "tools/list" {
         let s = state.lock().unwrap();
         let offset: usize = v["params"]["cursor"]
             .as_str()
@@ -404,6 +410,7 @@ async fn upstream(tools: &[(&str, &str)], page_size: usize) -> Upstream {
     let state = Arc::new(Mutex::new(UpState {
         tools: owned(tools),
         page_size,
+        calls: 0,
     }));
     let st = state.clone();
     tokio::spawn(async move {
@@ -433,7 +440,12 @@ async fn upstream(tools: &[(&str, &str)], page_size: usize) -> Upstream {
                         }
                     }
                 };
-                let body = answer(&st, &buf[head_end..head_end + want]);
+                let request = &buf[head_end..head_end + want];
+                let v: Value = serde_json::from_slice(request).unwrap_or(Value::Null);
+                let body = answer(&st, request);
+                if v["params"]["wait"] == true {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
                 let head = format!(
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                     body.len()
@@ -691,6 +703,8 @@ fn tuning(listener: std::net::TcpListener, registry_poll: Duration) -> RunTuning
 
 struct Running {
     listen: u16,
+    session: tokio::sync::Mutex<Option<String>>,
+    spool: Option<sigil_proxy::spool::Spool>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
 }
@@ -703,7 +717,9 @@ async fn start_proxy(h: &H, registry_poll: Duration) -> Running {
     let sock = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let listen = sock.local_addr().unwrap().port();
     let (stop, rx) = tokio::sync::oneshot::channel::<()>();
-    let tune = tuning(sock, registry_poll);
+    let mut tune = tuning(sock, registry_poll);
+    let (spool_tx, spool_rx) = tokio::sync::oneshot::channel();
+    tune.spool_out = Some(spool_tx);
     let task = tokio::spawn(async move {
         run_tuned(
             &b,
@@ -717,6 +733,8 @@ async fn start_proxy(h: &H, registry_poll: Duration) -> Running {
     });
     let px = Running {
         listen,
+        session: tokio::sync::Mutex::new(None),
+        spool: Some(tokio::time::timeout(WAIT, spool_rx).await.unwrap().unwrap()),
         stop: Some(stop),
         task: Some(task),
     };
@@ -733,8 +751,32 @@ async fn start_proxy(h: &H, registry_poll: Duration) -> Running {
 impl Running {
     /// One request through the relay: `(status, body)`.
     async fn call(&self, body: Value) -> (u16, Value) {
-        let r = reqwest::Client::new()
-            .post(format!("http://127.0.0.1:{}/mcp/r1", self.listen))
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        let url = format!("http://127.0.0.1:{}/mcp/r1", self.listen);
+        let mut session = self.session.lock().await;
+        if session.is_none() {
+            let r = client.post(&url).bearer_auth(CLIENT_TOKEN)
+                .json(&json!({"jsonrpc":"2.0","id":"initialize","method":"initialize", "params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}))
+                .send().await;
+            let Ok(r) = r else { return (0, Value::Null) };
+            *session = r
+                .headers()
+                .get("mcp-session-id")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            if session.is_none() {
+                return (r.status().as_u16(), Value::Null);
+            }
+        }
+        let sid = session.clone().unwrap();
+        drop(session);
+        let r = client
+            .post(&url)
+            .header("mcp-session-id", sid)
+            .header("mcp-protocol-version", "2025-11-25")
             .bearer_auth(CLIENT_TOKEN)
             .header("content-type", "application/json")
             .body(body.to_string())
@@ -968,27 +1010,19 @@ fn proxy_binary() -> Option<PathBuf> {
     if profile == "release" {
         c.arg("--release");
     }
-    match c.status() {
-        Ok(st) if st.success() => {}
-        other => {
-            assert!(
-                std::env::var_os("CI").is_none(),
-                "building the sigil-proxy binary failed under CI ({other:?})"
-            );
-            eprintln!("skipped: building the sigil-proxy binary failed ({other:?})");
-            return None;
-        }
-    }
+    let status = c
+        .status()
+        .expect("cargo runs to build the real sigil-proxy binary");
+    assert!(
+        status.success(),
+        "building the real sigil-proxy binary failed: {status}"
+    );
     let bin = target_dir.join(&profile).join("sigil-proxy");
-    if !bin.exists() {
-        assert!(
-            std::env::var_os("CI").is_none(),
-            "no sigil-proxy binary at {} under CI",
-            bin.display()
-        );
-        eprintln!("skipped: no sigil-proxy binary at {}", bin.display());
-        return None;
-    }
+    assert!(
+        bin.exists(),
+        "cargo succeeded but produced no real proxy binary at {}",
+        bin.display()
+    );
     Some(bin)
 }
 
@@ -1030,6 +1064,8 @@ async fn real_sigil_proxy_process_reports_a_baseline() {
     )));
     let px = Running {
         listen,
+        session: tokio::sync::Mutex::new(None),
+        spool: None,
         stop: None,
         task: None,
     };
@@ -1066,4 +1102,156 @@ async fn real_sigil_proxy_process_reports_a_baseline() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     assert!(st.success(), "clean exit, got {st}");
+}
+
+/// T-13d AC-03/05/06: actual relay events, local metadata lookup, replay,
+/// duplicate acknowledgement, privacy and a full-spool dispatch oracle.
+#[tokio::test]
+async fn real_invocations_replay_deduplicate_and_refuse_before_dispatch() {
+    use sigil_proxy::config_sync::MtlsFetcher;
+    use sigil_proxy::ingest_client::{EventSource, IngestTransport};
+    let Some(h) = H::new(&[(NAMES[0], "private-description-canary")], 10).await else {
+        return;
+    };
+    let px = start_proxy(&h, Duration::from_millis(30)).await;
+    let spool = px.spool.as_ref().unwrap().clone();
+    eventually("initial events delivered", || async {
+        spool.snapshot().unsent_events == 0
+    })
+    .await;
+    spool.set_delivery_paused_for_test(true);
+    assert_eq!(px.list_all().await, 1);
+    // Inventory observation finishes off the I/O runtime; wait for the local
+    // complete baseline before resolving a tool by its private name.
+    eventually("local inventory complete", || async {
+        h.status()
+            .is_some_and(|s| s.registry.pending_entries.get() > 0)
+            || !h.snapshots().await.is_empty()
+    })
+    .await;
+    let (call, cancel) = tokio::join!(
+        px.call(json!({"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":NAMES[0],"arguments":{"private-argument-canary":"secret"},"wait":true}})),
+        async {
+            eventually("tool dispatched", || async {h.up.state.lock().unwrap().calls == 1}).await;
+            px.call(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":70}})).await
+        }
+    );
+    assert_eq!(call.0, 200);
+    assert_eq!(cancel.0, 200);
+    eventually("all relay events spooled", || async {
+        spool.snapshot().unsent_events >= 5
+    })
+    .await;
+    let before = h.up.state.lock().unwrap().calls;
+    spool.set_capacity_for_test(0, 0);
+    assert_eq!(
+        px.call(json!({"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":NAMES[0]}}))
+            .await
+            .0,
+        503
+    );
+    assert_eq!(
+        h.up.state.lock().unwrap().calls,
+        before,
+        "spool refusal never dispatches"
+    );
+    spool.set_capacity_for_test(1 << 30, 0);
+    px.stop().await;
+    drop(spool);
+    // Reopen durable events as a restarted process, while no delivery loop is
+    // running. This also proves stop drained the invocation writer.
+    let bootstrap =
+        Bootstrap::from_yaml(&h.bootstrap_yaml("127.0.0.1:0"), h.pki.dir.path()).unwrap();
+    let lifecycle = sigil_proxy::lifecycle::Lifecycle::start(&bootstrap).unwrap();
+    let mut source = lifecycle.open_spool(&Default::default()).unwrap();
+    let events = source.next_events(100, &Default::default());
+    let raw = serde_json::to_string(&events).unwrap();
+    for canary in [
+        NAMES[0],
+        "private-description-canary",
+        "private-argument-canary",
+        "private-result-canary",
+        CLIENT_TOKEN,
+        "UPSTREAM-SECRET-VALUE",
+    ] {
+        assert!(!raw.contains(canary), "raw content in audit spool");
+    }
+    let vals: Vec<Value> = events
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap())
+        .collect();
+    let started = vals
+        .iter()
+        .find(|e| e["event_type"] == "invocation.started" && e["payload"]["method"] == "tools/call")
+        .unwrap();
+    assert_eq!(started["payload"]["route_revision"], 1);
+    assert_eq!(started["payload"]["upstream_id"], "up1");
+    assert_eq!(started["payload"]["protocol_version"], "2025-11-25");
+    assert_eq!(started["payload"]["tool"]["status"], "identified");
+    let inv = started["payload"]["invocation_id"].as_str().unwrap();
+    let kinds: Vec<_> = vals
+        .iter()
+        .filter(|e| e["payload"]["invocation_id"] == inv)
+        .map(|e| e["event_type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "invocation.started",
+            "invocation.cancel_requested",
+            "invocation.completed"
+        ]
+    );
+    // Simulate an ACK lost after server commit, then resend the same durable
+    // batch. Production delivery is paused, so both replies are deterministic.
+    let transport = MtlsFetcher::from_bootstrap(&bootstrap)
+        .unwrap()
+        .with_timeout(Duration::from_secs(5));
+    let body = serde_json::to_vec(&json!({"events":events})).unwrap();
+    for duplicate in [false, true] {
+        let reply = transport.post_events(body.clone()).await.unwrap();
+        assert_eq!(
+            reply.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        let v: Value = serde_json::from_slice(&reply.body).unwrap();
+        let key = if duplicate {
+            "duplicate_event_ids"
+        } else {
+            "accepted_event_ids"
+        };
+        assert_eq!(v[key].as_array().unwrap().len(), vals.len());
+    }
+    assert_eq!(
+        source.snapshot().unsent_events,
+        vals.len() as u64,
+        "ACK deliberately lost locally"
+    );
+    source.close().await;
+    drop(source);
+    drop(lifecycle);
+    let px = start_proxy(&h, Duration::from_millis(30)).await;
+    eventually("replayed events acknowledged", || async {
+        px.spool.as_ref().unwrap().snapshot().unsent_events == 0
+    })
+    .await;
+    let items = h
+        .items(&format!("/v1/proxy-invocations?proxy_id={PROXY}"))
+        .await;
+    let row = items.iter().find(|r| r["invocation_id"] == inv).unwrap();
+    assert_eq!(row["lifecycle"], "completed");
+    assert_eq!(row["outcome"], "success");
+    assert_eq!(row["cancel_observed"], true);
+    let query = serde_json::to_string(&items).unwrap();
+    for canary in [
+        NAMES[0],
+        "private-argument-canary",
+        "private-result-canary",
+        CLIENT_TOKEN,
+    ] {
+        assert!(!query.contains(canary));
+    }
+    px.stop().await;
 }

@@ -80,8 +80,9 @@ async fn chunked_request_body_is_identical() {
     let up = ok_upstream().await;
     let px = simple(&up, limits()).await;
     let body = awkward_request();
+    let lines = px.session_lines("/mcp/a", "tok-a").await;
     let mut raw = format!(
-        "POST /mcp/a HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAuthorization: Bearer tok-a\r\nTransfer-Encoding: chunked\r\n\r\n",
+        "POST /mcp/a HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAuthorization: Bearer tok-a\r\n{lines}Transfer-Encoding: chunked\r\n\r\n",
         px.addr
     )
     .into_bytes();
@@ -97,7 +98,7 @@ async fn chunked_request_body_is_identical() {
     assert!(!up.last().has("transfer-encoding") || up.last().header("content-length").is_none());
 }
 
-/// Statuses other than 401/403/3xx pass through with their bodies.
+/// Statuses other than auth, redirects and session-ending 404 preserve bodies.
 #[tokio::test]
 async fn upstream_statuses_pass_through() {
     for (status, body) in [
@@ -112,7 +113,7 @@ async fn upstream_statuses_pass_through() {
         let px = simple(&up, limits()).await;
         let r = px.post("/mcp/a", Some("tok-a"), &[], PING).await;
         assert_eq!(r.status, status);
-        assert_eq!(r.body(), body);
+        assert_eq!(r.body(), if status == 404 { &b""[..] } else { body });
     }
 }
 
@@ -125,13 +126,18 @@ async fn sse_is_flushed_incrementally_and_boundaries_survive() {
     let slot = std::sync::Mutex::new(Some(reply));
     let up = Up::start(move |_| slot.lock().unwrap().take().expect("one call")).await;
     let px = simple(&up, limits()).await;
+    let sid = px.session("/mcp/a", "tok-a").await.unwrap();
 
     let mut s = TcpStream::connect(px.addr).await.unwrap();
     s.write_all(&px.request(
         "POST",
         "/mcp/a",
         Some("tok-a"),
-        &[("Accept", "application/json, text/event-stream")],
+        &[
+            ("Accept", "application/json, text/event-stream"),
+            ("Mcp-Session-Id", &sid),
+            ("MCP-Protocol-Version", "2025-11-25"),
+        ],
         PING,
     ))
     .await
@@ -186,7 +192,8 @@ async fn failed_exchange_is_not_retried() {
     assert_eq!(r.status, 502);
     assert_eq!(r.text(), "{\"error\":\"upstream_unavailable\"}");
     assert_eq!(up.count(), 1);
-    assert_eq!(up.conns(), 1);
+    // one connection for the initialize, one for the call: never a second try
+    assert_eq!(up.conns(), 2);
 }
 
 // ------------------------------------------------------------ M3: request rows
@@ -232,8 +239,21 @@ stripped!(request_via_is_stripped, "Via");
 stripped!(request_keep_alive_is_stripped, "Keep-Alive");
 stripped!(request_te_is_stripped, "TE");
 stripped!(request_upgrade_is_stripped, "Upgrade");
-// OPEN: T-12b owns session ids; until then a downstream id never crosses over.
-stripped!(request_mcp_session_id_is_stripped, "Mcp-Session-Id");
+stripped!(request_last_event_id_is_stripped, "Last-Event-ID");
+
+/// T-12b2 / M3: the proxy's own session id (a valid one) never reaches a
+/// stateless upstream, and no upstream id is invented for it.
+#[tokio::test]
+async fn request_mcp_session_id_is_stripped() {
+    let up = ok_upstream().await;
+    let px = simple(&up, limits()).await;
+    let sid = px.session("/mcp/a", "tok-a").await.unwrap();
+    let r = px.post("/mcp/a", Some("tok-a"), &[], PING).await;
+    assert_eq!(r.status, 200);
+    let s = up.last();
+    assert!(!s.has("mcp-session-id"));
+    assert!(!s.headers.iter().any(|(_, v)| v.contains(&sid)));
+}
 
 /// M3 request row: the downstream Authorization is replaced by the route's
 /// upstream credential, exactly one Authorization header, never the downstream

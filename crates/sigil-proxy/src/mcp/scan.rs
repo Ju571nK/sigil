@@ -22,6 +22,8 @@ pub struct Facts {
     pub has_error: bool,
     /// `result.isError` was literally `true`.
     pub is_error: bool,
+    /// `result.task` was an object: a task handle (2025-11-25 `CreateTaskResult`).
+    pub has_task: bool,
     pub id: IdFact,
 }
 
@@ -43,6 +45,7 @@ enum Key {
     Result,
     Error,
     IsError,
+    Task,
     Other,
 }
 
@@ -65,6 +68,7 @@ enum LitRole {
     Skip,
     Id,
     IsError,
+    Task,
 }
 
 const MAX_TRACKED: usize = 2;
@@ -243,6 +247,7 @@ impl MsgScanner {
                 LitRole::Skip
             }
             (2, Key::IsError) if parent == Key::Result => LitRole::IsError,
+            (2, Key::Task) if parent == Key::Result => LitRole::Task,
             _ => LitRole::Skip,
         }
     }
@@ -264,8 +269,10 @@ impl MsgScanner {
             return;
         }
         if self.deep == 0 {
-            if self.note_value() == LitRole::Id {
-                self.facts.id = IdFact::Invalid; // a container is not an id
+            match self.note_value() {
+                LitRole::Id => self.facts.id = IdFact::Invalid, // a container is not an id
+                LitRole::Task if b == b'{' => self.facts.has_task = true,
+                _ => {}
             }
             if self.n < MAX_TRACKED {
                 self.frames[self.n] = Frame {
@@ -413,6 +420,7 @@ impl MsgScanner {
                     (1, b"result") => Key::Result,
                     (1, b"error") => Key::Error,
                     (2, b"isError") if parent == Key::Result => Key::IsError,
+                    (2, b"task") if parent == Key::Result => Key::Task,
                     _ => Key::Other,
                 };
                 if let Some(f) = self.top() {
@@ -470,7 +478,7 @@ impl MsgScanner {
                     self.facts.is_error = true;
                 }
             }
-            LitRole::Skip => {}
+            LitRole::Task | LitRole::Skip => {}
         }
         self.lit_role = LitRole::Skip;
     }
@@ -644,6 +652,28 @@ mod tests {
             br#"{"result":{"content":[{"isError":true}],"structuredContent":{"isError":true},"isError":false},"id":1}"#,
         );
         assert!(!f.is_error, "only result.isError counts");
+    }
+
+    /// N10 ii: only an object at `result.task` is a task handle.
+    #[test]
+    fn task_handle_is_an_object_at_result_task() {
+        let f = scan_all_splits(
+            br#"{"jsonrpc":"2.0","id":5,"result":{"task":{"taskId":"t","status":"working"}}}"#,
+        );
+        assert!(f.complete && f.has_result && f.has_task);
+        for not in [
+            &br#"{"id":5,"result":{"content":[{"task":{}}],"structuredContent":{"task":{}}}}"#[..],
+            br#"{"id":5,"result":{"task":"x"}}"#,
+            br#"{"id":5,"result":{"task":null}}"#,
+            br#"{"id":5,"task":{},"result":{}}"#,
+            br#"{"id":5,"error":{"task":{}}}"#,
+        ] {
+            assert!(
+                !scan_all_splits(not).has_task,
+                "{}",
+                String::from_utf8_lossy(not)
+            );
+        }
     }
 
     #[test]

@@ -41,10 +41,12 @@ const REQUEST_STRIP: &[&str] = &[
     "x-real-ip",
     "via",
     "user-agent", // replaced by a fixed value
-    // OPEN: T-12b. Session ids are issued by the proxy and bound 1:1 to
-    // (principal, route, upstream session); a downstream id is meaningless
-    // upstream and must not cross over.
+    // Session ids are issued by the proxy and bound 1:1 to (principal, route,
+    // upstream session) (T-12b2): the downstream id never crosses over; the
+    // bound upstream id is set by [`set_upstream_session`].
     "mcp-session-id",
+    // P1 has no stream resumption (GET is 405): never let an upstream replay
+    // across proxy-bound sessions.
     "last-event-id",
 ];
 
@@ -102,6 +104,16 @@ pub fn upstream_request_headers(
     Ok(out)
 }
 
+/// Put the bound upstream session id (if the upstream issued one) on a request
+/// built by [`upstream_request_headers`]. Only the proxy's stored value is ever
+/// sent; the client's own `Mcp-Session-Id` was stripped.
+pub fn set_upstream_session(h: &mut HeaderMap, upstream: Option<&HeaderValue>) {
+    h.remove("mcp-session-id");
+    if let Some(v) = upstream {
+        h.insert(HeaderName::from_static("mcp-session-id"), v.clone());
+    }
+}
+
 /// Keep only the allowlisted upstream response headers, then add the proxy's
 /// own security header.
 pub fn downstream_response_headers(src: &HeaderMap) -> HeaderMap {
@@ -135,6 +147,21 @@ mod tests {
             );
         }
         m
+    }
+
+    /// T-12b2: the client's session id never reaches upstream; only the bound
+    /// upstream id does, and a stateless upstream gets none.
+    #[test]
+    fn upstream_session_replaces_the_client_one() {
+        let src = hm(&[("mcp-session-id", "PROXY-ID"), ("last-event-id", "7")]);
+        let mut out = upstream_request_headers(&src, &auth(), "h").unwrap();
+        set_upstream_session(&mut out, Some(&HeaderValue::from_static("UP-ID")));
+        assert_eq!(out.get_all("mcp-session-id").iter().count(), 1);
+        assert_eq!(out["mcp-session-id"], "UP-ID");
+        assert!(!out.contains_key("last-event-id"));
+        let mut out = upstream_request_headers(&src, &auth(), "h").unwrap();
+        set_upstream_session(&mut out, None);
+        assert!(!out.contains_key("mcp-session-id"));
     }
 
     /// M3 request rows: each stripped header, one assertion per row.

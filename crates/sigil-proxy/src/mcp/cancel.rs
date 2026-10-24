@@ -14,10 +14,12 @@
 //! The decision is a single compare-and-set on the target's state, so a cancel
 //! and a dispatch racing each other have exactly one winner.
 //!
-//! Correlation is `(route, principal, request id)` with exact JSON value
-//! equality. // OPEN: T-12b2 adds the session to the key (the contract says
-//! `(session, requestId)`); until sessions exist two sessions of one principal
-//! on one route share the id space.
+//! Correlation is `(route, principal, proxy session, request id)` with exact
+//! JSON value equality (README M3 `(session, requestId)`; T-12b2). The same id
+//! in two sessions, principals or routes never matches. An `initialize` has no
+//! session yet and is registered under its own call number, so no cancel can
+//! ever name it (clients MUST NOT cancel `initialize`). When a session ends its
+//! held early cancels are dropped and counted ([`CancelRegistry::drop_session`]).
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -46,7 +48,18 @@ pub const CANCEL_RESPONSE_GRACE: Duration = Duration::from_secs(3);
 pub struct CancelKey {
     pub route: String,
     pub principal: String,
+    pub session: CancelScope,
     pub id: RequestId,
+}
+
+/// The id space a request id lives in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CancelScope {
+    /// A proxy session (its process-local number).
+    Session(u64),
+    /// An `initialize` call, by its relay call number: a key no cancel can
+    /// carry, since a cancel always belongs to a session.
+    Initialize(u64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -213,6 +226,21 @@ impl CancelRegistry {
         CancelOutcome::Held
     }
 
+    /// The session `session` ended: drop the cancels held for its ids (each
+    /// counts as unmatched). Its in-flight requests keep their registrations.
+    pub fn drop_session(&self, session: u64) {
+        let mut g = self.inner.lock().unwrap();
+        let before = g.early.len();
+        g.early
+            .retain(|k, _| k.session != CancelScope::Session(session));
+        let dropped = before - g.early.len();
+        if dropped > 0 {
+            g.order
+                .retain(|(k, _)| k.session != CancelScope::Session(session));
+            self.unmatched.fetch_add(dropped as u64, Ordering::Relaxed);
+        }
+    }
+
     #[cfg(test)]
     fn inflight_len(&self) -> usize {
         self.inner.lock().unwrap().inflight.len()
@@ -296,6 +324,7 @@ mod tests {
         CancelKey {
             route: "r".into(),
             principal: "p".into(),
+            session: CancelScope::Session(1),
             id: RequestId::from_raw(id).unwrap(),
         }
     }
@@ -421,6 +450,36 @@ mod tests {
         assert!(!x.is_cancelled());
         assert_eq!(r.cancel(&key("4.0"), now), CancelOutcome::Held);
         assert!(!x.is_cancelled());
+    }
+
+    /// T-12b2: the same id in two sessions never matches; an `initialize` key
+    /// is never matched; a session's end drops only its held cancels.
+    #[test]
+    fn sessions_separate_ids_and_initialize_is_never_cancelled() {
+        let r = reg();
+        let now = Instant::now();
+        let a = r.register(key("4"), 1, now).unwrap();
+        let mut in_b = key("4");
+        in_b.session = CancelScope::Session(2);
+        let b = r.register(in_b.clone(), 2, now).unwrap();
+        a.try_dispatch().unwrap();
+        b.try_dispatch().unwrap();
+        assert_eq!(r.cancel(&in_b, now), CancelOutcome::AfterDispatch(2));
+        assert!(b.cancel_requested() && !a.cancel_requested());
+        // an initialize with id 0 lives under its own call number
+        let mut init = key("0");
+        init.session = CancelScope::Initialize(9);
+        let i = r.register(init, 9, now).unwrap();
+        assert_eq!(r.cancel(&key("0"), now), CancelOutcome::Held);
+        assert!(!i.is_cancelled());
+        // ending session 1 drops its held cancel ("0") but not session 2's
+        let mut held_b = key("7");
+        held_b.session = CancelScope::Session(2);
+        assert_eq!(r.cancel(&held_b, now), CancelOutcome::Held);
+        r.drop_session(1);
+        assert_eq!(r.early_len(), 1);
+        assert_eq!(r.unmatched_total(), 1);
+        assert!(r.register(held_b, 3, now).unwrap().is_cancelled());
     }
 
     #[test]

@@ -243,6 +243,25 @@ impl Lifecycle {
         r
     }
 
+    /// Publish Stopped only after all invocation uncertainty was handed over
+    /// and the durable queue's latest write succeeded.
+    fn finish_shutdown(
+        &mut self,
+        invocation_accounted: bool,
+        gaps: Option<&crate::status_report::GapQueue>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            invocation_accounted,
+            "invocation shutdown accounting incomplete; remaining Stopping"
+        );
+        anyhow::ensure!(
+            !gaps.is_some_and(|g| g.persist_failed()),
+            "invocation shutdown gap persistence failed; remaining Stopping"
+        );
+        self.set_run_state(RunState::Stopped)?;
+        Ok(())
+    }
+
     /// F1: publish whether the status sequence looks stuck.
     pub fn set_sequence_wedged(&mut self, wedged: bool) -> Result<(), StateError> {
         self.status.status_sequence_wedged = wedged;
@@ -507,6 +526,13 @@ async fn run_inner(
     let mut inventory_sink: Option<std::sync::Arc<crate::inventory_sink::InventorySink>> = None;
     let mut inventory_handle: Option<crate::inventory_sink::InventoryHandle> = None;
     let mut cursor_hasher: Option<crate::inventory::CursorHasher> = None;
+    // The audit producer (T-13d): every relayed call starts with its local
+    // durable `invocation.started`.
+    let mut invocation_sink: Option<std::sync::Arc<crate::invocation_sink::InvocationSink>> = None;
+    let mut invocation_handle: Option<crate::invocation_sink::InvocationHandle> = None;
+    let mut invocation_gaps = None;
+    // Runtime route health (T-12b2), shared by the relay and the status report.
+    let health = crate::route_health::RouteHealth::new(table.clone());
     let sync_task = match Some(fetcher) {
         Some(fetcher) => {
             // One mTLS client serves the config fetch and the status report.
@@ -550,6 +576,18 @@ async fn run_inner(
                         false
                     }
                 }));
+            // The audit producer appends through the admission handle; records
+            // it cannot store become `local_record_failed` gaps in this queue.
+            invocation_gaps = Some(gaps.clone());
+            let (isink, ihandle) = crate::invocation_sink::InvocationSink::start(
+                admission.clone(),
+                b.proxy_id.as_str(),
+                &epoch,
+                registry.clone(),
+                invocation_gap_handover(gaps.clone()),
+            )?;
+            invocation_sink = Some(isink);
+            invocation_handle = Some(ihandle);
             let lc7 = lc.clone();
             // Shared by the reporter (its `central` section) and the ingest
             // client (acks, answers, failures).
@@ -618,6 +656,7 @@ async fn run_inner(
             )
             .with_central(central.clone())
             .with_spool(spool.clone())
+            .with_route_health(health.clone())
             .with_wedge_hook(Box::new(move |w| {
                 if let Err(e) = lock(&lc7).set_sequence_wedged(w) {
                     tracing::error!(error = %e, "cannot publish the sequence state");
@@ -717,12 +756,22 @@ async fn run_inner(
         b.limits.clone(),
         table,
         std::sync::Arc::new(crate::dest::SystemResolver),
-    );
-    // Without a registry the relay keeps its no-op sink and does no observation
-    // work at all (`wants_observations` is false).
-    if let (Some(sink), Some(hasher)) = (inventory_sink.take(), cursor_hasher.take()) {
-        proxy = proxy.with_sink(sink, hasher);
-    }
+    )
+    .with_route_health(health);
+    // The audit producer always observes; the inventory joins it when a
+    // registry is open (its start runs only for calls the audit admitted).
+    let audit_sink = invocation_sink
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("the audit producer did not start"))?;
+    let sink: std::sync::Arc<dyn crate::mcp::ObservationSink> = match inventory_sink.take() {
+        Some(inv) => std::sync::Arc::new(crate::invocation_sink::FanoutSink::new(audit_sink, inv)),
+        None => audit_sink,
+    };
+    let hasher = match cursor_hasher.take() {
+        Some(h) => h,
+        None => crate::inventory::CursorHasher::new()?,
+    };
+    proxy = proxy.with_sink(sink, hasher);
     let lc3 = lc.clone();
     let served = proxy
         .serve(listener, acceptor, async {
@@ -733,8 +782,16 @@ async fn run_inner(
     // NOTE: Signal handlers stay installed during drain, so a second SIGTERM is
     // swallowed and only SIGKILL ends the process. Fine under systemd
     // (TimeoutStopSec); revisit if an operator needs a second signal to force exit.
-    // The relay stopped, so no page is arriving any more: end the open listing
-    // chains (`session_ended`), drain the queue and stop the engine worker.
+    // The relay stopped: drain the audit producer first (its completions and
+    // cancels reach the spool, or are counted as a gap), before any task stops.
+    let invocation_accounted = if let Some(h) = invocation_handle.take() {
+        h.shutdown(Duration::from_secs(b.limits.shutdown_grace_secs))
+            .await
+    } else {
+        true
+    };
+    // No page is arriving any more: end the open listing chains
+    // (`session_ended`), drain the queue and stop the engine worker.
     if let Some(h) = inventory_handle.take() {
         h.shutdown().await;
     }
@@ -759,8 +816,20 @@ async fn run_inner(
     spool.close().await;
     let outcome = served?;
     tracing::info!(?outcome, "shutdown");
-    lock(&lc).set_run_state(RunState::Stopped)?;
+    lock(&lc).finish_shutdown(invocation_accounted, invocation_gaps.as_ref())?;
     Ok(())
+}
+
+/// Production ownership transfer: record consumes even a saturated queue's gap
+/// into its durable overflow count. Persistence failure remains visible on the
+/// queue and is checked before lifecycle publishes Stopped.
+pub(crate) fn invocation_gap_handover(
+    gaps: crate::status_report::GapQueue,
+) -> crate::invocation_sink::GapSink {
+    std::sync::Arc::new(move |g| {
+        gaps.record(g);
+        true
+    })
 }
 
 /// Keep the spool's R equal to the `max_offline_retry_age_seconds` of the applied
@@ -971,6 +1040,36 @@ mod tests {
             "event_ids": ["00000000-0000-4000-8000-000000000900"],
             "code": "semantic_invalid"}))
         .unwrap()
+    }
+
+    #[test]
+    fn incomplete_invocation_accounting_or_failed_persistence_keeps_stopping() {
+        let t = tempfile::tempdir().unwrap();
+        let b = bootstrap(t.path());
+        let mut lc = Lifecycle::start(&b).unwrap();
+        lc.set_run_state(RunState::Stopping).unwrap();
+        assert!(lc.finish_shutdown(false, None).is_err());
+        assert_eq!(
+            read_status(&b.state_dir).unwrap().run_state,
+            RunState::Stopping
+        );
+        let q = crate::status_report::GapQueue::new().with_persister(Box::new(|_| false));
+        let handover = invocation_gap_handover(q.clone());
+        assert!(
+            handover(lc_gap(1)),
+            "ownership consumed despite persist failure"
+        );
+        assert!(q.persist_failed());
+        assert!(lc.finish_shutdown(true, Some(&q)).is_err());
+        assert_eq!(
+            read_status(&b.state_dir).unwrap().run_state,
+            RunState::Stopping
+        );
+        lc.finish_shutdown(true, None).unwrap();
+        assert_eq!(
+            read_status(&b.state_dir).unwrap().run_state,
+            RunState::Stopped
+        );
     }
 
     /// L6b: unacknowledged gaps (pending and quarantined) survive a restart.

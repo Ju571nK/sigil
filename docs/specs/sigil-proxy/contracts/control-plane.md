@@ -220,6 +220,7 @@ Cross-principal isolation: a session, stream, and `Last-Event-ID` resume are bou
 |---|---|---|---|
 | Request | Downstream `Authorization` | Verified, then removed | decided |
 | Request | `Cookie` | Removed | decided |
+| Request | `Last-Event-ID` on POST | Removed; P1 has no stream resumption and GET is fixed 405 | decided (T-12b2, existing header strip policy) |
 | Request | Proxy auth headers (any proxy-defined auth header) | Removed | decided |
 | Request | Upstream credential | Injected per route from the route's `credential_ref` | decided |
 | Request | `Origin` | Checked per PX-014 (present and not in `allowed_origins` → 403); not forwarded. Absent is allowed, since non-browser bearer clients send none (browser-less clients: unverified). | decided (check, no forward); absent-allowed recommended |
@@ -334,7 +335,7 @@ Not immediate. **TLS connections outlive cert expiry** (M-7): an established con
 
 | Topic | Where it is defined | Status |
 |---|---|---|
-| Runtime route refusal answer (`-32603`, fixed message, no `data`, no echo; HTTP 200 `application/json` on the initialize id; reasons in audit/health only) | [decisions.md](../decisions.md) "런타임 route 거절 응답"; reasons in README "Protocol revision, tasks and cancellation" | decided. The message **text** is not yet fixed anywhere. |
+| Runtime route refusal answer (`-32603`, fixed message, no `data`, no echo; HTTP 200 `application/json` on the initialize id; reasons in audit/health only) | [decisions.md](../decisions.md) "런타임 route 거절 응답"; reasons in README "Protocol revision, tasks and cancellation" | decided. The message text is fixed as `Internal error` in [the T-13d/T-12b2 implementation contract](../t13d-t12b2.md) (2026-10-24). |
 | B1 modern request answer (HTTP 400, empty body, authentication first) | decisions.md "B1 modern 요청"; README N4 correction 4 | decided |
 | Pre-dispatch refusals (`-32602`, `-32601`) | README m4 table | decided |
 | Cancel before dispatch HTTP shape | README M3 / N13 | decided, P1 to verify |

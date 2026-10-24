@@ -15,6 +15,9 @@ use sigil_proxy_api::Id;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
+use sigil_proxy_api::config::ActorKind as ConfigActorKind;
+use sigil_proxy_api::event::{Actor, ActorKind, AuthenticationMethod, EvidenceSource};
+
 use crate::bootstrap::{normalize_origin, split_host_port, Credential};
 use crate::limits::{Limits, RemoteLimits};
 
@@ -25,6 +28,23 @@ pub struct PrincipalSpec {
     pub principal_id: Id,
     /// Lowercase-hex SHA-256 verifiers (at most two for overlap).
     pub verifiers: Vec<VerifierSpec>,
+    /// Declared kind from the server-issued credential mapping (README N3).
+    /// `None`: none declared, audited as `unknown`.
+    pub actor_kind: Option<ConfigActorKind>,
+    /// Permission owner from the same mapping. Not evidence of the executor.
+    pub credential_owner_id: Option<Id>,
+}
+
+impl PrincipalSpec {
+    /// A principal with no declared kind or owner.
+    pub fn new(principal_id: Id, verifiers: Vec<VerifierSpec>) -> PrincipalSpec {
+        PrincipalSpec {
+            principal_id,
+            verifiers,
+            actor_kind: None,
+            credential_owner_id: None,
+        }
+    }
 }
 
 /// One verifier with its optional expiry (control-plane.md §5.2). `not_after` is
@@ -84,6 +104,19 @@ pub struct RouteScope {
     pub credential_scope_id: String,
 }
 
+/// What a proxy session is bound to besides its principal and route (T-12b2):
+/// the upstream endpoint, the upstream credential and the server's scope of
+/// both. A session created under one binding is never used under another, so a
+/// repointed route can never carry an old upstream session id to a new endpoint
+/// or credential. A change of anything else (limits, revision) keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    scope: Option<RouteScope>,
+    /// `scheme://host:port/path` of the upstream.
+    endpoint: String,
+    credential_ref: String,
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RouteError {
     #[error("route {route}: invalid upstream_url: {reason}")]
@@ -119,6 +152,9 @@ pub struct Upstream {
 
 pub struct Principal {
     pub id: Id,
+    /// The audit actor of this principal, from the applied credential mapping
+    /// only (README N3); never from client input.
+    pub actor: Actor,
     verifiers: Vec<VerifierSpec>,
     /// Shared by every route that names the same principal id.
     pub(crate) sem: Arc<Semaphore>,
@@ -147,6 +183,7 @@ pub struct Route {
     /// Effective limits of this route: `min(local, remote)` per field.
     pub(crate) limits: Limits,
     pub(crate) scope: Option<Arc<RouteScope>>,
+    pub(crate) binding: Arc<Binding>,
 }
 
 impl std::fmt::Debug for Route {
@@ -200,12 +237,26 @@ impl Route {
     pub fn origin_allowed(&self, normalized_origin: &str) -> bool {
         self.allowed_origins.iter().any(|o| o == normalized_origin)
     }
+
+    /// The session binding of this route (T-12b2).
+    pub fn binding(&self) -> &Arc<Binding> {
+        &self.binding
+    }
+
+    /// The inventory scope of this route, if it came from an applied config.
+    pub fn scope(&self) -> Option<&Arc<RouteScope>> {
+        self.scope.as_ref()
+    }
 }
 
 #[derive(Debug)]
 pub struct RouteTable {
     routes: HashMap<String, Route>,
     has_verifier: bool,
+    /// The applied config revision this table was built from (`route_revision`
+    /// of every call it routes). `None` outside a config sync: such calls cannot
+    /// be audited.
+    revision: Option<sigil_proxy_api::PositiveI64>,
 }
 
 impl RouteTable {
@@ -308,12 +359,33 @@ impl RouteTable {
                     .clone();
                 principals.push(Principal {
                     id: p.principal_id.clone(),
+                    actor: Actor {
+                        actor_id: p.principal_id.clone(),
+                        actor_kind: match p.actor_kind {
+                            Some(ConfigActorKind::NonHuman) => ActorKind::NonHuman,
+                            Some(ConfigActorKind::Unknown) | None => ActorKind::Unknown,
+                        },
+                        authentication_method: AuthenticationMethod::Bearer,
+                        evidence_source: EvidenceSource::ProxyCredentialMapping,
+                        credential_owner_id: p.credential_owner_id.clone(),
+                    },
                     verifiers: p.verifiers.clone(),
                     sem,
                     sem_cap: principal_cap,
                 });
             }
 
+            let binding = Arc::new(Binding {
+                scope: spec.scope.clone(),
+                endpoint: format!(
+                    "{}://{}:{}{}",
+                    if upstream.https { "https" } else { "http" },
+                    upstream.host,
+                    upstream.port,
+                    upstream.path
+                ),
+                credential_ref: spec.credential_ref.clone(),
+            });
             routes.insert(
                 rid,
                 Route {
@@ -330,13 +402,25 @@ impl RouteTable {
                     sem_cap: route_cap,
                     limits: limits.lowered_by(&spec.limits),
                     scope: spec.scope.clone().map(Arc::new),
+                    binding,
                 },
             );
         }
         Ok(RouteTable {
             routes,
             has_verifier,
+            revision: None,
         })
+    }
+
+    /// Record the applied config revision this table serves (the config sync).
+    pub fn with_revision(mut self, revision: sigil_proxy_api::PositiveI64) -> RouteTable {
+        self.revision = Some(revision);
+        self
+    }
+
+    pub fn revision(&self) -> Option<sigil_proxy_api::PositiveI64> {
+        self.revision
     }
 
     /// The semaphore of principal `id` in this table, if its capacity is `cap`.
@@ -517,10 +601,10 @@ mod tests {
             route_id: Id::new("a").unwrap(),
             upstream_url: url.into(),
             credential_ref: "ref1".into(),
-            principals: vec![PrincipalSpec {
-                principal_id: Id::new("p1").unwrap(),
-                verifiers: vec![sigil_proxy_api::verifier_for("tok-1").into()],
-            }],
+            principals: vec![PrincipalSpec::new(
+                Id::new("p1").unwrap(),
+                vec![sigil_proxy_api::verifier_for("tok-1").into()],
+            )],
             allowed_origins: vec![],
             allow_private_destination: false,
             limits: RemoteLimits::default(),

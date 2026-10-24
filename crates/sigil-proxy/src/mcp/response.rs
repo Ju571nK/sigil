@@ -11,7 +11,9 @@
 //!
 //! - a JSON-RPC message with the request's id decides: `result` is `Success`
 //!   (`ToolError` when `tools/call` has `result.isError == true`), `error` is
-//!   `JsonRpcError`. In SSE the first such message wins; server requests and
+//!   `JsonRpcError`. A `tools/call` result carrying a task handle
+//!   (`result.task`, N10 ii) is relayed unchanged and is `ProtocolError` /
+//!   `TaskHandle`, never a success. In SSE the first such message wins; server requests and
 //!   notifications in the stream (they carry a `method`) are skipped.
 //! - a cancel was forwarded and no response arrived: `Unknown` /
 //!   `CancelNoResponse` (never `Timeout`; README M3).
@@ -92,6 +94,8 @@ pub struct CallCtx {
     done: bool,
     /// The sink wants observations; otherwise `complete` reports nothing.
     wants: bool,
+    /// Runs once if the response turns out to be a task handle (route health).
+    on_task_handle: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
 impl CallCtx {
@@ -113,7 +117,13 @@ impl CallCtx {
             registration,
             dispatched: false,
             done: false,
+            on_task_handle: None,
         }
+    }
+
+    /// Run `f` once if this call's response is a task handle.
+    pub fn on_task_handle(&mut self, f: Box<dyn FnOnce() + Send + Sync>) {
+        self.on_task_handle = Some(f);
     }
 
     pub fn registration(&self) -> &Registration {
@@ -148,7 +158,15 @@ impl CallCtx {
     }
 
     pub fn complete(&mut self, r: Resolution) {
-        if std::mem::replace(&mut self.done, true) || !self.wants {
+        if std::mem::replace(&mut self.done, true) {
+            return;
+        }
+        if r.cause == Cause::TaskHandle {
+            if let Some(f) = self.on_task_handle.take() {
+                f();
+            }
+        }
+        if !self.wants {
             return;
         }
         self.sink.observe(Observation::Completed(Completed {
@@ -239,7 +257,7 @@ impl Capture {
 }
 
 enum Found {
-    Result { tool_error: bool },
+    Result { tool_error: bool, task: bool },
     Error,
 }
 
@@ -391,6 +409,7 @@ impl ResponseTracker {
         } else {
             Found::Result {
                 tool_error: self.ctx.is_tools_call() && facts.is_error,
+                task: self.ctx.is_tools_call() && facts.has_task,
             }
         };
         self.found = Some((f, bytes, over));
@@ -433,7 +452,8 @@ impl ResponseTracker {
                     }
                     r
                 }
-                Found::Result { tool_error } => {
+                Found::Result { task: true, .. } => sent(Outcome::ProtocolError, Cause::TaskHandle),
+                Found::Result { tool_error, .. } => {
                     let mut r = sent(
                         if tool_error {
                             Outcome::ToolError
@@ -597,6 +617,7 @@ mod tests {
         let key = CancelKey {
             route: "r".into(),
             principal: "p".into(),
+            session: crate::mcp::cancel::CancelScope::Session(1),
             id: RequestId::from_raw(id).unwrap(),
         };
         let registration = reg.register(key, 1, tokio::time::Instant::now()).unwrap();
@@ -608,6 +629,8 @@ mod tests {
                 route_id: "r".into(),
                 principal_id: "p".into(),
                 scope: None,
+                audit: None,
+                session: None,
             },
             method,
             RequestId::from_raw(id).unwrap(),
@@ -911,6 +934,7 @@ mod tests {
                 &CancelKey {
                     route: "r".into(),
                     principal: "p".into(),
+                    session: crate::mcp::cancel::CancelScope::Session(1),
                     id: RequestId::from_raw("7").unwrap(),
                 },
                 tokio::time::Instant::now(),
@@ -934,6 +958,7 @@ mod tests {
             &CancelKey {
                 route: "r".into(),
                 principal: "p".into(),
+                session: crate::mcp::cancel::CancelScope::Session(1),
                 id: RequestId::from_raw("7").unwrap(),
             },
             tokio::time::Instant::now(),
@@ -972,6 +997,7 @@ mod tests {
         let key = CancelKey {
             route: "r".into(),
             principal: "p".into(),
+            session: crate::mcp::cancel::CancelScope::Session(1),
             id: RequestId::from_raw("1").unwrap(),
         };
         let ctx = CallCtx::new(
@@ -981,6 +1007,8 @@ mod tests {
                 route_id: "r".into(),
                 principal_id: "p".into(),
                 scope: None,
+                audit: None,
+                session: None,
             },
             Method::ToolsCall,
             RequestId::from_raw("1").unwrap(),

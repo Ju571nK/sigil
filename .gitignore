@@ -43,6 +43,7 @@ docs/**/superpowers*
 demo/
 scripts/*
 !scripts/proxy-p0/
+!scripts/proxy-smoke/
 scripts/demo/
 # Local Codex CLI config (may contain server tokens/paths — never commit)
 .codex/

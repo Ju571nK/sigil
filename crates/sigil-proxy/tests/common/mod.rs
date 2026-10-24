@@ -110,13 +110,51 @@ type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
 type Handler = Arc<dyn Fn(&Seen) -> Reply + Send + Sync>;
 
+/// The JSON-RPC id of an `initialize` request body, if it is one.
+pub fn initialize_id(body: &[u8]) -> Option<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    (v.get("method")?.as_str()? == "initialize").then(|| v.get("id").cloned())?
+}
+
+/// A supported (2025-11-25, no tasks/subscribe) `InitializeResult` for `id`.
+pub fn init_result(id: &serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id,
+        "result": {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}},
+            "serverInfo": {"name": "fixture", "version": "1"}}}))
+    .unwrap()
+}
+
+/// An `initialize` request body with id `id`.
+pub fn initialize_body(id: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"initialize","params":{{"protocolVersion":"2025-11-25","capabilities":{{}},"clientInfo":{{"name":"t","version":"1"}}}}}}"#
+    )
+}
+
 async fn fixture_call(
     req: hyper::Request<hyper::body::Incoming>,
     h: Handler,
     seen: Arc<Mutex<Vec<Seen>>>,
+    inits: Option<Arc<AtomicUsize>>,
 ) -> Result<Response<BoxBody<Bytes, BoxErr>>, BoxErr> {
     let (parts, body) = req.into_parts();
     let body = body.collect().await?.to_bytes();
+    // A plain fixture answers `initialize` itself (stateless, supported) so a
+    // test's handler only sees the calls it is about; they are counted apart.
+    if let (Some(n), Some(id)) = (&inits, initialize_id(&body)) {
+        n.fetch_add(1, Ordering::SeqCst);
+        let mut r = Response::new(
+            Full::new(Bytes::from(init_result(&id)))
+                .map_err(|n| match n {})
+                .boxed(),
+        );
+        r.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        return Ok(r);
+    }
     let s = Seen {
         method: parts.method.to_string(),
         target: parts
@@ -173,6 +211,8 @@ pub struct Up {
     pub addr: SocketAddr,
     pub seen: Arc<Mutex<Vec<Seen>>>,
     pub connections: Arc<AtomicUsize>,
+    /// `initialize` calls the fixture answered itself (not in `seen`).
+    pub inits: Arc<AtomicUsize>,
     task: JoinHandle<()>,
 }
 
@@ -183,7 +223,23 @@ impl Drop for Up {
 }
 
 impl Up {
+    /// A fixture that answers `initialize` itself and hands everything else to
+    /// `handler`.
     pub async fn start(handler: impl Fn(&Seen) -> Reply + Send + Sync + 'static) -> Up {
+        Self::start_inner(handler, true).await
+    }
+
+    /// A fixture whose `handler` sees every request, `initialize` included.
+    pub async fn start_raw(handler: impl Fn(&Seen) -> Reply + Send + Sync + 'static) -> Up {
+        Self::start_inner(handler, false).await
+    }
+
+    async fn start_inner(
+        handler: impl Fn(&Seen) -> Reply + Send + Sync + 'static,
+        intercept_init: bool,
+    ) -> Up {
+        let inits = Arc::new(AtomicUsize::new(0));
+        let intercept = intercept_init.then(|| inits.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -196,10 +252,10 @@ impl Up {
                     return;
                 };
                 c2.fetch_add(1, Ordering::SeqCst);
-                let (h, seen) = (handler.clone(), s2.clone());
+                let (h, seen, i) = (handler.clone(), s2.clone(), intercept.clone());
                 tokio::spawn(async move {
                     let svc = service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
-                        fixture_call(req, h.clone(), seen.clone())
+                        fixture_call(req, h.clone(), seen.clone(), i.clone())
                     });
                     let _ = hyper::server::conn::http1::Builder::new()
                         .serve_connection(TokioIo::new(sock), svc)
@@ -211,6 +267,7 @@ impl Up {
             addr,
             seen,
             connections,
+            inits,
             task,
         }
     }
@@ -301,9 +358,11 @@ pub fn try_table(rs: &[R], limits: &Limits) -> Result<RouteTable, sigil_proxy::r
             principals: r
                 .principals
                 .iter()
-                .map(|(p, t)| PrincipalSpec {
-                    principal_id: Id::new(*p).unwrap(),
-                    verifiers: vec![sigil_proxy_api::verifier_for(t).into()],
+                .map(|(p, t)| {
+                    PrincipalSpec::new(
+                        Id::new(*p).unwrap(),
+                        vec![sigil_proxy_api::verifier_for(t).into()],
+                    )
                 })
                 .collect(),
             allowed_origins: r.origins.iter().map(|s| s.to_string()).collect(),
@@ -350,6 +409,8 @@ impl Resolver for StaticResolver {
 pub struct Px {
     pub addr: SocketAddr,
     pub handle: TableHandle,
+    /// Proxy session per (path, token), established on first use (T-12b2).
+    sessions: Mutex<std::collections::HashMap<(String, String), String>>,
     stop: Option<oneshot::Sender<()>>,
     join: Option<JoinHandle<std::io::Result<DrainOutcome>>>,
 }
@@ -392,6 +453,7 @@ impl Px {
         Px {
             addr,
             handle,
+            sessions: Mutex::new(Default::default()),
             stop: Some(stop),
             join: Some(join),
         }
@@ -403,6 +465,7 @@ impl Px {
     }
 
     /// Raw request text with `Host` set to the proxy and `Connection: close`.
+    /// A POST with a token carries the cached session of `(path, token)`.
     pub fn request(
         &self,
         method: &str,
@@ -417,6 +480,23 @@ impl Px {
         );
         if let Some(t) = token {
             r += &format!("Authorization: Bearer {t}\r\n");
+            // Inside the session of (path, token) when one was established
+            // (`session`), as a real client would be after initialize.
+            let has = |n: &str| extra.iter().any(|(k, _)| k.eq_ignore_ascii_case(n));
+            let cached = self
+                .sessions
+                .lock()
+                .unwrap()
+                .get(&(path.to_string(), t.to_string()))
+                .cloned();
+            if let Some(sid) = cached {
+                if method == "POST" && initialize_id(body).is_none() && !has("mcp-session-id") {
+                    r += &format!("Mcp-Session-Id: {sid}\r\n");
+                    if !has("mcp-protocol-version") {
+                        r += "MCP-Protocol-Version: 2025-11-25\r\n";
+                    }
+                }
+            }
         }
         for (k, v) in extra {
             r += &format!("{k}: {v}\r\n");
@@ -434,6 +514,11 @@ impl Px {
         send_raw(self.addr, req).await
     }
 
+    /// POST with the session headers a real client sends after initialize
+    /// (T-12b2): the proxy session of `(path, token)`, established on first use
+    /// with an `initialize`, and `MCP-Protocol-Version: 2025-11-25`. An
+    /// `initialize` body, a request without a token or one that names its own
+    /// `Mcp-Session-Id` is sent as it is; a header given in `extra` wins.
     pub async fn post(
         &self,
         path: &str,
@@ -441,8 +526,66 @@ impl Px {
         extra: &[(&str, &str)],
         body: &[u8],
     ) -> Raw {
+        let has = |n: &str| extra.iter().any(|(k, _)| k.eq_ignore_ascii_case(n));
+        if let Some(t) = token {
+            if initialize_id(body).is_none() && !has("mcp-session-id") {
+                // Establish (and cache) the session; `request` then uses it.
+                let _ = self.session(path, t).await;
+            }
+        }
         self.send(&self.request("POST", path, token, extra, body))
             .await
+    }
+
+    /// POST exactly as given: no session, no version header.
+    pub async fn post_bare(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        extra: &[(&str, &str)],
+        body: &[u8],
+    ) -> Raw {
+        let mut r = format!(
+            "POST {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
+            self.addr
+        );
+        if let Some(t) = token {
+            r += &format!("Authorization: Bearer {t}\r\n");
+        }
+        for (k, v) in extra {
+            r += &format!("{k}: {v}\r\n");
+        }
+        r += &format!("Content-Length: {}\r\n\r\n", body.len());
+        let mut out = r.into_bytes();
+        out.extend_from_slice(body);
+        self.send(&out).await
+    }
+
+    /// The proxy session of `(path, token)`: initialize once, then reuse.
+    /// `None` if the initialize got no session (route refused, upstream down).
+    pub async fn session(&self, path: &str, token: &str) -> Option<String> {
+        let key = (path.to_string(), token.to_string());
+        if let Some(s) = self.sessions.lock().unwrap().get(&key) {
+            return Some(s.clone());
+        }
+        let r = self
+            .post_bare(path, Some(token), &[], initialize_body("0").as_bytes())
+            .await;
+        let s = r.header("mcp-session-id")?.to_string();
+        self.sessions.lock().unwrap().insert(key, s.clone());
+        Some(s)
+    }
+
+    /// Header lines (CRLF-terminated) a raw request needs inside the session
+    /// of `(path, token)`.
+    pub async fn session_lines(&self, path: &str, token: &str) -> String {
+        let sid = self.session(path, token).await.expect("a session");
+        format!("Mcp-Session-Id: {sid}\r\nMCP-Protocol-Version: 2025-11-25\r\n")
+    }
+
+    /// Forget the cached sessions (after the proxy ended them).
+    pub fn forget_sessions(&self) {
+        self.sessions.lock().unwrap().clear();
     }
 }
 

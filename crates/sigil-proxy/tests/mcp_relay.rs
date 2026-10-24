@@ -92,9 +92,18 @@ impl Rec {
     }
 }
 
+/// The harness's own `initialize` (session setup, id 0) is not what these
+/// tests observe; it is left out of the record.
+fn is_setup(m: Method, id: &sigil_proxy::mcp::RequestId) -> bool {
+    m == Method::Initialize && id.raw() == "0"
+}
+
 impl ObservationSink for Rec {
     fn request_started<'a>(&'a self, s: &'a RequestStarted) -> SinkFuture<'a, StartVerdict> {
         Box::pin(async move {
+            if is_setup(s.method, &s.request_id) {
+                return StartVerdict::Proceed;
+            }
             self.events.lock().unwrap().push(Ev::Started(s.clone()));
             if !self.start_delay.is_zero() {
                 tokio::time::sleep(self.start_delay).await;
@@ -103,6 +112,9 @@ impl ObservationSink for Rec {
         })
     }
     fn observe(&self, o: Observation) {
+        if matches!(&o, Observation::Completed(c) if is_setup(c.method, &c.request_id)) {
+            return;
+        }
         self.events.lock().unwrap().push(Ev::Obs(o));
     }
 }
@@ -112,6 +124,9 @@ impl ObservationSink for Rec {
 struct Sx {
     addr: SocketAddr,
     registry: Arc<CancelRegistry>,
+    /// The proxy session of `tok-a` on `/mcp/a` (T-12b2), when the upstream
+    /// accepted the harness's initialize.
+    sid: Option<String>,
     stop: Option<oneshot::Sender<()>>,
     join: Option<JoinHandle<()>>,
 }
@@ -154,9 +169,15 @@ async fn start_table(
             })
             .await;
     });
+    let init = send_raw(
+        addr,
+        &request_bytes(addr, Some("tok-a"), &[], initialize_body("0").as_bytes()),
+    )
+    .await;
     Sx {
         addr,
         registry,
+        sid: init.header("mcp-session-id").map(str::to_string),
         stop: Some(stop),
         join: Some(join),
     }
@@ -183,10 +204,35 @@ fn request_bytes(
 }
 
 impl Sx {
+    /// `extra` plus this harness's session, unless `extra` names its own or
+    /// `body` is an initialize (which never carries one).
+    fn with_session<'a>(
+        &'a self,
+        extra: &[(&'a str, &'a str)],
+        body: &str,
+    ) -> Vec<(&'a str, &'a str)> {
+        let mut v = extra.to_vec();
+        if let Some(sid) = &self.sid {
+            if initialize_id(body.as_bytes()).is_none()
+                && !extra
+                    .iter()
+                    .any(|(k, _)| k.eq_ignore_ascii_case("mcp-session-id"))
+            {
+                v.push(("Mcp-Session-Id", sid));
+            }
+        }
+        v
+    }
+
     async fn post_with(&self, extra: &[(&str, &str)], body: &str) -> Raw {
         send_raw(
             self.addr,
-            &request_bytes(self.addr, Some("tok-a"), extra, body.as_bytes()),
+            &request_bytes(
+                self.addr,
+                Some("tok-a"),
+                &self.with_session(extra, body),
+                body.as_bytes(),
+            ),
         )
         .await
     }
@@ -201,7 +247,7 @@ impl Sx {
             request_bytes(
                 self.addr,
                 Some("tok-a"),
-                &[("MCP-Protocol-Version", "2025-11-25")],
+                &self.with_session(&[("MCP-Protocol-Version", "2025-11-25")], body),
                 body.as_bytes(),
             ),
         );
@@ -417,11 +463,12 @@ async fn unauthenticated_modern_request_is_401() {
 #[tokio::test]
 async fn initialize_proposing_a_legacy_version_is_forwarded() {
     let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"c","version":"1"}}}"#;
-    let up = Up::start(|_| {
+    // The handler sees every initialize (the harness's own, id 0, first).
+    let up = Up::start_raw(|s: &Seen| {
         full(
             200,
             "application/json",
-            br#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{}}}"#,
+            &init_result(&initialize_id(&s.body).expect("an initialize")),
         )
     })
     .await;
@@ -431,8 +478,12 @@ async fn initialize_proposing_a_legacy_version_is_forwarded() {
         let r = px.post_with(&extra, init).await;
         assert_eq!(r.status, 200, "{extra:?}");
         assert_eq!(up.last().body, init.as_bytes());
+        assert!(
+            r.has("mcp-session-id"),
+            "a supported answer opens a session"
+        );
     }
-    assert_eq!(up.count(), 2);
+    assert_eq!(up.count(), 3);
     let c = rec.completed();
     assert_eq!(c.len(), 2);
     assert!(c
@@ -512,11 +563,12 @@ async fn sse_bytes_and_boundaries_survive_observation() {
 
     let mut s = TcpStream::connect(px.addr).await.unwrap();
     use tokio::io::AsyncWriteExt;
+    let body = call("9", "slow", "{}");
     s.write_all(&request_bytes(
         px.addr,
         Some("tok-a"),
-        &[],
-        call("9", "slow", "{}").as_bytes(),
+        &px.with_session(&[("MCP-Protocol-Version", "2025-11-25")], &body),
+        body.as_bytes(),
     ))
     .await
     .unwrap();
@@ -698,7 +750,8 @@ async fn lost_response_is_unknown_and_not_retried() {
         (Outcome::Unknown, Delivery::Unknown, Cause::SendFailed)
     );
     assert_eq!(up.count(), 1);
-    assert_eq!(up.conns(), 1);
+    // one connection for the harness's initialize, one for the call
+    assert_eq!(up.conns(), 2);
 }
 
 /// Upstream unreachable: nothing was sent.
@@ -711,12 +764,14 @@ async fn unreachable_upstream_is_not_sent() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     let rec = Rec::new();
     let px = start_table(t, l, Some(rec.clone())).await;
-    let r = px.post(&call("1", "t", "{}")).await;
+    // No session can exist; an initialize reaches the connect step on its own.
+    let r = px.post(&initialize_body("1")).await;
     assert_eq!(r.status, 502);
     let c = rec.the_completion().await;
     assert_eq!(
-        (c.outcome, c.delivery, c.cause),
+        (c.method, c.outcome, c.delivery, c.cause),
         (
+            Method::Initialize,
             Outcome::TransportFailure,
             Delivery::NotSent,
             Cause::ConnectFailed

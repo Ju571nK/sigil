@@ -43,17 +43,18 @@
 //! page cannot be placed in a chain, so it fails closed: the chain in progress, if
 //! any, ends as `page_error`, and nothing starts or completes a chain.
 //!
-//! Sessions. The relay has no session id yet (T-12b2), so the principal of the
-//! call stands in for it: one listing chain per (principal, scope). A new chain
-//! start (no cursor) ends an unfinished one as `session_ended`; so does
-//! [`InventorySink::end_session`] (T-12b2 calls it with the real session) and
-//! [`InventoryHandle::shutdown`] for every chain still open.
+//! Sessions. One listing chain per (proxy session, scope) (T-12b2): the
+//! process-local session number of the call is the engine's session. A call
+//! outside a session feeds no inventory. A new chain start (no cursor) ends an
+//! unfinished one as `session_ended`; so does the end of the proxy session
+//! ([`ObservationSink::session_ended`]: DELETE, upstream 404, idle expiry, a
+//! route repoint) and [`InventoryHandle::shutdown`] for every chain still open.
 //!
 //! Nothing here logs or stores a tool name, a definition, a cursor or a
 //! credential; `Debug` of every type prints no content.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -73,10 +74,18 @@ use crate::registry_key::ScopeKey;
 pub const QUEUE_DEPTH: usize = 256;
 /// `tools/list` calls remembered between their start and their completion.
 pub const MAX_INFLIGHT: usize = 4096;
+/// A backlog beyond the active-session ceiling is coalesced into one EndAll.
+const MAX_PENDING_ENDS: usize = 256;
+
+#[derive(Default)]
+struct PendingEnds {
+    sessions: BTreeSet<u64>,
+    all: bool,
+}
 
 enum Msg {
     Page(Box<(ListingKey, PageInput)>),
-    EndSession(u64),
+    EndSessions(Vec<u64>),
     /// The relay's state for a page was lost: end the chain as `reason`.
     Abort(Box<ListingKey>, IncompleteReason),
     EndAll,
@@ -88,8 +97,6 @@ struct State {
     /// `seq -> the tag of the request's cursor` (`None`: no cursor), for the
     /// `tools/list` calls in flight.
     inflight: HashMap<u64, Option<CursorTag>>,
-    sessions: HashMap<String, u64>,
-    next_session: u64,
 }
 
 /// The [`ObservationSink`] feeding the inventory engine.
@@ -98,6 +105,7 @@ pub struct InventorySink {
     hasher: CursorHasher,
     state: Mutex<State>,
     tx: SyncSender<Msg>,
+    pending_ends: Arc<Mutex<PendingEnds>>,
     dropped: AtomicU64,
     #[cfg(any(test, feature = "test-util"))]
     paused: Arc<std::sync::atomic::AtomicBool>,
@@ -113,6 +121,7 @@ impl std::fmt::Debug for InventorySink {
 /// and waits for the queue to drain.
 pub struct InventoryHandle {
     tx: SyncSender<Msg>,
+    stopping: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -124,6 +133,11 @@ impl InventorySink {
         proxy_id: &str,
     ) -> std::io::Result<(Arc<InventorySink>, InventoryHandle)> {
         let (tx, rx) = sync_channel(QUEUE_DEPTH);
+        let pending_ends = Arc::new(Mutex::new(PendingEnds::default()));
+        let worker_pending_ends = pending_ends.clone();
+        let worker_tx = tx.clone();
+        let stopping = Arc::new(AtomicBool::new(false));
+        let worker_stopping = stopping.clone();
         #[cfg(any(test, feature = "test-util"))]
         let paused = Arc::new(std::sync::atomic::AtomicBool::new(false));
         #[cfg(any(test, feature = "test-util"))]
@@ -134,6 +148,9 @@ impl InventorySink {
                 worker(
                     engine,
                     rx,
+                    worker_tx,
+                    worker_pending_ends,
+                    worker_stopping,
                     #[cfg(any(test, feature = "test-util"))]
                     worker_paused,
                 )
@@ -143,6 +160,7 @@ impl InventorySink {
             hasher,
             state: Mutex::new(State::default()),
             tx: tx.clone(),
+            pending_ends,
             dropped: AtomicU64::new(0),
             #[cfg(any(test, feature = "test-util"))]
             paused,
@@ -151,6 +169,7 @@ impl InventorySink {
             sink,
             InventoryHandle {
                 tx,
+                stopping,
                 join: Some(join),
             },
         ))
@@ -167,12 +186,33 @@ impl InventorySink {
         self.dropped.load(Ordering::Relaxed)
     }
 
-    /// The session behind `principal` ended: close its chains as
-    /// `session_ended` (T-12b2 calls this with the real session).
-    pub fn end_session(&self, principal_id: &str) {
-        let session = { self.lock().sessions.remove(principal_id) };
-        if let Some(s) = session {
-            let _ = self.tx.try_send(Msg::EndSession(s));
+    /// The proxy session `session` ended: close its chains as `session_ended`.
+    /// End messages are reliable even when page traffic filled the bounded
+    /// queue: wait for one slot on this dedicated thread, never a Tokio worker.
+    pub fn end_session(&self, session: u64) {
+        self.end_sessions(vec![session]);
+    }
+
+    pub fn end_sessions(&self, sessions: Vec<u64>) {
+        if sessions.is_empty() {
+            return;
+        }
+        let mut pending = self.pending_ends.lock().unwrap_or_else(|p| p.into_inner());
+        if pending.all {
+            return;
+        }
+        if !pending.sessions.is_empty() {
+            pending.sessions.extend(sessions);
+        } else {
+            match self.tx.try_send(Msg::EndSessions(sessions.clone())) {
+                Ok(()) => return,
+                Err(TrySendError::Full(_)) => pending.sessions.extend(sessions),
+                Err(TrySendError::Disconnected(_)) => return,
+            }
+        }
+        if pending.sessions.len() > MAX_PENDING_ENDS {
+            pending.sessions.clear();
+            pending.all = true;
         }
     }
 
@@ -181,6 +221,11 @@ impl InventorySink {
     }
 
     fn send(&self, m: Msg) {
+        let pending = self.pending_ends.lock().unwrap_or_else(|p| p.into_inner());
+        if pending.all || !pending.sessions.is_empty() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         match self.tx.try_send(m) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
@@ -199,19 +244,12 @@ impl InventorySink {
         let Some(rs) = c.call.scope.as_deref() else {
             return;
         };
-        let scope = ScopeKey::live(&self.proxy_id, &rs.upstream_id, &rs.credential_scope_id);
-        let mut st = self.lock();
-        let session = match st.sessions.get(&c.call.principal_id) {
-            Some(s) => *s,
-            None => {
-                st.next_session += 1;
-                let s = st.next_session;
-                st.sessions.insert(c.call.principal_id.clone(), s);
-                s
-            }
+        // Chains belong to a proxy session; a call outside one lists nothing.
+        let Some(session) = c.call.session else {
+            return;
         };
+        let scope = ScopeKey::live(&self.proxy_id, &rs.upstream_id, &rs.credential_scope_id);
         let key = ListingKey { session, scope };
-        drop(st);
         // Fail closed: without the request's cursor fact the page has no place in
         // any chain (see the module doc).
         let Some(request_cursor) = request_cursor else {
@@ -281,14 +319,32 @@ impl ObservationSink for InventorySink {
             }
         }
     }
+
+    fn session_ended(&self, session: u64) {
+        self.end_session(session);
+    }
 }
 
 fn worker(
     mut engine: InventoryEngine,
     rx: Receiver<Msg>,
+    tx: SyncSender<Msg>,
+    pending_ends: Arc<Mutex<PendingEnds>>,
+    stopping: Arc<AtomicBool>,
     #[cfg(any(test, feature = "test-util"))] paused: Arc<std::sync::atomic::AtomicBool>,
 ) {
-    while let Ok(m) = rx.recv() {
+    loop {
+        let m = match rx.recv_timeout(std::time::Duration::from_millis(10)) {
+            Ok(m) => m,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let pending = pending_ends.lock().unwrap_or_else(|p| p.into_inner());
+                if stopping.load(Ordering::SeqCst) && !pending.all && pending.sessions.is_empty() {
+                    break;
+                }
+                continue;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         #[cfg(any(test, feature = "test-util"))]
         while paused.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -306,9 +362,11 @@ fn worker(
                     tracing::error!("inventory engine could not record an aborted page");
                 }
             }
-            Msg::EndSession(s) => {
-                if engine.end_session(s).is_err() {
-                    tracing::error!("inventory engine could not close a session");
+            Msg::EndSessions(sessions) => {
+                for s in sessions {
+                    if engine.end_session(s).is_err() {
+                        tracing::error!("inventory engine could not close a session");
+                    }
                 }
             }
             Msg::EndAll => {
@@ -321,7 +379,22 @@ fn worker(
                     }
                 }
             }
-            Msg::Stop => return,
+            Msg::Stop => {
+                stopping.store(true, Ordering::SeqCst);
+            }
+        }
+        let mut pending = pending_ends.lock().unwrap_or_else(|p| p.into_inner());
+        if pending.all {
+            if tx.try_send(Msg::EndAll).is_ok() {
+                pending.all = false;
+            }
+        } else if !pending.sessions.is_empty() {
+            let sessions: Vec<u64> = pending.sessions.iter().copied().take(256).collect();
+            if tx.try_send(Msg::EndSessions(sessions.clone())).is_ok() {
+                for session in sessions {
+                    pending.sessions.remove(&session);
+                }
+            }
         }
     }
 }
@@ -348,6 +421,7 @@ impl Drop for InventoryHandle {
         // Not shut down explicitly (a startup error): stop without waiting on a
         // tokio worker.
         if let Some(j) = self.join.take() {
+            self.stopping.store(true, Ordering::SeqCst);
             let _ = self.tx.try_send(Msg::Stop);
             drop(j);
         }

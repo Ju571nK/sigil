@@ -5,8 +5,10 @@
 //!
 //! Observations carry CLASSIFICATION only: audit method, request ids, the
 //! tool name (for local inventory lookup), outcome and delivery classes,
-//! sizes and timings. They never carry argument values, results, error
-//! messages, session ids, headers, tokens, cursors or cancel reasons. The only
+//! sizes and timings, and the provenance of the applied config that routed the
+//! call ([`AuditContext`]). They never carry argument values, results, error
+//! messages, session ids (a session is a process-local number), headers,
+//! tokens, cursors or cancel reasons. The only
 //! untrusted content that crosses the seam is the `tools/list` page
 //! ([`ToolListPage`]), which T-13 needs for the inventory and registry; its
 //! types print nothing of their content in `Debug`.
@@ -28,7 +30,27 @@ pub struct CallRef {
     /// The scope of the route in the very table that routed this call (T-13c).
     /// `None`: the route has no scope (no applied config).
     pub scope: Option<std::sync::Arc<crate::route::RouteScope>>,
+    /// Audit provenance from the same table snapshot (T-13d). `None`: the table
+    /// has no applied revision or scope, so the call cannot be audited.
+    pub audit: Option<std::sync::Arc<AuditContext>>,
+    /// The proxy session the call belongs to (T-12b2): a process-local number,
+    /// never the wire id. `None` for `initialize` and for calls refused before
+    /// a session was established.
+    pub session: Option<u64>,
 }
+
+/// Where a call's audit identity comes from: the applied route/credential
+/// configuration that routed it, fixed when the call was accepted (README
+/// "upstream_id/route_revision은 호출 시작 당시 값으로 고정", N3). Nothing here
+/// comes from client input.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuditContext {
+    pub route_revision: sigil_proxy_api::PositiveI64,
+    pub upstream_id: sigil_proxy_api::Id,
+    pub actor: sigil_proxy_api::event::Actor,
+}
+
+impl Eq for AuditContext {}
 
 /// A client request that passed classification and is about to be dispatched.
 /// Delivered through [`ObservationSink::request_started`], which may defer
@@ -104,6 +126,9 @@ pub enum Outcome {
     ToolError,
     /// A JSON-RPC error response.
     JsonRpcError,
+    /// The proxy refused the upstream's answer for a protocol reason (see the
+    /// `Upstream*`/`TaskHandle` causes). Never a success.
+    ProtocolError,
     /// Upstream could not be used or answered with a non-JSON-RPC failure
     /// status; see [`Cause`].
     TransportFailure,
@@ -157,6 +182,20 @@ pub enum Cause {
     ClientGone,
     /// A cancel was forwarded and no response arrived within the grace.
     CancelNoResponse,
+    /// `initialize` answered with a revision outside the allowlist.
+    UpstreamVersionUnsupported,
+    /// `initialize` answered with `capabilities.tasks` or
+    /// `capabilities.resources.subscribe = true`.
+    UpstreamCapabilityUnsupported,
+    /// `initialize` answer not readable within the bound or timeout.
+    UpstreamInitializeUnreadable,
+    /// `tools/call` answered with a task handle (N10 ii), relayed unchanged.
+    TaskHandle,
+    /// Upstream answered 404 for a call in a proxy session: the session ended.
+    UpstreamSessionEnded,
+    /// `initialize` refused locally: the route's binding is already marked
+    /// `unsupported` (no reason on the completion).
+    RouteUnsupported,
 }
 
 /// One tool of a `tools/list` page, exactly as upstream sent it.
@@ -279,6 +318,10 @@ pub trait ObservationSink: Send + Sync + 'static {
 
     /// Everything else. Default: ignore.
     fn observe(&self, _: Observation) {}
+
+    /// The proxy session `session` ended (DELETE, upstream 404, expiry, config
+    /// change, shutdown). Default: ignore.
+    fn session_ended(&self, _session: u64) {}
 
     /// False means every call to this sink would be a no-op, so the relay skips
     /// the response scanning, `tools/list` capture and observation building.

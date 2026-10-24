@@ -407,13 +407,23 @@ async fn upstream() -> Upstream {
                     }
                 }
                 h3.fetch_add(1, Ordering::SeqCst);
-                let body = br#"{"jsonrpc":"2.0","id":1,"result":{}}"#;
+                let start = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                let v: serde_json::Value = serde_json::from_slice(&buf[start..]).unwrap();
+                let result = if v["method"] == "initialize" {
+                    serde_json::json!({"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"fixture","version":"1"}})
+                } else {
+                    serde_json::json!({})
+                };
+                let body = serde_json::to_vec(
+                    &serde_json::json!({"jsonrpc":"2.0","id":v["id"],"result":result}),
+                )
+                .unwrap();
                 let head = format!(
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                     body.len()
                 );
                 let _ = s.write_all(head.as_bytes()).await;
-                let _ = s.write_all(body).await;
+                let _ = s.write_all(&body).await;
                 let _ = s.shutdown().await;
             });
         }
@@ -461,8 +471,18 @@ struct RunningProxy {
 impl RunningProxy {
     /// POST /mcp/r1 with a bearer; returns the status.
     async fn call(&self, bearer: &str) -> u16 {
+        let url = format!("http://127.0.0.1:{}/mcp/r1", self.listen);
+        let init = self.client.post(&url).bearer_auth(bearer)
+            .json(&serde_json::json!({"jsonrpc":"2.0","id":"initialize","method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}))
+            .send().await;
+        let Ok(init) = init else { return 0 };
+        let Some(sid) = init.headers().get("mcp-session-id").cloned() else {
+            return init.status().as_u16();
+        };
         self.client
-            .post(format!("http://127.0.0.1:{}/mcp/r1", self.listen))
+            .post(&url)
+            .header("mcp-session-id", sid)
+            .header("mcp-protocol-version", "2025-11-25")
             .bearer_auth(bearer)
             .header("content-type", "application/json")
             .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)

@@ -143,7 +143,7 @@ async fn tls_listener_relays() {
     .with_root_certificates(roots)
     .with_no_client_auth();
     let conn = tokio_rustls::TlsConnector::from(Arc::new(cfg));
-    let exchange = |token: &'static str| {
+    let exchange = |token: &'static str, lines: String, body: String| {
         let conn = conn.clone();
         async move {
             let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -155,8 +155,9 @@ async fn tls_listener_relays() {
                 .await
                 .unwrap();
             let req = format!(
-                "POST /mcp/a HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\nAuthorization: Bearer {token}\r\nContent-Length: 40\r\n\r\n{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}}",
-                addr.port()
+                "POST /mcp/a HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\nAuthorization: Bearer {token}\r\n{lines}Content-Length: {}\r\n\r\n{body}",
+                addr.port(),
+                body.len()
             );
             s.write_all(req.as_bytes()).await.unwrap();
             let mut buf = Vec::new();
@@ -164,8 +165,20 @@ async fn tls_listener_relays() {
             parse_response(buf)
         }
     };
-    assert_eq!(exchange("tok-a").await.status, 200);
-    assert_eq!(exchange("wrong").await.status, 401);
+    // initialize, then a call inside the proxy session
+    let init = exchange("tok-a", String::new(), initialize_body("0")).await;
+    assert_eq!(init.status, 200);
+    let sid = init
+        .header("mcp-session-id")
+        .expect("a proxy session")
+        .to_string();
+    let lines = format!("Mcp-Session-Id: {sid}\r\nMCP-Protocol-Version: 2025-11-25\r\n");
+    let ping = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#.to_string();
+    assert_eq!(
+        exchange("tok-a", lines.clone(), ping.clone()).await.status,
+        200
+    );
+    assert_eq!(exchange("wrong", lines, ping).await.status, 401);
     assert_eq!(up.count(), 1);
 
     // plain text to the TLS port never yields an HTTP response

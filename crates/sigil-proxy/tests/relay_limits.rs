@@ -29,7 +29,7 @@ async fn request_body_limit() {
     let px = simple(&up, lim(|l| l.max_request_body_bytes = 1024)).await;
 
     let r = px
-        .post("/mcp/a", Some("tok-a"), &[], &vec![b'x'; 1025])
+        .post_bare("/mcp/a", Some("tok-a"), &[], &vec![b'x'; 1025])
         .await;
     assert_eq!(r.status, 413);
     assert_eq!(r.text(), "{\"error\":\"request_too_large\"}");
@@ -65,7 +65,7 @@ async fn header_size_limit() {
     let px = simple(&up, limits()).await; // 32 KiB
     let big = "a".repeat(40 * 1024);
     let r = px
-        .post("/mcp/a", Some("tok-a"), &[("X-Big", &big)], PING)
+        .post_bare("/mcp/a", Some("tok-a"), &[("X-Big", &big)], PING)
         .await;
     assert_eq!(r.status, 431, "{r:?}");
     assert_eq!(up.conns(), 0);
@@ -247,6 +247,8 @@ async fn call_timeout_cuts_a_trickling_stream() {
 /// Hold a call open until the returned sender is dropped. Waits until the
 /// proxy has accepted it (upstream saw the request).
 async fn hold(px: &Px, up: &Up, path: &str, token: &str) -> (tokio::task::JoinHandle<Raw>, usize) {
+    // In a session, like any call after initialize.
+    let _ = px.session(path, token).await;
     let before = up.count();
     let req = px.request("POST", path, Some(token), &[], PING);
     let addr = px.addr;
@@ -530,6 +532,7 @@ async fn slowloris_is_dropped_by_header_read_timeout() {
 async fn client_disconnect_cancels_the_upstream_stream() {
     let (up, senders) = gated_upstream().await;
     let px = simple(&up, lim(|l| l.max_calls_per_route = 1)).await;
+    let _ = px.session("/mcp/a", "tok-a").await;
     let mut s = TcpStream::connect(px.addr).await.unwrap();
     s.write_all(&px.request("POST", "/mcp/a", Some("tok-a"), &[], PING))
         .await
@@ -586,9 +589,16 @@ async fn client_disconnect_before_headers_cancels_the_upstream_exchange() {
     );
     let px = Px::start(Some(t), l).await;
     let mut s = TcpStream::connect(px.addr).await.unwrap();
-    s.write_all(&px.request("POST", "/mcp/a", Some("tok-a"), &[], PING))
-        .await
-        .unwrap();
+    // An initialize: the one call this single-connection upstream can get.
+    s.write_all(&px.request(
+        "POST",
+        "/mcp/a",
+        Some("tok-a"),
+        &[],
+        initialize_body("1").as_bytes(),
+    ))
+    .await
+    .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     drop(s);
     let end = Instant::now() + Duration::from_secs(5);
