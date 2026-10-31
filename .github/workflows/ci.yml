@@ -88,6 +88,9 @@ jobs:
     name: rockylinux:9 / stable
     runs-on: ubuntu-latest
     container: rockylinux:9
+    env:
+      # A cold-cache debug build fills the runner's disk ("No space left on device").
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - name: install build deps
         run: dnf -y install git gcc perl
