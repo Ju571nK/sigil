@@ -122,7 +122,7 @@ jobs:
           mkdir -p pkgs
           cp target/${{ matrix.target }}/debian/*.deb pkgs/
           cp target/generate-rpm/*.rpm pkgs/
-          # #245: no relay until T-12; remove when the proxy is usable
+          # The proxy is not released until T-16; remove then.
           rm -f pkgs/lodeline-proxy*
           ls -l pkgs/
 
