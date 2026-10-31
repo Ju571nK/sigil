@@ -131,6 +131,9 @@ fn build_report_with_parsers(home: &Path, parsers: &[Arc<dyn AiGuardParser>]) ->
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| tool_cli_label(a.tool).cmp(tool_cli_label(b.tool)))
     });
+    // Several parsers can share a tool, so one scope with nothing to report does not
+    // mean the tool is absent.
+    not_configured.retain(|t| !rows.iter().any(|r| r.tool == *t));
     not_configured.sort_by_key(|t| tool_cli_label(*t));
     not_configured.dedup();
 
@@ -451,6 +454,23 @@ mod controls_tests {
                 controls: self.0.clone(),
             })
         }
+    }
+
+    #[test]
+    fn a_tool_with_a_row_is_not_also_listed_as_not_configured() {
+        let c = AiGuardControl {
+            id: "fixture.restricted".into(),
+            source_path: "/fixture/config".into(),
+            setting: "restricted".into(),
+            value: serde_json::json!(true),
+        };
+        let report = build_report_with_parsers(
+            Path::new("/unused"),
+            &[Arc::new(Fixture(None)), Arc::new(Fixture(Some(vec![c])))],
+        );
+        let json = report_json(&report);
+        assert_eq!(json["results"].as_array().unwrap().len(), 1);
+        assert!(json["not_configured"].as_array().unwrap().is_empty());
     }
 
     #[test]
