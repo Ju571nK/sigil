@@ -133,7 +133,8 @@ fn build_report_with_parsers(home: &Path, parsers: &[Arc<dyn AiGuardParser>]) ->
     });
     // Several parsers can share a tool, so one scope with nothing to report does not
     // mean the tool is absent.
-    not_configured.retain(|t| !rows.iter().any(|r| r.tool == *t));
+    not_configured
+        .retain(|t| !rows.iter().any(|r| r.tool == *t) && !errors.iter().any(|e| e.0 == *t));
     not_configured.sort_by_key(|t| tool_cli_label(*t));
     not_configured.dedup();
 
@@ -470,6 +471,39 @@ mod controls_tests {
         );
         let json = report_json(&report);
         assert_eq!(json["results"].as_array().unwrap().len(), 1);
+        assert!(json["not_configured"].as_array().unwrap().is_empty());
+    }
+
+    struct Failing;
+    impl AiGuardParser for Failing {
+        fn tool(&self) -> AiTool {
+            AiTool::Codex
+        }
+        fn scope(&self) -> AiGuardScope {
+            AiGuardScope::UserGlobal
+        }
+        fn watched_paths(&self, _: &Path) -> Vec<PathBuf> {
+            vec![]
+        }
+        fn assess(&self, _: &Path) -> Result<Vec<AiGuardReason>, AssessError> {
+            panic!("must use posture")
+        }
+        fn assess_posture(&self, _: &Path) -> Result<AiGuardAssessment, AssessError> {
+            Err(AssessError::Parse {
+                path: "/fixture/config".into(),
+                message: "bad toml".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn a_tool_that_failed_to_parse_is_not_also_listed_as_not_configured() {
+        let report = build_report_with_parsers(
+            Path::new("/unused"),
+            &[Arc::new(Failing), Arc::new(Fixture(None))],
+        );
+        let json = report_json(&report);
+        assert_eq!(json["errors"].as_array().unwrap().len(), 1);
         assert!(json["not_configured"].as_array().unwrap().is_empty());
     }
 
