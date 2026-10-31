@@ -851,6 +851,7 @@ CREATE TABLE IF NOT EXISTS rewrite_originals (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_quarantine_at ON quarantine(quarantined_at);
 CREATE INDEX IF NOT EXISTS idx_unsent_created ON events(created_at) WHERE state = 0;
+CREATE INDEX IF NOT EXISTS idx_acked_at ON events(acked_at) WHERE state = 1;
 CREATE TABLE IF NOT EXISTS event_boot_stamps (
   sequence INTEGER PRIMARY KEY,
   boot_id TEXT NOT NULL,
@@ -900,6 +901,12 @@ const PURGE_QUARANTINE_BY_WALL: &str = "DELETE FROM quarantine WHERE sequence IN
      (SELECT q.sequence FROM quarantine q WHERE q.quarantined_at < ?1 AND NOT EXISTS \
      (SELECT 1 FROM quarantine_boot_stamps s WHERE s.sequence = q.sequence AND s.boot_id = ?2) \
      ORDER BY q.quarantined_at LIMIT ?3) RETURNING size, code = ?4";
+
+/// Acknowledged rows past the ack retention, oldest first. Ordered by `acked_at`
+/// so it walks `idx_acked_at` instead of scanning the table inside the write
+/// transaction.
+const DUE_ACKED: &str = "SELECT sequence, event_id FROM events \
+     WHERE state = 1 AND acked_at <= ?1 ORDER BY acked_at LIMIT ?2";
 
 const SCHEMA: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
@@ -1588,12 +1595,7 @@ impl Writer {
         let mut archived = 0u64;
         {
             let due: Vec<(i64, String)> = {
-                let mut q = tx
-                    .prepare(
-                        "SELECT sequence, event_id FROM events \
-                         WHERE state = 1 AND acked_at <= ?1 ORDER BY sequence LIMIT ?2",
-                    )
-                    .map_err(st)?;
+                let mut q = tx.prepare(DUE_ACKED).map_err(st)?;
                 let mapped = q
                     .query_map(params![ack_cutoff, MAINTENANCE_BATCH], |r| {
                         Ok((r.get(0)?, r.get(1)?))
@@ -2590,7 +2592,7 @@ mod tests {
         plan.join("\n")
     }
 
-    /// Expiry and the Q purge run inside the append-blocking write transaction, so
+    /// Expiry and both purges run inside the append-blocking write transaction, so
     /// each query walks an index range, never scans or sorts a table.
     #[test]
     fn maintenance_queries_walk_indexes() {
@@ -2598,7 +2600,12 @@ mod tests {
         let (s, _) = open(d.path());
         s.close_blocking_for_test();
         let c = Connection::open(d.path().join(SPOOL_FILE)).unwrap();
-        let cases: [(&str, String, &str); 4] = [
+        let cases: [(&str, String, &str); 5] = [
+            (
+                "DUE_ACKED",
+                query_plan(&c, DUE_ACKED, params![0, MAINTENANCE_BATCH]),
+                "idx_acked_at (acked_at<?)",
+            ),
             (
                 "DUE_BY_BOOT",
                 query_plan(&c, DUE_BY_BOOT, params!["b", 0, MAINTENANCE_BATCH]),
@@ -3521,5 +3528,44 @@ mod tests {
         clk.step_wall(Q + 1);
         let r = s.expire_now().unwrap();
         assert_eq!((r.expired_events, r.purged_quarantined), (1, 1));
+    }
+
+    /// A database from before `idx_acked_at` gains it in place, with rows already
+    /// acknowledged, and those rows still purge.
+    #[test]
+    fn databases_without_the_acked_index_are_upgraded_in_place() {
+        let d = tempfile::tempdir().unwrap();
+        let clk = Clocks::new();
+        let mut s = clk.open(d.path());
+        s.append(event(1)).unwrap();
+        s.acknowledged(&[uid(1)]);
+        s.close_blocking_for_test();
+        let path = d.path().join(SPOOL_FILE);
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("DROP INDEX idx_acked_at")
+            .unwrap();
+        let indexed_acks = || -> rusqlite::Result<i64> {
+            Connection::open(&path)?.query_row(
+                "SELECT count(*) FROM events INDEXED BY idx_acked_at \
+                 WHERE state = 1 AND acked_at > 0",
+                [],
+                |r| r.get(0),
+            )
+        };
+        assert!(indexed_acks().is_err(), "the index is gone");
+        let s = clk.open(d.path());
+        assert_eq!(indexed_acks().unwrap(), 1);
+        let version: String = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "1");
+        clk.step_wall(86_401);
+        assert_eq!(s.expire_now().unwrap().purged_acked, 1);
     }
 }
