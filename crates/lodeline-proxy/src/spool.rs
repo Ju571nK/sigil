@@ -2069,6 +2069,53 @@ mod tests {
         assert_eq!(s.append(event(4)).unwrap().sequence, 4);
     }
 
+    /// #339: what a stopped ingest client leaves unsent still expires at R.
+    #[tokio::test]
+    async fn events_left_by_a_stopped_ingest_client_expire_at_r() {
+        use crate::ingest_client::{IngestClient, IngestParams, IngestTransport};
+        use crate::status_report::{CentralHealth, GapQueue, PostFuture, StatusReply};
+
+        struct RefusesAll;
+        impl IngestTransport for RefusesAll {
+            fn post_events(&self, _: Vec<u8>) -> PostFuture<'_> {
+                let items = json!([{"index": 0, "code": "semantic_invalid"}]);
+                let body = json!({"error": {
+                    "code": "semantic_invalid", "message": "fixed", "items": items,
+                }});
+                Box::pin(async move {
+                    Some(StatusReply {
+                        status: 422,
+                        body: serde_json::to_vec(&body).unwrap(),
+                    })
+                })
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let (mut s, now) = open(d.path());
+        for n in 1..=12 {
+            s.append(event(n)).unwrap();
+        }
+        let mut c = IngestClient::new(
+            GapQueue::new(),
+            CentralHealth::new(),
+            IngestParams::default(),
+        );
+        for _ in 0..12 {
+            c.send_once(&RefusesAll, &mut s, tokio::time::Instant::now())
+                .await;
+        }
+        assert_eq!(s.snapshot().unsent_events, 4);
+        now.fetch_add(
+            SpoolConfig::new(d.path(), "px-1", &uid(EPOCH), true, &Limits::default())
+                .max_offline_retry_age
+                .as_secs() as i64
+                + 1,
+            Ordering::SeqCst,
+        );
+        assert_eq!(s.expire_now().unwrap().expired_events, 4);
+        assert_eq!(s.snapshot().unsent_events, 0);
+    }
+
     #[test]
     fn quarantine_moves_rows_unchanged() {
         let d = tempfile::tempdir().unwrap();

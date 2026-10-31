@@ -7,6 +7,14 @@ also appear under [GitHub Releases](https://github.com/Ju571nK/lodeline/releases
 
 ## [Unreleased]
 
+### Fixed
+
+- `lodeline-proxy`: a server that refuses every event by index no longer moves the
+  whole queue into quarantine. These answers now count toward the existing limit of
+  8, and only a 200 clears the count. Past the limit the proxy keeps the events
+  unsent and backs off, so a proxy upgraded before its server resumes after the
+  server upgrade. (#339)
+
 ## [0.12.0] - 2026-10-31
 
 ### Changed

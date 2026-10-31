@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,7 @@ use lodeline_proxy::bootstrap::Bootstrap;
 use lodeline_proxy::config_sync::{ConfigView, MtlsFetcher};
 use lodeline_proxy::ingest_client::{
     run_ingest, EventSource, IngestClient, IngestOutcome, IngestParams, IngestTransport,
+    MAX_CONSECUTIVE_SINGLE_QUARANTINES,
 };
 use lodeline_proxy::status_report::{
     run_status_reporter, CentralHealth, GapQueue, PostFuture, Reporter, ReporterParams,
@@ -792,6 +793,9 @@ struct Tap {
     inner: Arc<MtlsFetcher>,
     log: Mutex<Vec<Post>>,
     drop_replies: AtomicUsize,
+    /// Add a field the server's closed envelope refuses, as a proxy upgraded
+    /// before the server would. The client's own parse has already passed.
+    newer_shape: AtomicBool,
     /// Source whose acknowledged count is noted whenever a reply is dropped.
     watch: Mutex<Option<Fixture>>,
     acked_at_drop: Mutex<Vec<usize>>,
@@ -803,6 +807,7 @@ impl Tap {
             inner,
             log: Mutex::default(),
             drop_replies: AtomicUsize::new(0),
+            newer_shape: AtomicBool::new(false),
             watch: Mutex::default(),
             acked_at_drop: Mutex::default(),
         })
@@ -813,6 +818,14 @@ impl Tap {
     fn count_status(&self, s: u16) -> usize {
         self.posts().iter().filter(|p| p.status == Some(s)).count()
     }
+}
+
+fn with_newer_shape(body: &[u8]) -> Vec<u8> {
+    let mut v: Value = serde_json::from_slice(body).unwrap();
+    for e in v["events"].as_array_mut().unwrap() {
+        e["field_of_a_newer_proxy"] = json!(1);
+    }
+    serde_json::to_vec(&v).unwrap()
 }
 
 impl IngestTransport for Tap {
@@ -828,6 +841,11 @@ impl IngestTransport for Tap {
                     })
                 })
                 .unwrap_or_default();
+            let body = if self.newer_shape.load(Ordering::SeqCst) {
+                with_newer_shape(&body)
+            } else {
+                body
+            };
             let reply = self.inner.post_events(body).await;
             let dropped = reply.is_some() && take_one(&self.drop_replies);
             if dropped {
@@ -960,6 +978,51 @@ impl Proxy {
 }
 
 // ------------------------------------------------------------------- tests
+
+/// #339: the real server parse path refuses every event at index 0. The client
+/// stops after the limit, keeps the rest unsent, and sends them after the upgrade.
+#[tokio::test]
+async fn shape_the_server_cannot_parse_stops_at_the_limit_and_resumes() {
+    let Some(h) = H::new(|_| {}).await else {
+        return;
+    };
+    let cap = MAX_CONSECUTIVE_SINGLE_QUARANTINES as usize;
+    let px = Proxy::new(&h);
+    px.tap.newer_shape.store(true, Ordering::SeqCst);
+    px.fx.push((1..=30).map(ping));
+    let run = spawn_ingest(&px.tap, &px.fx, px.client());
+    eventually("the client keeps retrying past the limit", || {
+        px.tap.count_status(422) >= cap + 3
+    })
+    .await;
+
+    assert_eq!(px.fx.quarantined().len(), cap);
+    assert_eq!(px.fx.unsent_count(), 30 - cap);
+    assert_eq!(px.fx.acked_count(), 0);
+    assert!(!h.stored(1));
+    assert!(px
+        .fx
+        .quarantined()
+        .iter()
+        .all(|(_, code)| *code == QuarantineCode::SemanticInvalid));
+    let refusal: Value = serde_json::from_slice(&px.tap.posts()[0].body).unwrap();
+    assert_eq!(refusal["error"]["items"][0]["index"], 0);
+    assert_eq!(px.gaps.pending_batch().len(), cap);
+    assert_eq!(px.central.consecutive_failures(), 0);
+    assert!(px.central.last_ingest_ack_at().is_none());
+
+    px.tap.newer_shape.store(false, Ordering::SeqCst);
+    eventually("the rest is accepted after the upgrade", || {
+        px.fx.acked_count() == 30 - cap
+    })
+    .await;
+    run.stop().await;
+    assert_eq!(px.fx.quarantined().len(), cap);
+    assert_eq!(px.fx.unsent_count(), 0);
+    assert!(!h.stored(cap as u32));
+    assert!(h.stored(cap as u32 + 1));
+    assert!(h.stored(30));
+}
 
 /// Happy path: events reach the ledger; the source is acknowledged only after
 /// the 200 (checked inside the acknowledgement); a reply lost after the server
