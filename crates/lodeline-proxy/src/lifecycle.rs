@@ -917,6 +917,7 @@ mod tests {
             &Default::default(),
         );
         cfg.clock = std::sync::Arc::new(|| 1_800_000_000);
+        cfg.boot_clock = std::sync::Arc::new(|| None);
         let mut spool = crate::spool::Spool::open(cfg).unwrap();
         spool.inject_test_event_blocking("up-1").unwrap();
         let ids: Vec<String> = spool
