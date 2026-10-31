@@ -66,6 +66,18 @@ jobs:
       - name: hardened build (lodeline-agent, --no-default-features)
         run: cargo build -p lodeline-agent --no-default-features
 
+  # The proxy wire schemas and the Rust DTOs in lodeline-proxy-api can drift apart.
+  contract-schema:
+    name: proxy contract schemas
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -r docs/specs/lodeline-proxy/contracts/requirements-check.txt
+      - run: python docs/specs/lodeline-proxy/contracts/check_schema.py
+
   # Keeps `rust-version` in Cargo.toml honest (#240). rust-toolchain.toml pins
   # `stable`, so the MSRV toolchain is selected explicitly with `cargo +<ver>`.
   msrv:
